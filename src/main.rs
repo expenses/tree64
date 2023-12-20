@@ -18,15 +18,15 @@ impl State {
         }
     }
 
-    fn get(&self, coord: glam::IVec2) -> Option<u8> {
-        self.inner
-            .get(coord.y as usize * self.dim + coord.x as usize)
-            .copied()
+    fn row(&self, index: usize) -> &[u8] {
+        &self.inner[index * self.dim..(index + 1) * self.dim]
     }
 
-    fn get_mut(&mut self, coord: glam::IVec2) -> Option<&mut u8> {
-        self.inner
-            .get_mut(coord.y as usize * self.dim + coord.x as usize)
+    fn put(&mut self, coord: glam::IVec2, value: u8) -> bool {
+        let index = coord.y as usize * self.dim + coord.x as usize;
+        let previous_value = self.inner[index];
+        self.inner[index] = value;
+        previous_value != value
     }
 }
 
@@ -50,12 +50,37 @@ fn update_values(state: &State, values: &mut [f32]) {
     }
 }
 
+fn can_replace_pattern(pattern: &[u8], state: &State, m: Match) -> bool {
+    for (i, v) in pattern.iter().enumerate() {
+        let pos = m.pos + delta_for_rule(m.rule) * i as i32;
+
+        if pos.y >= state.dim as i32 || pos.y < 0 {
+            return false;
+        }
+
+        if state.row(pos.y as usize).get(pos.x as usize) != Some(&v) {
+            return false;
+        }
+    }
+    true
+}
+
+fn test_against_update(state: &mut State, matches: &mut Matches, updated: &[glam::IVec2], pattern: &[u8]) {
+    for &pos in updated {
+        for rule in 0..4 {
+            for j in 0 .. pattern.len() {
+                let new_match = Match { pos: pos - delta_for_rule(rule) * j as i32, rule };
+                matches.try_push(new_match, |m| can_replace_pattern(pattern, &state, m));
+            }
+        }
+    }
+}
+
+/*
 fn put_all(state: &mut State, free_locations: &FreeLocations, replace: &Replace) {
-    dbg!(free_locations.iter().count());
-    dbg!(state.inner.iter().filter(|&&v| v == 3).count());
-    for (pos, delta) in free_locations.iter() {
+    for &(pos, delta) in free_locations {
         for (i, value) in replace.to_as_slice().iter().enumerate() {
-            *state.get_mut(pos + delta * i as i32).unwrap() = *value;
+            state.put(pos + delta * i as i32, *value);
         }
     }
 }
@@ -66,9 +91,12 @@ fn sample_and_put<R: rand::Rng>(
     rng: &mut R,
     replace: &Replace,
 ) -> bool {
-    if let Some((pos, delta)) = free_locations.sample(rng) {
+    if !free_locations.is_empty() {
+        let index = rng.gen_range(0..free_locations.len());
+        let (pos, delta) = free_locations[index];
+
         for (i, value) in replace.to_as_slice().iter().enumerate() {
-            *state.get_mut(pos + delta * i as i32).unwrap() = *value;
+            state.put(pos + delta * i as i32, *value);
         }
 
         true
@@ -86,66 +114,108 @@ fn join4<A: FnOnce() + Send, B: FnOnce() + Send, C: FnOnce() + Send, D: FnOnce()
     rayon::join(|| rayon::join(a, b), || rayon::join(c, d));
 }
 
-fn matches<F: Fn(usize) -> glam::IVec2>(state: &State, pattern: &[u8], func: F) -> bool {
-    pattern
-        .iter()
-        .enumerate()
-        .all(|(i, v)| state.get(func(i)).unwrap() == *v)
+type FreeLocations = Vec<(glam::IVec2, glam::IVec2)>;
+*/
+
+fn delta_for_rule(rule: u8) -> glam::IVec2 {
+    match rule {
+        0 => glam::IVec2::new(1, 0),
+        1 => glam::IVec2::new(0, 1),
+        2 => glam::IVec2::new(-1, 0),
+        3 => glam::IVec2::new(0, -1),
+        _ => unreachable!(),
+    }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct Match {
+    pos: glam::IVec2,
+    rule: u8,
+}
+
+#[derive(Default)]
+struct Matches {
+    matches: Vec<Match>,
+}
+
+impl Matches {
+    fn try_push<F: Fn(Match) -> bool>(&mut self, m: Match, valid: F) {
+        if valid(m) {
+            self.matches.push(m);
+        }
+    }
+
+    fn get_valid_match<R: Rng, F: Fn(Match) -> bool>(
+        &mut self,
+        rng: &mut R,
+        valid: F,
+    ) -> Option<Match> {
+        let mut i = 0;
+        while !self.matches.is_empty() {
+            let mut index = rng.gen_range(0..self.matches.len());
+
+            let m = self.matches.swap_remove(index);
+
+            if valid(m) {
+                return Some(m);
+            }
+
+            i += 1;
+        }
+
+        None
+    }
+}
+/*
 fn test_replace(state: &State, replace: &Replace, free_locations: &mut FreeLocations) {
+    let dim = state.dim;
+    let offset = replace.len as i32 - 1;
+
     free_locations.clear();
 
-    let slice = replace.from_as_slice();
+    for y in 0..dim {
+        let row = state.row(y);
 
-    let dim = state.dim;
+        for x in replace.finder.find_iter(row) {
+            free_locations
+                .push((glam::IVec2::new(x as i32, y as i32), glam::IVec2::new(1, 0)))
+        }
+    }
 
-    join4(
-        || {
-            for y in 0..dim {
-                for x in 0..dim + 1 - slice.len() {
-                    if matches(state, slice, |i| glam::IVec2::new((x + i) as i32, y as i32)) {
-                        free_locations
-                            .l2r
-                            .push(glam::IVec2::new(x as i32, y as i32));
-                    }
-                }
-            }
-        },
-        || {
-            for y in 0..dim {
-                for x in slice.len() - 1..dim {
-                    if matches(state, slice, |i| glam::IVec2::new((x - i) as i32, y as i32)) {
-                        free_locations
-                            .r2l
-                            .push(glam::IVec2::new(x as i32, y as i32));
-                    }
-                }
-            }
-        },
-        || {
-            for y in slice.len() - 1..dim {
-                for x in 0..dim {
-                    if matches(state, slice, |i| glam::IVec2::new(x as i32, (y - i) as i32)) {
-                        free_locations
-                            .t2b
-                            .push(glam::IVec2::new(x as i32, y as i32));
-                    }
-                }
-            }
-        },
-        || {
-            for y in 0..dim + 1 - slice.len() {
-                for x in 0..dim {
-                    if matches(state, slice, |i| glam::IVec2::new(x as i32, (y + i) as i32)) {
-                        free_locations
-                            .b2t
-                            .push(glam::IVec2::new(x as i32, y as i32));
-                    }
-                }
-            }
-        },
-    );
+    if replace.len == 1 {
+        return;
+    }
+
+    for x in 0..dim {
+        let row = state.col(x);
+
+        for y in replace.finder.find_iter(row) {
+            free_locations
+                .push((glam::IVec2::new(x as i32, y as i32), glam::IVec2::new(0, 1)))
+        }
+    }
+
+    for y in 0..dim {
+        let row = state.row(y);
+
+        for x in replace.finder_rev.find_iter(row) {
+            free_locations.push((
+                glam::IVec2::new(x as i32 + offset, y as i32),
+                glam::IVec2::new(-1, 0),
+            ))
+        }
+    }
+
+    for x in 0..dim {
+        let row = state.col(x);
+
+        for y in replace.finder_rev.find_iter(row) {
+            free_locations.push((
+                glam::IVec2::new(x as i32, y as i32 + offset),
+                glam::IVec2::new(0, -1),
+            ))
+        }
+    }
 }
 
 fn pattern_from_chars(chars: &str) -> [u8; MAX_VALUES] {
@@ -162,7 +232,7 @@ enum Mode {
     All,
     Priority,
 }
-
+*/
 fn main() -> anyhow::Result<()> {
     let model = std::env::args().nth(1).unwrap();
 
@@ -173,8 +243,9 @@ fn main() -> anyhow::Result<()> {
 
     let mut rng = rand::rngs::SmallRng::from_entropy();
 
-    let mut state = State::new(1024);
+    let mut state = State::new(2048);
 
+    /*
     let input = std::fs::read_to_string(&model).unwrap();
     let mut patterns = Vec::new();
     let mut rules = Vec::new();
@@ -208,7 +279,6 @@ fn main() -> anyhow::Result<()> {
             let line = &line[2..];
             if line.starts_with("times") {
                 let (_, count) = line.split_once(" = ").unwrap();
-                dbg!(&count);
                 mode = Mode::Times(count.parse().unwrap())
             } else if line.starts_with("all") {
                 mode = Mode::All;
@@ -229,17 +299,21 @@ fn main() -> anyhow::Result<()> {
     if !patterns.is_empty() {
         push_rule(&mut patterns, &mut mode);
     }
-
+    */
     let mut values = vec![0.0_f32; state.dim * state.dim * 3];
-    let mut free_locations = FreeLocations::default();
+    /*let mut free_locations = FreeLocations::default();
 
     rules.reverse();
     let mut rules_stack = rules;
+    */
+    let update_freq = 1000000;
 
-    let update_freq = 1000;
+    let mut matches = Matches::default();
 
-    for i in 0.. {
-        let rule_finished = {
+    state.put(glam::IVec2::new(128, 128), 1);
+
+    for i in 0..3000000 {
+        /*let rule_finished = {
             let rule = match rules_stack.last_mut() {
                 Some(rule) => rule,
                 None => {
@@ -301,20 +375,57 @@ fn main() -> anyhow::Result<()> {
 
         if rule_finished {
             rules_stack.pop();
+        }*/
+
+        let from = &[1, 0];
+        let to = &[1, 1];
+
+        if i == 0 {
+            for x in 0 .. state.dim {
+                for y in 0 .. state.dim {
+                    for rule in 0 .. 4 {
+                        let m = Match {
+                            pos: glam::IVec2::new(x as i32, y as i32),
+                            rule,
+                        };
+
+                        matches.try_push(m, |m| can_replace_pattern(from, &state, m));
+                    }
+                }
+            }
+        } else {
+            let mat = match matches.get_valid_match(&mut rng, |m| can_replace_pattern(from, &state, m)) {
+                Some(m) => m,
+                None => break,
+            };
+
+            let mut updated = Vec::new();
+
+            for (i, v) in to.iter().enumerate() {
+                let pos = mat.pos + delta_for_rule(mat.rule) * i as i32;
+                if state.put(pos, *v) {
+                    updated.push(pos);
+                }
+            }
+
+            test_against_update(&mut state, &mut matches, &updated, from);
         }
 
-        if rule_finished || i % update_freq == 0 {
+        if i % update_freq == 0 {
             update_values(&state, &mut values);
             send_image(&mut client, &format!("step {}", i), state.dim as _, &values);
         }
+
     }
 
+    update_values(&state, &mut values);
     send_image(&mut client, "final", state.dim as _, &values);
 
     Ok(())
 }
 
 const MAX_VALUES: usize = 10;
+const MAX_COLOURS: usize = 10;
 
 #[derive(Default)]
 struct Pattern {
@@ -335,10 +446,13 @@ impl Pattern {
         &self.values[..self.len as usize]
     }
 }
+type LocationsForColour = [Vec<glam::IVec2>; MAX_COLOURS];
 
-#[derive(Default)]
 struct Replace {
-    from: [u8; MAX_VALUES],
+    finder: memchr::memmem::Finder<'static>,
+    finder_rev: memchr::memmem::Finder<'static>,
+    input: LocationsForColour,
+    output: LocationsForColour,
     to: [u8; MAX_VALUES],
     len: u8,
 }
@@ -347,15 +461,31 @@ impl Replace {
     fn new(from: &[u8], to: &[u8]) -> Self {
         assert_eq!(from.len(), to.len());
         assert!(from.len() <= MAX_VALUES);
-        let mut this = Self::default();
-        this.from[..from.len()].copy_from_slice(from);
-        this.to[..to.len()].copy_from_slice(to);
-        this.len = from.len() as u8;
-        this
-    }
 
-    fn from_as_slice(&self) -> &[u8] {
-        &self.from[..self.len as usize]
+        let mut to_arr = [0; MAX_VALUES];
+        to_arr[..to.len()].copy_from_slice(to);
+
+        let from_rev: Vec<u8> = from.iter().rev().copied().collect();
+
+        let mut input = LocationsForColour::default();
+        let mut output = LocationsForColour::default();
+
+        for (i, v) in from.iter().enumerate() {
+            input[*v as usize].push(glam::IVec2::new(i as i32, 0));
+        }
+
+        for (i, v) in to.iter().enumerate() {
+            output[*v as usize].push(glam::IVec2::new(i as i32, 0));
+        }
+
+        Self {
+            finder: memchr::memmem::Finder::new(from).into_owned(),
+            finder_rev: memchr::memmem::Finder::new(&from_rev).into_owned(),
+            to: to_arr,
+            input,
+            output,
+            len: from.len() as u8,
+        }
     }
 
     fn to_as_slice(&self) -> &[u8] {

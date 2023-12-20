@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.75"
 glam = "0.25.0"
+memchr = "2.6.4"
 rand = { version = "0.8.5", features = ["small_rng"] }
 rayon = "1.8.0"
 tev_client = "0.5.2"
