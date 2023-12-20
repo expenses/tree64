@@ -1,8 +1,4 @@
-use rand::{Rng, SeedableRng};
-
-mod util;
-
-use util::*;
+use rand::SeedableRng;
 
 struct State {
     inner: Vec<u8>,
@@ -17,8 +13,8 @@ impl State {
         }
     }
 
-    fn get(&self, coord: glam::IVec2) -> Option<u8> {
-        if coord.x < 0 || coord.x >= self.dim as i32 {
+    fn get(&self, coord: glam::I16Vec2) -> Option<u8> {
+        if coord.x < 0 || coord.x >= self.dim as i16 {
             return None;
         }
 
@@ -26,7 +22,7 @@ impl State {
         self.inner.get(index).copied()
     }
 
-    fn put(&mut self, coord: glam::IVec2, value: u8) -> bool {
+    fn put(&mut self, coord: glam::I16Vec2, value: u8) -> bool {
         let index = coord.y as usize * self.dim + coord.x as usize;
         let previous_value = self.inner[index];
         self.inner[index] = value;
@@ -47,16 +43,9 @@ const COLOURS: &[[f32; 3]] = &[
     [0.5, 0.0, 1.0],
 ];
 
-fn update_values(state: &State, values: &mut [f32]) {
-    for i in 0..state.inner.len() {
-        let colour = &COLOURS[state.inner[i] as usize];
-        values[i * 3..(i + 1) * 3].copy_from_slice(colour);
-    }
-}
-
 fn can_replace_pattern(pattern: &[u8], state: &State, m: Match) -> bool {
     for (i, v) in pattern.iter().enumerate() {
-        let pos = m.pos + delta_for_rule(m.rule) * i as i32;
+        let pos = m.pos + m.dir.delta() * i as i16;
 
         if state.get(pos) != Some(*v) {
             return false;
@@ -65,44 +54,51 @@ fn can_replace_pattern(pattern: &[u8], state: &State, m: Match) -> bool {
     true
 }
 
-fn delta_for_rule(rule: u8) -> glam::IVec2 {
-    match rule {
-        0 => glam::IVec2::new(1, 0),
-        1 => glam::IVec2::new(0, 1),
-        2 => glam::IVec2::new(-1, 0),
-        3 => glam::IVec2::new(0, -1),
-        _ => unreachable!(),
+#[derive(Clone, Copy, Debug)]
+enum Direction {
+    L2R,
+    R2L,
+    B2T,
+    T2B,
+}
+
+impl Direction {
+    fn delta(&self) -> glam::I16Vec2 {
+        match self {
+            Self::L2R => glam::I16Vec2::new(1, 0),
+            Self::R2L => glam::I16Vec2::new(-1, 0),
+            Self::B2T => glam::I16Vec2::new(0, 1),
+            Self::T2B => glam::I16Vec2::new(0, -1),
+        }
+    }
+
+    fn enumerate() -> [Self; 4] {
+        [Self::L2R, Self::R2L, Self::B2T, Self::T2B]
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 struct Match {
-    pos: glam::IVec2,
-    rule: u8,
+    pos: glam::I16Vec2,
+    dir: Direction,
 }
 
-#[derive(Default)]
-struct Matches {
-    matches: Vec<Match>,
-}
-
-impl Matches {
-    fn get_valid_match<R: Rng, F: Fn(Match) -> bool>(
-        &mut self,
-        rng: &mut R,
-        valid: F,
-    ) -> Option<Match> {
-        while !self.matches.is_empty() {
-            let index = rng.gen_range(0..self.matches.len());
-            let m = self.matches.swap_remove(index);
-
-            if valid(m) {
-                return Some(m);
-            }
+// Keep sampling random values from a list until a valid one is found.
+// Values are removed when sampled.
+fn sample_until_valid<T, R: rand::Rng, F: Fn(&T) -> bool>(
+    values: &mut Vec<T>,
+    rng: &mut R,
+    valid: F,
+) -> Option<T> {
+    while !values.is_empty() {
+        let index = rng.gen_range(0..values.len());
+        let value = values.swap_remove(index);
+        if valid(&value) {
+            return Some(value);
         }
-
-        None
     }
+
+    None
 }
 
 fn pattern_from_chars(chars: &str) -> [u8; 10] {
@@ -212,7 +208,7 @@ fn main() -> anyhow::Result<()> {
 
     // Flip the rules into a stack that we pop rules off of when finished.
     // This allows us to conserve memory by dropping the reasonably large
-    // `Matches` structs when they are no longer used.
+    // `potential_matches` values when they are no longer used.
     rules.reverse();
 
     for i in 0..100_000_000 {
@@ -224,7 +220,7 @@ fn main() -> anyhow::Result<()> {
             Some(Rule::Once {
                 replaces,
                 n_times_or_inf,
-                stop_after_first_replace
+                stop_after_first_replace,
             }) => {
                 if current_rule_iter == 0 {
                     for rep in replaces.iter_mut() {
@@ -256,13 +252,13 @@ fn main() -> anyhow::Result<()> {
                 for rep in replaces.iter_mut() {
                     rep.store_initial_matches(&state);
 
-                    for &m in &rep.matches.matches {
+                    for &m in &rep.potential_matches {
                         if !can_replace_pattern(&rep.from, &state, m) {
                             continue;
                         }
 
                         for (i, v) in rep.to.iter().enumerate() {
-                            let pos = m.pos + delta_for_rule(m.rule) * i as i32;
+                            let pos = m.pos + m.dir.delta() * i as i16;
                             state.put(pos, *v);
                         }
                     }
@@ -277,13 +273,17 @@ fn main() -> anyhow::Result<()> {
         }
 
         if rule_finished || i % update_freq == 0 {
-            update_values(&state, &mut values);
-            send_image(&mut client, &format!("step {}", i), state.dim as _, &values);
+            send_image(
+                &mut client,
+                &format!("step {}", i),
+                state.dim as _,
+                &mut values,
+                &state,
+            );
         }
     }
 
-    update_values(&state, &mut values);
-    send_image(&mut client, "final", state.dim as _, &values);
+    send_image(&mut client, "final", state.dim as _, &mut values, &state);
 
     Ok(())
 }
@@ -291,7 +291,7 @@ fn main() -> anyhow::Result<()> {
 struct Replace {
     to: Vec<u8>,
     from: Vec<u8>,
-    matches: Matches,
+    potential_matches: Vec<Match>,
 }
 
 impl Replace {
@@ -299,24 +299,24 @@ impl Replace {
         Self {
             to: to.to_owned(),
             from: from.to_owned(),
-            matches: Matches::default(),
+            potential_matches: Default::default(),
         }
     }
 
     fn store_initial_matches(&mut self, state: &State) {
         for x in 0..state.dim {
             for y in 0..state.dim {
-                for rule in 0..4 {
+                for dir in Direction::enumerate() {
                     let m = Match {
-                        pos: glam::IVec2::new(x as i32, y as i32),
-                        rule,
+                        pos: glam::I16Vec2::new(x as i16, y as i16),
+                        dir,
                     };
 
                     if !can_replace_pattern(&self.from, state, m) {
                         continue;
                     }
 
-                    self.matches.matches.push(m);
+                    self.potential_matches.push(m);
                 }
             }
         }
@@ -326,18 +326,17 @@ impl Replace {
         &mut self,
         state: &mut State,
         rng: &mut R,
-        updated: &mut Vec<glam::IVec2>,
+        updated: &mut Vec<glam::I16Vec2>,
     ) -> bool {
-        let m = match self
-            .matches
-            .get_valid_match(rng, |m| can_replace_pattern(&self.from, state, m))
-        {
+        let m = match sample_until_valid(&mut self.potential_matches, rng, |&m| {
+            can_replace_pattern(&self.from, state, m)
+        }) {
             Some(m) => m,
             None => return false,
         };
 
         for (i, v) in self.to.iter().enumerate() {
-            let pos = m.pos + delta_for_rule(m.rule) * i as i32;
+            let pos = m.pos + m.dir.delta() * i as i16;
             if state.put(pos, *v) {
                 updated.push(pos);
             }
@@ -346,21 +345,21 @@ impl Replace {
         true
     }
 
-    fn update_matches(&mut self, state: &State, updated_cells: &[glam::IVec2]) {
+    fn update_matches(&mut self, state: &State, updated_cells: &[glam::I16Vec2]) {
         for &pos in updated_cells {
-            for rule in 0..4 {
+            for dir in Direction::enumerate() {
                 // check the whole pattern against the updated cells.
                 for j in 0..self.from.len() {
                     let new_match = Match {
-                        pos: pos - delta_for_rule(rule) * j as i32,
-                        rule,
+                        pos: pos - dir.delta() * j as i16,
+                        dir,
                     };
 
                     if !can_replace_pattern(&self.from, state, new_match) {
                         continue;
                     }
 
-                    self.matches.matches.push(new_match);
+                    self.potential_matches.push(new_match);
                 }
             }
         }
@@ -376,4 +375,41 @@ enum Rule {
         // Aka prioritizing / markov chains
         stop_after_first_replace: bool,
     },
+}
+
+fn send_image(
+    client: &mut tev_client::TevClient,
+    name: &str,
+    dim: u32,
+    values: &mut [f32],
+    state: &State,
+) {
+    for i in 0..state.inner.len() {
+        let colour = &COLOURS[state.inner[i] as usize];
+        values[i * 3..(i + 1) * 3].copy_from_slice(colour);
+    }
+
+    client
+        .send(tev_client::PacketCreateImage {
+            image_name: name,
+            grab_focus: false,
+            width: dim,
+            height: dim,
+            channel_names: &["R", "G", "B"],
+        })
+        .unwrap();
+    client
+        .send(tev_client::PacketUpdateImage {
+            image_name: name,
+            grab_focus: false,
+            channel_names: &["R", "G", "B"],
+            channel_offsets: &[0, 1, 2],
+            channel_strides: &[3, 3, 3],
+            x: 0,
+            y: 0,
+            width: dim,
+            height: dim,
+            data: values,
+        })
+        .unwrap();
 }
