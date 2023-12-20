@@ -19,7 +19,7 @@ pub fn send_image(client: &mut tev_client::TevClient, name: &str, dim: u32, valu
             y: 0,
             width: dim,
             height: dim,
-            data: &values,
+            data: values,
         })
         .unwrap();
 }
