@@ -16,6 +16,14 @@ impl Array2D {
         }
     }
 
+    fn empty_square(dim: usize) -> Self {
+        Self {
+            inner: vec![0; dim * dim],
+            width: dim,
+            height: dim,
+        }
+    }
+
     fn iter_locations_for_dir(&self, dir: Direction) -> impl Iterator<Item = glam::I16Vec2> + '_ {
         (0..self.width)
             .flat_map(|x| (0..self.height).map(move |y| (x, y)))
@@ -34,32 +42,18 @@ impl Array2D {
                 (position, value)
             })
     }
-}
-
-struct State {
-    inner: Vec<u8>,
-    dim: usize,
-}
-
-impl State {
-    fn new(dim: usize) -> Self {
-        Self {
-            inner: vec![0; dim * dim],
-            dim,
-        }
-    }
 
     fn get(&self, coord: glam::I16Vec2) -> Option<u8> {
-        if coord.x < 0 || coord.x >= self.dim as i16 {
+        if coord.x < 0 || coord.x >= self.width as i16 {
             return None;
         }
 
-        let index = coord.y as usize * self.dim + coord.x as usize;
+        let index = coord.y as usize * self.width + coord.x as usize;
         self.inner.get(index).copied()
     }
 
     fn put(&mut self, coord: glam::I16Vec2, value: u8) -> bool {
-        let index = coord.y as usize * self.dim + coord.x as usize;
+        let index = coord.y as usize * self.width + coord.x as usize;
         let previous_value = self.inner[index];
         self.inner[index] = value;
         previous_value != value
@@ -79,7 +73,7 @@ const COLOURS: &[[f32; 3]] = &[
     [0.5, 0.0, 1.0],
 ];
 
-fn can_replace_pattern(pattern: &Array2D, state: &State, m: Match) -> bool {
+fn can_replace_pattern(pattern: &Array2D, state: &Array2D, m: Match) -> bool {
     for (pos, v) in pattern.iter_match_locations_and_values(m) {
         if state.get(pos) != Some(v) {
             return false;
@@ -168,7 +162,7 @@ fn pattern_from_chars(chars: &str) -> ([u8; 100], usize, usize) {
 }
 
 fn execute_rule<R: rand::Rng>(
-    state: &mut State,
+    state: &mut Array2D,
     rng: &mut R,
     updated: &mut Vec<glam::I16Vec2>,
     replaces: &mut [Replace],
@@ -205,7 +199,7 @@ fn execute_rule<R: rand::Rng>(
 }
 
 fn execute_rule_all<R: rand::Rng>(
-    state: &mut State,
+    state: &mut Array2D,
     rng: &mut R,
     updated: &mut Vec<glam::I16Vec2>,
     replaces: &mut [Replace],
@@ -248,7 +242,7 @@ fn parse_value_from_table_as_pattern(
 }
 
 struct GlobalState {
-    state: State,
+    state: Array2D,
     rng: rand::rngs::SmallRng,
     tev_client: tev_client::TevClient,
     values: Vec<f32>,
@@ -259,7 +253,7 @@ fn main() -> anyhow::Result<()> {
     let lua = mlua::Lua::new();
 
     let mut rng = rand::rngs::SmallRng::from_entropy();
-    let mut state = State::new(1024);
+    let mut state = Array2D::empty_square(1024);
 
     let _command = std::process::Command::new("tev").spawn();
     std::thread::sleep(std::time::Duration::from_millis(16));
@@ -267,7 +261,7 @@ fn main() -> anyhow::Result<()> {
     let mut client = tev_client::TevClient::wrap(std::net::TcpStream::connect("127.0.0.1:14158")?);
 
     let state = Rc::new(std::cell::RefCell::new(GlobalState {
-        values: vec![0.0_f32; state.dim * state.dim * 3],
+        values: vec![0.0_f32; state.width * state.height * 3],
         state: state,
         rng: rng,
         tev_client: client,
@@ -318,7 +312,6 @@ fn main() -> anyhow::Result<()> {
                 send_image(
                     &mut state.tev_client,
                     &format!("step {}", state.i),
-                    state.state.dim as _,
                     &mut state.values,
                     &state.state,
                 );
@@ -358,7 +351,6 @@ fn main() -> anyhow::Result<()> {
                 send_image(
                     &mut state.tev_client,
                     &format!("step {}", state.i),
-                    state.state.dim as _,
                     &mut state.values,
                     &state.state,
                 );
@@ -394,9 +386,9 @@ impl Replace {
         }
     }
 
-    fn store_initial_matches(&mut self, state: &State) {
-        for x in 0..state.dim {
-            for y in 0..state.dim {
+    fn store_initial_matches(&mut self, state: &Array2D) {
+        for x in 0..state.width {
+            for y in 0..state.height {
                 for dir in Direction::enumerate() {
                     let m = Match {
                         pos: glam::I16Vec2::new(x as i16, y as i16),
@@ -415,7 +407,7 @@ impl Replace {
 
     fn get_match_and_update_state<R: rand::Rng>(
         &mut self,
-        state: &mut State,
+        state: &mut Array2D,
         rng: &mut R,
         updated: &mut Vec<glam::I16Vec2>,
     ) -> bool {
@@ -435,7 +427,7 @@ impl Replace {
         true
     }
 
-    fn update_matches(&mut self, state: &State, updated_cells: &[glam::I16Vec2]) {
+    fn update_matches(&mut self, state: &Array2D, updated_cells: &[glam::I16Vec2]) {
         for &pos in updated_cells {
             for dir in Direction::enumerate() {
                 // todo: this can lead to cases of biasing. Think of the case where a 2x2 cube has been placed.
@@ -469,13 +461,7 @@ enum Rule {
     },
 }
 
-fn send_image(
-    client: &mut tev_client::TevClient,
-    name: &str,
-    dim: u32,
-    values: &mut [f32],
-    state: &State,
-) {
+fn send_image(client: &mut tev_client::TevClient, name: &str, values: &mut [f32], state: &Array2D) {
     for i in 0..state.inner.len() {
         let colour = &COLOURS[state.inner[i] as usize];
         values[i * 3..(i + 1) * 3].copy_from_slice(colour);
@@ -485,8 +471,8 @@ fn send_image(
         .send(tev_client::PacketCreateImage {
             image_name: name,
             grab_focus: false,
-            width: dim,
-            height: dim,
+            width: state.width as _,
+            height: state.height as _,
             channel_names: &["R", "G", "B"],
         })
         .unwrap();
@@ -499,8 +485,8 @@ fn send_image(
             channel_strides: &[3, 3, 3],
             x: 0,
             y: 0,
-            width: dim,
-            height: dim,
+            width: state.width as _,
+            height: state.height as _,
             data: values,
         })
         .unwrap();
