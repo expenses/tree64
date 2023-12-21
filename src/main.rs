@@ -1,4 +1,40 @@
 use rand::SeedableRng;
+use std::rc::Rc;
+
+struct Array2D {
+    inner: Vec<u8>,
+    width: usize,
+    height: usize,
+}
+
+impl Array2D {
+    fn new(slice: &[u8], width: usize) -> Self {
+        Self {
+            inner: slice.to_owned(),
+            width: width,
+            height: slice.len() / width,
+        }
+    }
+
+    fn iter_locations_for_dir(&self, dir: Direction) -> impl Iterator<Item = glam::I16Vec2> + '_ {
+        (0..self.width)
+            .flat_map(|x| (0..self.height).map(move |y| (x, y)))
+            .map(move |(x, y)| dir.delta() * x as i16 + dir.rot_90().delta() * y as i16)
+    }
+
+    fn iter_match_locations_and_values(
+        &self,
+        m: Match,
+    ) -> impl Iterator<Item = (glam::I16Vec2, u8)> + '_ {
+        (0..self.width)
+            .flat_map(|x| (0..self.height).map(move |y| (x, y)))
+            .map(move |(x, y)| {
+                let value = self.inner[y * self.width + x];
+                let position = m.pos + m.dir.delta() * x as i16 + m.dir.rot_90().delta() * y as i16;
+                (position, value)
+            })
+    }
+}
 
 struct State {
     inner: Vec<u8>,
@@ -43,11 +79,9 @@ const COLOURS: &[[f32; 3]] = &[
     [0.5, 0.0, 1.0],
 ];
 
-fn can_replace_pattern(pattern: &[u8], state: &State, m: Match) -> bool {
-    for (i, v) in pattern.iter().enumerate() {
-        let pos = m.pos + m.dir.delta() * i as i16;
-
-        if state.get(pos) != Some(*v) {
+fn can_replace_pattern(pattern: &Array2D, state: &State, m: Match) -> bool {
+    for (pos, v) in pattern.iter_match_locations_and_values(m) {
+        if state.get(pos) != Some(v) {
             return false;
         }
     }
@@ -63,6 +97,15 @@ enum Direction {
 }
 
 impl Direction {
+    fn rot_90(&self) -> Direction {
+        match self {
+            Self::L2R => Self::T2B,
+            Self::T2B => Self::R2L,
+            Self::R2L => Self::B2T,
+            Self::B2T => Self::L2R,
+        }
+    }
+
     fn delta(&self) -> glam::I16Vec2 {
         match self {
             Self::L2R => glam::I16Vec2::new(1, 0),
@@ -101,204 +144,252 @@ fn sample_until_valid<T, R: rand::Rng, F: Fn(&T) -> bool>(
     None
 }
 
-fn pattern_from_chars(chars: &str) -> [u8; 10] {
-    let mut pattern = [0; 10];
-    for (i, c) in chars.chars().enumerate() {
+fn pattern_from_chars(chars: &str) -> ([u8; 100], usize, usize) {
+    let mut pattern = [0; 100];
+    let mut i = 0;
+    let mut row_width = None;
+    for c in chars.chars() {
+        if c == ' ' || c == '\n' {
+            continue;
+        }
+
+        if c == ',' {
+            if row_width.is_none() {
+                row_width = Some(i);
+            }
+            continue;
+        }
+
         pattern[i] = c.to_digit(10).unwrap() as _;
+        i += 1;
     }
-    pattern
+
+    (pattern, i, row_width.unwrap_or(i))
 }
 
-enum Mode {
-    Normal,
-    Times(u32),
-    All,
-    Priority,
+fn execute_rule<R: rand::Rng>(
+    state: &mut State,
+    rng: &mut R,
+    updated: &mut Vec<glam::I16Vec2>,
+    replaces: &mut [Replace],
+    n_times_or_inf: u32,
+    stop_after_first_replace: bool,
+) {
+    for rep in replaces.iter_mut() {
+        rep.store_initial_matches(&state);
+    }
+
+    for i in 1.. {
+        let mut rule_finished = true;
+
+        for j in 0..replaces.len() {
+            updated.clear();
+
+            if replaces[j].get_match_and_update_state(state, rng, updated) {
+                rule_finished = false;
+
+                for rep in replaces.iter_mut() {
+                    rep.update_matches(state, updated);
+                }
+
+                if stop_after_first_replace {
+                    break;
+                }
+            }
+        }
+
+        if rule_finished || i == n_times_or_inf {
+            return;
+        }
+    }
+}
+
+fn execute_rule_all<R: rand::Rng>(
+    state: &mut State,
+    rng: &mut R,
+    updated: &mut Vec<glam::I16Vec2>,
+    replaces: &mut [Replace],
+) {
+    for rep in replaces.iter_mut() {
+        rep.store_initial_matches(&state);
+
+        for &m in &rep.potential_matches {
+            if !can_replace_pattern(&rep.from, &state, m) {
+                continue;
+            }
+
+            for (pos, v) in rep.to.iter_match_locations_and_values(m) {
+                state.put(pos, v);
+            }
+        }
+    }
+}
+
+fn parse_value_from_table_as_pattern(
+    value: mlua::Value,
+    index: i64,
+) -> Result<Replace, mlua::Error> {
+    let pattern_str = match value.as_str() {
+        Some(string) => string,
+        None => {
+            return Err(mlua::Error::BadArgument {
+                pos: index as usize,
+                name: None,
+                to: None,
+                cause: mlua::Error::runtime("integer arguments must be strings").into(),
+            })
+        }
+    };
+    let (from, to) = pattern_str.split_once('=').unwrap();
+    let (from, from_len, from_width) = pattern_from_chars(from);
+    let (to, to_len, to_width) = pattern_from_chars(to);
+    assert_eq!(from_width, to_width);
+    Ok(Replace::new(&from[..from_len], &to[..to_len], from_width))
+}
+
+struct GlobalState {
+    state: State,
+    rng: rand::rngs::SmallRng,
+    tev_client: tev_client::TevClient,
+    values: Vec<f32>,
+    i: usize,
 }
 
 fn main() -> anyhow::Result<()> {
-    let model = std::env::args().nth(1).unwrap();
+    let lua = mlua::Lua::new();
+
+    let mut rng = rand::rngs::SmallRng::from_entropy();
+    let mut state = State::new(1024);
 
     let _command = std::process::Command::new("tev").spawn();
     std::thread::sleep(std::time::Duration::from_millis(16));
 
     let mut client = tev_client::TevClient::wrap(std::net::TcpStream::connect("127.0.0.1:14158")?);
 
-    let mut rng = rand::rngs::SmallRng::from_entropy();
+    let state = Rc::new(std::cell::RefCell::new(GlobalState {
+        values: vec![0.0_f32; state.dim * state.dim * 3],
+        state: state,
+        rng: rng,
+        tev_client: client,
+        i: 0,
+    }));
 
-    let mut state = State::new(1024);
+    let state_c = state.clone();
 
-    let input = std::fs::read_to_string(model).unwrap();
-    let mut patterns = Vec::new();
-    let mut rules = Vec::new();
-    let mut mode = Mode::Normal;
+    lua.globals()
+        .set(
+            "rep",
+            mlua::Function::wrap_mut(move |_lua, table: mlua::Table| {
+                let mut times = 0;
+                let mut patterns = Vec::new();
+                let mut priority = false;
+                let mut updated = Vec::new();
 
-    let mut push_rule = |patterns: &mut Vec<Replace>, mode: &mut Mode| {
-        if patterns.is_empty() {
-            return;
-        }
+                table.for_each::<mlua::Value, mlua::Value>(|key, value| {
+                    match key {
+                        mlua::Value::Integer(index) => {
+                            patterns.push(parse_value_from_table_as_pattern(value, index)?);
+                        }
+                        mlua::Value::String(option) => match option.to_str().unwrap() {
+                            "times" => {
+                                times = value.as_u32().unwrap();
+                            }
+                            "priority" => {
+                                priority = value.as_boolean().unwrap();
+                            }
+                            _ => panic!(),
+                        },
+                        other => panic!("{:?}", other),
+                    }
+                    Ok(())
+                })?;
 
-        let patterns = std::mem::take(patterns);
+                let state = &mut *state_c.borrow_mut();
 
-        match *mode {
-            Mode::Normal => {
-                rules.push(Rule::Once {
-                    replaces: patterns,
-                    n_times_or_inf: 0,
-                    stop_after_first_replace: false,
-                });
-            }
-            Mode::Times(times) => {
-                rules.push(Rule::Once {
-                    replaces: patterns,
-                    n_times_or_inf: times,
-                    stop_after_first_replace: false,
-                });
-            }
-            Mode::All => {
-                rules.push(Rule::All(patterns));
-            }
-            Mode::Priority => {
-                rules.push(Rule::Once {
-                    replaces: patterns,
-                    n_times_or_inf: 0,
-                    stop_after_first_replace: true,
-                });
-            }
-        }
-        *mode = Mode::Normal;
+                execute_rule(
+                    &mut state.state,
+                    &mut state.rng,
+                    &mut updated,
+                    &mut patterns,
+                    times,
+                    priority,
+                );
+
+                send_image(
+                    &mut state.tev_client,
+                    &format!("step {}", state.i),
+                    state.state.dim as _,
+                    &mut state.values,
+                    &state.state,
+                );
+                state.i += 1;
+
+                Ok(())
+            }),
+        )
+        .unwrap();
+
+    lua.globals()
+        .set(
+            "rep_all",
+            mlua::Function::wrap_mut(move |_lua, table: mlua::Table| {
+                let mut patterns = Vec::new();
+                let mut updated = Vec::new();
+
+                table.for_each::<mlua::Value, mlua::Value>(|key, value| {
+                    match key {
+                        mlua::Value::Integer(index) => {
+                            patterns.push(parse_value_from_table_as_pattern(value, index)?);
+                        }
+                        other => panic!("{:?}", other),
+                    }
+                    Ok(())
+                })?;
+
+                let state = &mut *state.borrow_mut();
+
+                execute_rule_all(
+                    &mut state.state,
+                    &mut state.rng,
+                    &mut updated,
+                    &mut patterns,
+                );
+
+                send_image(
+                    &mut state.tev_client,
+                    &format!("step {}", state.i),
+                    state.state.dim as _,
+                    &mut state.values,
+                    &state.state,
+                );
+                state.i += 1;
+
+                Ok(())
+            }),
+        )
+        .unwrap();
+
+    let model = std::env::args().nth(1).unwrap();
+    let txt = std::fs::read_to_string(model).unwrap();
+
+    if let Err(error) = lua.load(txt).exec() {
+        println!("{}", error);
     };
-
-    for line in input.lines() {
-        if line.starts_with('-') {
-            let line = &line[2..];
-            if line.starts_with("times") {
-                let (_, count) = line.split_once(" = ").unwrap();
-                mode = Mode::Times(count.parse().unwrap())
-            } else if line.starts_with("all") {
-                mode = Mode::All;
-            } else if line.starts_with("priority") {
-                mode = Mode::Priority;
-            }
-            continue;
-        }
-
-        push_rule(&mut patterns, &mut mode);
-
-        if line.is_empty() {
-            continue;
-        }
-
-        for pattern in line.split(' ') {
-            let (from, to) = pattern.split_once('=').unwrap();
-            patterns.push(Replace::new(
-                &pattern_from_chars(from)[..from.len()],
-                &pattern_from_chars(to)[..to.len()],
-            ))
-        }
-    }
-    push_rule(&mut patterns, &mut mode);
-
-    let mut values = vec![0.0_f32; state.dim * state.dim * 3];
-
-    let update_freq = 1_000_000;
-
-    let mut current_rule_iter = 0;
-    let mut updated = Vec::new();
-
-    // Flip the rules into a stack that we pop rules off of when finished.
-    // This allows us to conserve memory by dropping the reasonably large
-    // `potential_matches` values when they are no longer used.
-    rules.reverse();
-
-    for i in 0..100_000_000 {
-        let mut rule_finished = true;
-
-        let end = rules.len() - 1;
-
-        match rules.get_mut(end) {
-            Some(Rule::Once {
-                replaces,
-                n_times_or_inf,
-                stop_after_first_replace,
-            }) => {
-                if current_rule_iter == 0 {
-                    for rep in replaces.iter_mut() {
-                        rep.store_initial_matches(&state);
-                    }
-                }
-
-                for i in 0..replaces.len() {
-                    updated.clear();
-
-                    if replaces[i].get_match_and_update_state(&mut state, &mut rng, &mut updated) {
-                        rule_finished = false;
-
-                        for rep in replaces.iter_mut() {
-                            rep.update_matches(&state, &updated);
-                        }
-
-                        if *stop_after_first_replace {
-                            break;
-                        }
-                    }
-                }
-
-                current_rule_iter += 1;
-
-                rule_finished |= current_rule_iter == *n_times_or_inf;
-            }
-            Some(Rule::All(replaces)) => {
-                for rep in replaces.iter_mut() {
-                    rep.store_initial_matches(&state);
-
-                    for &m in &rep.potential_matches {
-                        if !can_replace_pattern(&rep.from, &state, m) {
-                            continue;
-                        }
-
-                        for (i, v) in rep.to.iter().enumerate() {
-                            let pos = m.pos + m.dir.delta() * i as i16;
-                            state.put(pos, *v);
-                        }
-                    }
-                }
-            }
-            None => break,
-        };
-
-        if rule_finished {
-            rules.pop();
-            current_rule_iter = 0;
-        }
-
-        if rule_finished || i % update_freq == 0 {
-            send_image(
-                &mut client,
-                &format!("step {}", i),
-                state.dim as _,
-                &mut values,
-                &state,
-            );
-        }
-    }
-
-    send_image(&mut client, "final", state.dim as _, &mut values, &state);
 
     Ok(())
 }
 
 struct Replace {
-    to: Vec<u8>,
-    from: Vec<u8>,
+    to: Array2D,
+    from: Array2D,
     potential_matches: Vec<Match>,
 }
 
 impl Replace {
-    fn new(from: &[u8], to: &[u8]) -> Self {
+    fn new(from: &[u8], to: &[u8], width: usize) -> Self {
         Self {
-            to: to.to_owned(),
-            from: from.to_owned(),
+            to: Array2D::new(to, width),
+            from: Array2D::new(from, width),
             potential_matches: Default::default(),
         }
     }
@@ -335,9 +426,8 @@ impl Replace {
             None => return false,
         };
 
-        for (i, v) in self.to.iter().enumerate() {
-            let pos = m.pos + m.dir.delta() * i as i16;
-            if state.put(pos, *v) {
+        for (pos, v) in self.to.iter_match_locations_and_values(m) {
+            if state.put(pos, v) {
                 updated.push(pos);
             }
         }
@@ -348,10 +438,12 @@ impl Replace {
     fn update_matches(&mut self, state: &State, updated_cells: &[glam::I16Vec2]) {
         for &pos in updated_cells {
             for dir in Direction::enumerate() {
-                // check the whole pattern against the updated cells.
-                for j in 0..self.from.len() {
+                // todo: this can lead to cases of biasing. Think of the case where a 2x2 cube has been placed.
+                // By performing updated_cells.len() (4) x num from cells (4) = 16 checks, we're checking the middle cube 4 times.
+                // We should only be doing (2 + (2-1))x(2+ (2-1)) = 9 checks.
+                for rel_pos in self.from.iter_locations_for_dir(dir) {
                     let new_match = Match {
-                        pos: pos - dir.delta() * j as i16,
+                        pos: pos - rel_pos,
                         dir,
                     };
 
