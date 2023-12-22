@@ -24,6 +24,10 @@ impl Array2D {
         }
     }
 
+    fn is_symmetrical(&self) -> bool {
+        self.inner.iter().eq(self.inner.iter().rev())
+    }
+
     fn iter_locations_for_dir(&self, dir: Direction) -> impl Iterator<Item = glam::I16Vec2> + '_ {
         (0..self.width)
             .flat_map(|x| (0..self.height).map(move |y| (x, y)))
@@ -164,26 +168,49 @@ fn pattern_from_chars(chars: &str) -> ([u8; 100], usize, usize) {
 fn execute_rule<R: rand::Rng>(
     state: &mut Array2D,
     rng: &mut R,
-    updated: &mut Vec<glam::I16Vec2>,
     replaces: &mut [Replace],
     n_times_or_inf: u32,
     stop_after_first_replace: bool,
 ) {
+    // Record which pattern outputs effect which pattern inputs.
+    let mut interactions = Vec::with_capacity(replaces.len());
+
+    for i in 0..replaces.len() {
+        let prev = &replaces[i];
+
+        let mut replacment_interactions: Vec<bool> = (0..replaces.len())
+            .map(|j| {
+                let next = &replaces[j];
+                next.from
+                    .inner
+                    .iter()
+                    .any(|next_value| prev.to.inner.contains(&next_value))
+            })
+            .collect();
+
+        interactions.push(replacment_interactions);
+    }
+
     for rep in replaces.iter_mut() {
         rep.store_initial_matches(&state);
     }
 
-    for i in 1.. {
+    let mut updated = Vec::new();
+
+    for rule_iter in 1.. {
         let mut rule_finished = true;
 
-        for j in 0..replaces.len() {
+        for i in 0..replaces.len() {
             updated.clear();
 
-            if replaces[j].get_match_and_update_state(state, rng, updated) {
+            if replaces[i].get_match_and_update_state(state, rng, &mut updated) {
                 rule_finished = false;
 
-                for rep in replaces.iter_mut() {
-                    rep.update_matches(state, updated);
+                for j in 0..replaces.len() {
+                    if !interactions[i][j] {
+                        continue;
+                    }
+                    replaces[j].update_matches(state, &updated);
                 }
 
                 if stop_after_first_replace {
@@ -192,7 +219,7 @@ fn execute_rule<R: rand::Rng>(
             }
         }
 
-        if rule_finished || i == n_times_or_inf {
+        if rule_finished || rule_iter == n_times_or_inf {
             return;
         }
     }
@@ -253,7 +280,7 @@ fn main() -> anyhow::Result<()> {
     let lua = mlua::Lua::new();
 
     let mut rng = rand::rngs::SmallRng::from_entropy();
-    let mut state = Array2D::empty_square(1024);
+    let mut state = Array2D::empty_square(4096);
 
     let _command = std::process::Command::new("tev").spawn();
     std::thread::sleep(std::time::Duration::from_millis(16));
@@ -277,7 +304,6 @@ fn main() -> anyhow::Result<()> {
                 let mut times = 0;
                 let mut patterns = Vec::new();
                 let mut priority = false;
-                let mut updated = Vec::new();
 
                 table.for_each::<mlua::Value, mlua::Value>(|key, value| {
                     match key {
@@ -303,7 +329,6 @@ fn main() -> anyhow::Result<()> {
                 execute_rule(
                     &mut state.state,
                     &mut state.rng,
-                    &mut updated,
                     &mut patterns,
                     times,
                     priority,
@@ -374,14 +399,31 @@ fn main() -> anyhow::Result<()> {
 struct Replace {
     to: Array2D,
     from: Array2D,
+    is_symmetrical: bool,
     potential_matches: Vec<Match>,
+    applicable_directions: &'static [Direction],
 }
 
 impl Replace {
     fn new(from: &[u8], to: &[u8], width: usize) -> Self {
+        let from = Array2D::new(from, width);
+
+        let is_symmetrical = from.is_symmetrical();
+
         Self {
             to: Array2D::new(to, width),
-            from: Array2D::new(from, width),
+            is_symmetrical,
+            applicable_directions: if is_symmetrical {
+                &[Direction::L2R, Direction::T2B]
+            } else {
+                &[
+                    Direction::L2R,
+                    Direction::T2B,
+                    Direction::R2L,
+                    Direction::B2T,
+                ]
+            },
+            from,
             potential_matches: Default::default(),
         }
     }
@@ -389,7 +431,7 @@ impl Replace {
     fn store_initial_matches(&mut self, state: &Array2D) {
         for x in 0..state.width {
             for y in 0..state.height {
-                for dir in Direction::enumerate() {
+                for &dir in self.applicable_directions {
                     let m = Match {
                         pos: glam::I16Vec2::new(x as i16, y as i16),
                         dir,
@@ -429,7 +471,7 @@ impl Replace {
 
     fn update_matches(&mut self, state: &Array2D, updated_cells: &[glam::I16Vec2]) {
         for &pos in updated_cells {
-            for dir in Direction::enumerate() {
+            for &dir in self.applicable_directions {
                 // todo: this can lead to cases of biasing. Think of the case where a 2x2 cube has been placed.
                 // By performing updated_cells.len() (4) x num from cells (4) = 16 checks, we're checking the middle cube 4 times.
                 // We should only be doing (2 + (2-1))x(2+ (2-1)) = 9 checks.
@@ -448,17 +490,6 @@ impl Replace {
             }
         }
     }
-}
-
-enum Rule {
-    All(Vec<Replace>),
-    Once {
-        replaces: Vec<Replace>,
-        // 0 for inf.
-        n_times_or_inf: u32,
-        // Aka prioritizing / markov chains
-        stop_after_first_replace: bool,
-    },
 }
 
 fn send_image(client: &mut tev_client::TevClient, name: &str, values: &mut [f32], state: &Array2D) {
