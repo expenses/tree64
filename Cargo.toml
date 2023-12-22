@@ -9,7 +9,6 @@ crate-type = ["cdylib"]
 [dependencies]
 anyhow = "1.0.75"
 glam = "0.25.0"
-mlua = { version = "0.9.2", features = ["lua54"] }
 rand = { version = "0.8.5", features = ["small_rng"] }
 tev_client = "0.5.2"
 numpy = "0.20.0"

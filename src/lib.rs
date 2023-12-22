@@ -1,28 +1,69 @@
 use pyo3::prelude::*;
 
-pub fn send_image(name: &str, slice: &[u8], width: u32, height: u32) {
-    const COLOURS: &[[f32; 3]] = &[
-        [0.0; 3],
-        [1.0; 3],
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 1.0, 1.0],
-        [1.0, 0.0, 1.0],
-        [1.0, 1.0, 0.0],
-        [1.0, 0.5, 0.0],
-        [1.0, 0.0, 0.5],
-        [0.5, 0.0, 1.0],
-    ];
+// From https://github.com/mxgmn/MarkovJunior#rewrite-rules,
+// but swapped around to have B then W then R.
+pub const PALETTE: [char; 16] = [
+    'B', // Black
+    'W', // White
+    'R', // Red
+    'I', // Dark blue
+    'P', // Dark purple
+    'E', // Dark green
+    'N', // Brown
+    'D', // Dark grey (Dead)
+    'A', // Light grey (Alive)
+    'O', // Orange
+    'Y', // Yellow
+    'G', // Green
+    'U', // Blue
+    'S', // Lavender
+    'K', // Pink
+    'F', // Light peach
+];
 
-    let mut values = vec![0.0; slice.len() * 3];
+// https://pico-8.fandom.com/wiki/Palette
+pub const SRGB_PALETTE_VALUES: [[u8; 3]; 16] = [
+    [0, 0, 0],
+    [255, 241, 232],
+    [255, 0, 7],
+    [29, 43, 83],
+    [126, 37, 83],
+    [0, 135, 81],
+    [171, 82, 54],
+    [95, 87, 79],
+    [194, 195, 199],
+    [255, 163, 0],
+    [255, 236, 39],
+    [0, 228, 54],
+    [41, 173, 255],
+    [131, 118, 156],
+    [255, 119, 168],
+    [255, 204, 170],
+];
+
+fn index_for_colour(colour: char) -> Option<u8> {
+    PALETTE.iter().position(|&c| c == colour).map(|v| v as u8)
+}
+
+fn srgb_to_linear(value: u8) -> f32 {
+    let value = value as f32 / 255.0;
+
+    if value <= 0.04045 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+pub fn send_image(client: &mut tev_client::TevClient, values: &mut Vec<f32>, name: &str, slice: &[u8], width: u32, height: u32) {
+    let colours = SRGB_PALETTE_VALUES.map(|v| v.map(srgb_to_linear));
+
+    values.resize(slice.len() * 3, 0.0);
 
     for i in 0..slice.len() {
-        let colour = &COLOURS[slice[i] as usize];
+        let colour = &colours[slice[i] as usize];
         values[i * 3..(i + 1) * 3].copy_from_slice(colour);
     }
-
-    let mut client =
-        tev_client::TevClient::wrap(std::net::TcpStream::connect("127.0.0.1:14158").unwrap());
 
     client
         .send(tev_client::PacketCreateImage {
@@ -47,26 +88,71 @@ pub fn send_image(name: &str, slice: &[u8], width: u32, height: u32) {
             data: &values,
         })
         .unwrap();
-
-    let mut client =
-        tev_client::TevClient::wrap(std::net::TcpStream::connect("127.0.0.1:14158").unwrap());
 }
 
 pub mod python {
     use super::*;
     use pyo3::types::PyList;
 
+    #[pyclass]
+    pub struct TevClient {
+        inner: tev_client::TevClient,
+        values: Vec<f32>,
+    }
+
+    #[pymethods]
+    impl TevClient {
+        #[new]
+        fn new() -> Self {
+            Self {
+                inner: tev_client::TevClient::wrap(std::net::TcpStream::connect("127.0.0.1:14158").unwrap()),
+                values: Vec::new()
+            }
+        }
+
+        pub fn send_image(&mut self, name: &str, array: numpy::borrow::PyReadonlyArray2<u8>) {
+            let dims = array.dims();
+            let slice = array.as_slice().unwrap();
+
+            super::send_image(&mut self.inner, &mut self.values, name, slice, dims[0] as u32, dims[1] as u32);
+        }
+    }
+
+    #[pyclass]
+    #[derive(Clone)]
+    pub struct PatternWithOptions {
+        pattern: String,
+        allow_rot90: bool,
+    }
+
+    #[pymethods]
+    impl PatternWithOptions {
+        #[new]
+        fn new(pattern: String, allow_rot90: Option<bool>) -> Self {
+            Self {
+                pattern,
+                allow_rot90: allow_rot90.unwrap_or(true),
+            }
+        }
+    }
+
     #[pyfunction]
     pub fn rep(
         mut array: numpy::borrow::PyReadwriteArray2<u8>,
         patterns: &PyList,
-        priority: Option<bool>,
+        priority_after: Option<usize>,
         times: Option<u32>,
-    ) -> usize {
+    ) {
         let mut replaces = Vec::new();
 
         for pattern in patterns {
-            replaces.push(Replace::from_string(pattern.extract::<&str>().unwrap()));
+            let pattern =   if let Ok(pattern) = pattern.extract::<PatternWithOptions>() {
+                pattern
+            } else {
+                PatternWithOptions::new(pattern.extract::<&str>().unwrap().to_string(), None)
+            };
+
+            replaces.push(Replace::from_string(&pattern.pattern, pattern.allow_rot90));
         }
 
         let mut array_2d = Array2D {
@@ -82,30 +168,44 @@ pub mod python {
             &mut rng,
             &mut replaces,
             times.unwrap_or(0),
-            priority.unwrap_or(false),
+            priority_after,
         );
-
-        0
     }
 
     #[pyfunction]
-    pub fn send_image(name: &str, array: numpy::borrow::PyReadonlyArray2<u8>) {
-        let dims = array.dims();
-        let slice = array.as_slice().unwrap();
+    pub fn rep_all(mut array: numpy::borrow::PyReadwriteArray2<u8>, patterns: &PyList) {
+        let mut replaces = Vec::new();
 
-        super::send_image(name, slice, dims[0] as u32, dims[1] as u32);
+        for pattern in patterns {
+            replaces.push(Replace::from_string(pattern.extract::<&str>().unwrap(), true));
+        }
+
+        let mut array_2d = Array2D {
+            width: array.dims()[0],
+            height: array.dims()[1],
+            inner: array.as_slice_mut().unwrap(),
+        };
+
+        execute_rule_all(&mut array_2d, &mut replaces);
+    }
+
+    #[pyfunction]
+    pub fn index_for_colour(colour: char) -> Option<u8> {
+        super::index_for_colour(colour)
     }
 }
 
 #[pymodule]
 fn markov(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python::rep, m)?)?;
-    m.add_function(wrap_pyfunction!(python::send_image, m)?)?;
+    m.add_function(wrap_pyfunction!(python::rep_all, m)?)?;
+    m.add_function(wrap_pyfunction!(python::index_for_colour, m)?)?;
+    m.add_class::<python::PatternWithOptions>()?;
+    m.add_class::<python::TevClient>()?;
     Ok(())
 }
 
 use rand::SeedableRng;
-use std::rc::Rc;
 
 struct Array2D<T = Vec<u8>> {
     inner: T,
@@ -119,14 +219,6 @@ impl Array2D<Vec<u8>> {
             inner: slice.to_owned(),
             width: width,
             height: slice.len() / width,
-        }
-    }
-
-    fn empty_square(dim: usize) -> Self {
-        Self {
-            inner: vec![0; dim * dim],
-            width: dim,
-            height: dim,
         }
     }
 }
@@ -152,10 +244,15 @@ impl<T: MutByteSlice> Array2D<T> {
     ) -> impl Iterator<Item = (glam::I16Vec2, u8)> + '_ {
         (0..self.width)
             .flat_map(|x| (0..self.height).map(move |y| (x, y)))
-            .map(move |(x, y)| {
+            .filter_map(move |(x, y)| {
                 let value = self.inner[y * self.width + x];
-                let position = m.pos + m.dir.delta() * x as i16 + m.dir.rot_90().delta() * y as i16;
-                (position, value)
+
+                if value != WILDCARD {
+                    let position = m.pos + m.dir.delta() * x as i16 + m.dir.rot_90().delta() * y as i16;
+                    Some((position, value))
+                } else {
+                    None
+                }
             })
     }
 
@@ -163,8 +260,6 @@ impl<T: MutByteSlice> Array2D<T> {
         if coord.x < 0 || coord.x >= self.width as i16 || coord.y < 0 {
             return None;
         }
-
-        //dbg!(self.width, self.height);
 
         let index = coord.y as usize * self.width + coord.x as usize;
         self.inner.get(index).copied()
@@ -209,13 +304,9 @@ impl Direction {
         match self {
             Self::L2R => glam::I16Vec2::new(1, 0),
             Self::R2L => glam::I16Vec2::new(-1, 0),
-            Self::B2T => glam::I16Vec2::new(0, 1),
-            Self::T2B => glam::I16Vec2::new(0, -1),
+            Self::B2T => glam::I16Vec2::new(0, -1),
+            Self::T2B => glam::I16Vec2::new(0, 1),
         }
-    }
-
-    fn enumerate() -> [Self; 4] {
-        [Self::L2R, Self::R2L, Self::B2T, Self::T2B]
     }
 }
 
@@ -259,7 +350,13 @@ fn pattern_from_chars(chars: &str) -> ([u8; 100], usize, usize) {
             continue;
         }
 
-        pattern[i] = c.to_digit(10).unwrap() as _;
+        pattern[i] = match c {
+            '*' => WILDCARD,
+            _ => match c.to_digit(10) {
+                Some(digit) => digit as u8,
+                None => index_for_colour(c).unwrap()
+            }
+        };
         i += 1;
     }
 
@@ -271,7 +368,7 @@ fn execute_rule<R: rand::Rng, T: MutByteSlice>(
     rng: &mut R,
     replaces: &mut [Replace],
     n_times_or_inf: u32,
-    stop_after_first_replace: bool,
+    stop_after_nth_replace: Option<usize>,
 ) {
     // Record which pattern outputs effect which pattern inputs.
     let mut interactions = Vec::with_capacity(replaces.len());
@@ -279,9 +376,11 @@ fn execute_rule<R: rand::Rng, T: MutByteSlice>(
     for i in 0..replaces.len() {
         let prev = &replaces[i];
 
-        let mut replacment_interactions: Vec<bool> = (0..replaces.len())
+        // Todo: this has pretty bad time complexity for large patterns.
+        let replacment_interactions: Vec<bool> = (0..replaces.len())
             .map(|j| {
                 let next = &replaces[j];
+                next.from.inner.contains(&WILDCARD) ||
                 next.from
                     .inner
                     .iter()
@@ -314,8 +413,10 @@ fn execute_rule<R: rand::Rng, T: MutByteSlice>(
                     replaces[j].update_matches(state, &updated);
                 }
 
-                if stop_after_first_replace {
-                    break;
+                if let Some(n) = stop_after_nth_replace {
+                    if n <= i {
+                        break;
+                    }
                 }
             }
         }
@@ -326,12 +427,7 @@ fn execute_rule<R: rand::Rng, T: MutByteSlice>(
     }
 }
 
-fn execute_rule_all<R: rand::Rng>(
-    state: &mut Array2D,
-    rng: &mut R,
-    updated: &mut Vec<glam::I16Vec2>,
-    replaces: &mut [Replace],
-) {
+fn execute_rule_all<T: MutByteSlice>(state: &mut Array2D<T>, replaces: &mut [Replace]) {
     for rep in replaces.iter_mut() {
         rep.store_initial_matches(&state);
 
@@ -347,181 +443,38 @@ fn execute_rule_all<R: rand::Rng>(
     }
 }
 
-fn parse_value_from_table_as_pattern(
-    value: mlua::Value,
-    index: i64,
-) -> Result<Replace, mlua::Error> {
-    let pattern_str = match value.as_str() {
-        Some(string) => string,
-        None => {
-            return Err(mlua::Error::BadArgument {
-                pos: index as usize,
-                name: None,
-                to: None,
-                cause: mlua::Error::runtime("integer arguments must be strings").into(),
-            })
-        }
-    };
-    let (from, to) = pattern_str.split_once('=').unwrap();
-    let (from, from_len, from_width) = pattern_from_chars(from);
-    let (to, to_len, to_width) = pattern_from_chars(to);
-    assert_eq!(from_width, to_width);
-    Ok(Replace::new(&from[..from_len], &to[..to_len], from_width))
-}
+const WILDCARD: u8 = 255;
 
-struct GlobalState {
-    state: Array2D,
-    rng: rand::rngs::SmallRng,
-    tev_client: tev_client::TevClient,
-    values: Vec<f32>,
-    i: usize,
-}
-/*
-fn main() -> anyhow::Result<()> {
-    let lua = mlua::Lua::new();
-
-    let mut rng = rand::rngs::SmallRng::from_entropy();
-    let mut state = Array2D::empty_square(4096);
-
-    let _command = std::process::Command::new("tev").spawn();
-    std::thread::sleep(std::time::Duration::from_millis(16));
-
-    let mut client = tev_client::TevClient::wrap(std::net::TcpStream::connect("127.0.0.1:14158")?);
-
-    let state = Rc::new(std::cell::RefCell::new(GlobalState {
-        values: vec![0.0_f32; state.width * state.height * 3],
-        state: state,
-        rng: rng,
-        tev_client: client,
-        i: 0,
-    }));
-
-    let state_c = state.clone();
-
-    lua.globals()
-        .set(
-            "rep",
-            mlua::Function::wrap_mut(move |_lua, table: mlua::Table| {
-                let mut times = 0;
-                let mut patterns = Vec::new();
-                let mut priority = false;
-
-                table.for_each::<mlua::Value, mlua::Value>(|key, value| {
-                    match key {
-                        mlua::Value::Integer(index) => {
-                            patterns.push(parse_value_from_table_as_pattern(value, index)?);
-                        }
-                        mlua::Value::String(option) => match option.to_str().unwrap() {
-                            "times" => {
-                                times = value.as_u32().unwrap();
-                            }
-                            "priority" => {
-                                priority = value.as_boolean().unwrap();
-                            }
-                            _ => panic!(),
-                        },
-                        other => panic!("{:?}", other),
-                    }
-                    Ok(())
-                })?;
-
-                let state = &mut *state_c.borrow_mut();
-
-                execute_rule(
-                    &mut state.state,
-                    &mut state.rng,
-                    &mut patterns,
-                    times,
-                    priority,
-                );
-
-                send_image(
-                    &mut state.tev_client,
-                    &format!("step {}", state.i),
-                    &mut state.values,
-                    &state.state,
-                );
-                state.i += 1;
-
-                Ok(())
-            }),
-        )
-        .unwrap();
-
-    lua.globals()
-        .set(
-            "rep_all",
-            mlua::Function::wrap_mut(move |_lua, table: mlua::Table| {
-                let mut patterns = Vec::new();
-                let mut updated = Vec::new();
-
-                table.for_each::<mlua::Value, mlua::Value>(|key, value| {
-                    match key {
-                        mlua::Value::Integer(index) => {
-                            patterns.push(parse_value_from_table_as_pattern(value, index)?);
-                        }
-                        other => panic!("{:?}", other),
-                    }
-                    Ok(())
-                })?;
-
-                let state = &mut *state.borrow_mut();
-
-                execute_rule_all(
-                    &mut state.state,
-                    &mut state.rng,
-                    &mut updated,
-                    &mut patterns,
-                );
-
-                send_image(
-                    &mut state.tev_client,
-                    &format!("step {}", state.i),
-                    &mut state.values,
-                    &state.state,
-                );
-                state.i += 1;
-
-                Ok(())
-            }),
-        )
-        .unwrap();
-
-    let model = std::env::args().nth(1).unwrap();
-    let txt = std::fs::read_to_string(model).unwrap();
-
-    if let Err(error) = lua.load(txt).exec() {
-        println!("{}", error);
-    };
-
-    Ok(())
-}
-*/
 struct Replace {
     to: Array2D,
     from: Array2D,
-    is_symmetrical: bool,
     potential_matches: Vec<Match>,
     applicable_directions: &'static [Direction],
 }
 
 impl Replace {
-    fn new(from: &[u8], to: &[u8], width: usize) -> Self {
+    fn new(from: &[u8], to: &[u8], width: usize, allow_rot90: bool) -> Self {
         let from = Array2D::new(from, width);
-
-        let is_symmetrical = from.is_symmetrical();
 
         Self {
             to: Array2D::new(to, width),
-            is_symmetrical,
-            applicable_directions: if is_symmetrical {
-                &[Direction::L2R, Direction::T2B]
-            } else {
+            applicable_directions: if from.is_symmetrical() {
+                if allow_rot90 {
+                    &[Direction::L2R, Direction::T2B]
+                } else {
+                    &[Direction::L2R]
+                }
+            } else if allow_rot90 {
                 &[
                     Direction::L2R,
                     Direction::T2B,
                     Direction::R2L,
                     Direction::B2T,
+                ]
+            } else {
+                &[
+                    Direction::L2R,
+                    Direction::R2L,
                 ]
             },
             from,
@@ -529,18 +482,18 @@ impl Replace {
         }
     }
 
-    fn from_string(string: &str) -> Self {
+    fn from_string(string: &str, allow_rot90: bool) -> Self {
         let (from, to) = string.split_once('=').unwrap();
         let (from, from_len, from_width) = pattern_from_chars(from);
         let (to, to_len, to_width) = pattern_from_chars(to);
         assert_eq!(from_width, to_width);
-        Self::new(&from[..from_len], &to[..to_len], from_width)
+        Self::new(&from[..from_len], &to[..to_len], from_width, allow_rot90)
     }
 
     fn store_initial_matches<T: MutByteSlice>(&mut self, state: &Array2D<T>) {
-        for x in 0..state.width {
-            for y in 0..state.height {
-                for &dir in self.applicable_directions {
+        for &dir in self.applicable_directions {
+            for x in 0..state.width {
+                for y in 0..state.height {
                     let m = Match {
                         pos: glam::I16Vec2::new(x as i16, y as i16),
                         dir,
@@ -570,6 +523,10 @@ impl Replace {
         };
 
         for (pos, v) in self.to.iter_match_locations_and_values(m) {
+            if v == WILDCARD {
+                continue;
+            }
+
             if state.put(pos, v) {
                 updated.push(pos);
             }
