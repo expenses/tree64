@@ -1,13 +1,119 @@
+use pyo3::prelude::*;
+
+pub fn send_image(name: &str, slice: &[u8], width: u32, height: u32) {
+    const COLOURS: &[[f32; 3]] = &[
+        [0.0; 3],
+        [1.0; 3],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 1.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [1.0, 1.0, 0.0],
+        [1.0, 0.5, 0.0],
+        [1.0, 0.0, 0.5],
+        [0.5, 0.0, 1.0],
+    ];
+
+    let mut values = vec![0.0; slice.len() * 3];
+
+    for i in 0..slice.len() {
+        let colour = &COLOURS[slice[i] as usize];
+        values[i * 3..(i + 1) * 3].copy_from_slice(colour);
+    }
+
+    let mut client =
+        tev_client::TevClient::wrap(std::net::TcpStream::connect("127.0.0.1:14158").unwrap());
+
+    client
+        .send(tev_client::PacketCreateImage {
+            image_name: name,
+            grab_focus: false,
+            width,
+            height,
+            channel_names: &["R", "G", "B"],
+        })
+        .unwrap();
+    client
+        .send(tev_client::PacketUpdateImage {
+            image_name: name,
+            grab_focus: false,
+            channel_names: &["R", "G", "B"],
+            channel_offsets: &[0, 1, 2],
+            channel_strides: &[3, 3, 3],
+            x: 0,
+            y: 0,
+            width,
+            height,
+            data: &values,
+        })
+        .unwrap();
+
+    let mut client =
+        tev_client::TevClient::wrap(std::net::TcpStream::connect("127.0.0.1:14158").unwrap());
+}
+
+pub mod python {
+    use super::*;
+    use pyo3::types::PyList;
+
+    #[pyfunction]
+    pub fn rep(
+        mut array: numpy::borrow::PyReadwriteArray2<u8>,
+        patterns: &PyList,
+        priority: Option<bool>,
+        times: Option<u32>,
+    ) -> usize {
+        let mut replaces = Vec::new();
+
+        for pattern in patterns {
+            replaces.push(Replace::from_string(pattern.extract::<&str>().unwrap()));
+        }
+
+        let mut array_2d = Array2D {
+            width: array.dims()[0],
+            height: array.dims()[1],
+            inner: array.as_slice_mut().unwrap(),
+        };
+
+        let mut rng = rand::rngs::SmallRng::from_entropy();
+
+        execute_rule(
+            &mut array_2d,
+            &mut rng,
+            &mut replaces,
+            times.unwrap_or(0),
+            priority.unwrap_or(false),
+        );
+
+        0
+    }
+
+    #[pyfunction]
+    pub fn send_image(name: &str, array: numpy::borrow::PyReadonlyArray2<u8>) {
+        let dims = array.dims();
+        let slice = array.as_slice().unwrap();
+
+        super::send_image(name, slice, dims[0] as u32, dims[1] as u32);
+    }
+}
+
+#[pymodule]
+fn markov(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(python::rep, m)?)?;
+    m.add_function(wrap_pyfunction!(python::send_image, m)?)?;
+    Ok(())
+}
+
 use rand::SeedableRng;
 use std::rc::Rc;
 
-struct Array2D {
-    inner: Vec<u8>,
+struct Array2D<T = Vec<u8>> {
+    inner: T,
     width: usize,
     height: usize,
 }
 
-impl Array2D {
+impl Array2D<Vec<u8>> {
     fn new(slice: &[u8], width: usize) -> Self {
         Self {
             inner: slice.to_owned(),
@@ -23,7 +129,13 @@ impl Array2D {
             height: dim,
         }
     }
+}
 
+trait MutByteSlice: std::ops::Deref<Target = [u8]> + std::ops::DerefMut {}
+
+impl<T> MutByteSlice for T where T: std::ops::Deref<Target = [u8]> + std::ops::DerefMut {}
+
+impl<T: MutByteSlice> Array2D<T> {
     fn is_symmetrical(&self) -> bool {
         self.inner.iter().eq(self.inner.iter().rev())
     }
@@ -48,9 +160,11 @@ impl Array2D {
     }
 
     fn get(&self, coord: glam::I16Vec2) -> Option<u8> {
-        if coord.x < 0 || coord.x >= self.width as i16 {
+        if coord.x < 0 || coord.x >= self.width as i16 || coord.y < 0 {
             return None;
         }
+
+        //dbg!(self.width, self.height);
 
         let index = coord.y as usize * self.width + coord.x as usize;
         self.inner.get(index).copied()
@@ -64,20 +178,7 @@ impl Array2D {
     }
 }
 
-const COLOURS: &[[f32; 3]] = &[
-    [0.0; 3],
-    [1.0; 3],
-    [1.0, 0.0, 0.0],
-    [0.0, 1.0, 0.0],
-    [0.0, 1.0, 1.0],
-    [1.0, 0.0, 1.0],
-    [1.0, 1.0, 0.0],
-    [1.0, 0.5, 0.0],
-    [1.0, 0.0, 0.5],
-    [0.5, 0.0, 1.0],
-];
-
-fn can_replace_pattern(pattern: &Array2D, state: &Array2D, m: Match) -> bool {
+fn can_replace_pattern<T: MutByteSlice>(pattern: &Array2D, state: &Array2D<T>, m: Match) -> bool {
     for (pos, v) in pattern.iter_match_locations_and_values(m) {
         if state.get(pos) != Some(v) {
             return false;
@@ -165,8 +266,8 @@ fn pattern_from_chars(chars: &str) -> ([u8; 100], usize, usize) {
     (pattern, i, row_width.unwrap_or(i))
 }
 
-fn execute_rule<R: rand::Rng>(
-    state: &mut Array2D,
+fn execute_rule<R: rand::Rng, T: MutByteSlice>(
+    state: &mut Array2D<T>,
     rng: &mut R,
     replaces: &mut [Replace],
     n_times_or_inf: u32,
@@ -275,7 +376,7 @@ struct GlobalState {
     values: Vec<f32>,
     i: usize,
 }
-
+/*
 fn main() -> anyhow::Result<()> {
     let lua = mlua::Lua::new();
 
@@ -395,7 +496,7 @@ fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
-
+*/
 struct Replace {
     to: Array2D,
     from: Array2D,
@@ -428,7 +529,15 @@ impl Replace {
         }
     }
 
-    fn store_initial_matches(&mut self, state: &Array2D) {
+    fn from_string(string: &str) -> Self {
+        let (from, to) = string.split_once('=').unwrap();
+        let (from, from_len, from_width) = pattern_from_chars(from);
+        let (to, to_len, to_width) = pattern_from_chars(to);
+        assert_eq!(from_width, to_width);
+        Self::new(&from[..from_len], &to[..to_len], from_width)
+    }
+
+    fn store_initial_matches<T: MutByteSlice>(&mut self, state: &Array2D<T>) {
         for x in 0..state.width {
             for y in 0..state.height {
                 for &dir in self.applicable_directions {
@@ -447,9 +556,9 @@ impl Replace {
         }
     }
 
-    fn get_match_and_update_state<R: rand::Rng>(
+    fn get_match_and_update_state<T: MutByteSlice, R: rand::Rng>(
         &mut self,
-        state: &mut Array2D,
+        state: &mut Array2D<T>,
         rng: &mut R,
         updated: &mut Vec<glam::I16Vec2>,
     ) -> bool {
@@ -469,7 +578,11 @@ impl Replace {
         true
     }
 
-    fn update_matches(&mut self, state: &Array2D, updated_cells: &[glam::I16Vec2]) {
+    fn update_matches<T: MutByteSlice>(
+        &mut self,
+        state: &Array2D<T>,
+        updated_cells: &[glam::I16Vec2],
+    ) {
         for &pos in updated_cells {
             for &dir in self.applicable_directions {
                 // todo: this can lead to cases of biasing. Think of the case where a 2x2 cube has been placed.
@@ -490,35 +603,4 @@ impl Replace {
             }
         }
     }
-}
-
-fn send_image(client: &mut tev_client::TevClient, name: &str, values: &mut [f32], state: &Array2D) {
-    for i in 0..state.inner.len() {
-        let colour = &COLOURS[state.inner[i] as usize];
-        values[i * 3..(i + 1) * 3].copy_from_slice(colour);
-    }
-
-    client
-        .send(tev_client::PacketCreateImage {
-            image_name: name,
-            grab_focus: false,
-            width: state.width as _,
-            height: state.height as _,
-            channel_names: &["R", "G", "B"],
-        })
-        .unwrap();
-    client
-        .send(tev_client::PacketUpdateImage {
-            image_name: name,
-            grab_focus: false,
-            channel_names: &["R", "G", "B"],
-            channel_offsets: &[0, 1, 2],
-            channel_strides: &[3, 3, 3],
-            x: 0,
-            y: 0,
-            width: state.width as _,
-            height: state.height as _,
-            data: values,
-        })
-        .unwrap();
 }
