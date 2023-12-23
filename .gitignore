@@ -1,3 +1,5 @@
 /target
 *.txt
 perf.data*
+examples/__pycache__
+env
