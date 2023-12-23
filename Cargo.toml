@@ -13,3 +13,5 @@ rand = { version = "0.8.5", features = ["small_rng"] }
 tev_client = "0.5.2"
 numpy = "0.20.0"
 pyo3 = { version = "0.20.0", features = ["extension-module"] }
+#regex = "1.10.2"
+memchr = "2.6.4"
