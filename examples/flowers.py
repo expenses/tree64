@@ -7,9 +7,9 @@ subprocess.Popen("tev", stdout=subprocess.PIPE)
 time.sleep(1.0 / 60.0)
 client = TevClient()
 
-width = 1924
-height = 1924
-arr = np.zeros((1924, 1924), dtype=np.uint8)
+width = 4096
+height = 4096
+arr = np.zeros((width, height), dtype=np.uint8)
 arr[: height - 4] = index_for_colour("U")
 arr[height - 4] = index_for_colour("G")
 arr[height - 3 :] = index_for_colour("N")

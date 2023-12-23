@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 use std::collections::HashSet;
+use rayon::iter::{ParallelIterator, IntoParallelRefIterator, IndexedParallelIterator};
 
 mod bespoke_regex;
 
@@ -142,15 +143,17 @@ pub mod python {
     pub struct PatternWithOptions {
         pattern: String,
         allow_rot90: bool,
+        allow_vertical_flip: bool,
     }
 
     #[pymethods]
     impl PatternWithOptions {
         #[new]
-        fn new(pattern: String, allow_rot90: Option<bool>) -> Self {
+        fn new(pattern: String, allow_rot90: Option<bool>, allow_vertical_flip: Option<bool>) -> Self {
             Self {
                 pattern,
                 allow_rot90: allow_rot90.unwrap_or(true),
+                allow_vertical_flip: allow_vertical_flip.unwrap_or(true)
             }
         }
     }
@@ -175,12 +178,13 @@ pub mod python {
             let pattern = if let Ok(pattern) = pattern.extract::<PatternWithOptions>() {
                 pattern
             } else {
-                PatternWithOptions::new(pattern.extract::<&str>().unwrap().to_string(), None)
+                PatternWithOptions::new(pattern.extract::<&str>().unwrap().to_string(), None, None)
             };
 
             replaces.push(Replace::from_string(
                 &pattern.pattern,
                 pattern.allow_rot90,
+                pattern.allow_vertical_flip,
                 &array_2d,
             ));
         }
@@ -209,6 +213,7 @@ pub mod python {
         for pattern in patterns {
             replaces.push(Replace::from_string(
                 pattern.extract::<&str>().unwrap(),
+                true,
                 true,
                 &array_2d,
             ));
@@ -251,9 +256,9 @@ impl Array2D<Vec<u8>> {
     }
 }
 
-trait MutByteSlice: std::ops::Deref<Target = [u8]> + std::ops::DerefMut {}
+trait MutByteSlice: std::ops::Deref<Target = [u8]> + std::ops::DerefMut + Sync {}
 
-impl<T> MutByteSlice for T where T: std::ops::Deref<Target = [u8]> + std::ops::DerefMut {}
+impl<T> MutByteSlice for T where T: std::ops::Deref<Target = [u8]> + std::ops::DerefMut + Sync {}
 
 impl<T: MutByteSlice> Array2D<T> {
     fn put(&mut self, index: usize, value: u8) -> bool {
@@ -530,6 +535,7 @@ impl Replace {
         to: &[u8],
         width: usize,
         allow_rot90: bool,
+        allow_vertical_flip: bool,
         state: &Array2D<T>,
     ) -> Self {
         let height = from.len() / width;
@@ -545,9 +551,11 @@ impl Replace {
         // Get a set of unique permutations.
         let mut permutations = HashSet::new();
 
-        permutations.insert(pair.permute(width, height, |x, y| (x, height - 1 - y)));
         permutations.insert(pair.permute(width, height, |x, y| (width - 1 - x, y)));
-        permutations.insert(pair.permute(width, height, |x, y| (width - 1 - x, height - 1 - y)));
+        if allow_vertical_flip {
+            permutations.insert(pair.permute(width, height, |x, y| (x, height - 1 - y)));
+            permutations.insert(pair.permute(width, height, |x, y| (width - 1 - x, height - 1 - y)));
+        }
         if allow_rot90 {
             permutations.insert(pair.permute(height, width, |x, y| (y, x)));
             permutations.insert(pair.permute(height, width, |x, y| (y, width - 1 - x)));
@@ -568,7 +576,7 @@ impl Replace {
         }
     }
 
-    fn from_string<T: MutByteSlice>(string: &str, allow_rot90: bool, state: &Array2D<T>) -> Self {
+    fn from_string<T: MutByteSlice>(string: &str, allow_rot90: bool, allow_vertical_flip: bool, state: &Array2D<T>) -> Self {
         let (from, to) = string.split_once('=').unwrap();
         let (from, from_len, from_width) = pattern_from_chars(from);
         let (to, to_len, to_width) = pattern_from_chars(to);
@@ -578,22 +586,22 @@ impl Replace {
             &to[..to_len],
             from_width,
             allow_rot90,
+            allow_vertical_flip,
             state,
         )
     }
 
     fn store_initial_matches<T: MutByteSlice>(&mut self, state: &Array2D<T>) {
-        for (i, permutation) in self.permutations.iter().enumerate() {
-            find_all_overlapping(permutation, &state.inner, |index| {
-                if (index % state.width + permutation.to.width) > state.width {
-                    return;
-                }
-                self.potential_matches.push(Match {
-                    index: index as u32,
-                    permutation: i as u8,
-                });
-            });
-        }
+        self.potential_matches = self.permutations.par_iter().enumerate()
+            .flat_map_iter(|(i, permutation)| {
+                OverlappingRegexIter::new(&permutation.bespoke_regex, &state.inner)
+                    .filter(|index| (index % state.width + permutation.to.width) <= state.width)
+                    .map(move |index| {
+                        Match {
+                            index: index as u32,
+                            permutation: i as u8,
+                        }
+                    })}).collect();
     }
 
     fn get_match_and_update_state<T: MutByteSlice, R: rand::Rng>(
@@ -647,12 +655,33 @@ impl Replace {
     }
 }
 
-fn find_all_overlapping<T: FnMut(usize)>(regex: &Permutation, haystack: &[u8], mut func: T) {
-    let mut offset = 0;
+struct OverlappingRegexIter<'a> {
+    regex: &'a bespoke_regex::BespokeRegex,
+    haystack: &'a [u8],
+    offset: usize
+}
 
-    while let Some(start) = regex.bespoke_regex.find(&haystack[offset..]) {
-        func(offset + start);
-        offset += start + 1;
+impl<'a> OverlappingRegexIter<'a> {
+    fn new(regex: &'a bespoke_regex::BespokeRegex, haystack: &'a [u8]) -> Self {
+        Self {
+            regex, haystack,
+            offset: 0
+        }
+    }
+}
+
+impl<'a> Iterator for OverlappingRegexIter<'a> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.regex.find(&self.haystack[self.offset..]) {
+            Some(start) => {
+                let index = self.offset + start;
+                self.offset += start + 1;
+                Some(index)
+            },
+            None => None
+        }
     }
 }
 
