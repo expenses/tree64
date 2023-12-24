@@ -1,8 +1,17 @@
 use pyo3::prelude::*;
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 use std::collections::HashSet;
-use rayon::iter::{ParallelIterator, IntoParallelRefIterator, IndexedParallelIterator};
 
+use arrays::{Array2D, ArrayPair, MutByteSlice};
+use pattern_matching::{match_pattern, OverlappingRegexIter, Permutation};
+use rand::SeedableRng;
+
+mod arrays;
 mod bespoke_regex;
+mod pattern_matching;
+mod python;
 
 // From https://github.com/mxgmn/MarkovJunior#rewrite-rules,
 // but swapped around to have B then W then R.
@@ -101,132 +110,6 @@ pub fn send_image(
         .unwrap();
 }
 
-pub mod python {
-    use super::*;
-    use pyo3::types::PyList;
-
-    #[pyclass]
-    pub struct TevClient {
-        inner: tev_client::TevClient,
-        values: Vec<f32>,
-    }
-
-    #[pymethods]
-    impl TevClient {
-        #[new]
-        fn new() -> Self {
-            Self {
-                inner: tev_client::TevClient::wrap(
-                    std::net::TcpStream::connect("127.0.0.1:14158").unwrap(),
-                ),
-                values: Vec::new(),
-            }
-        }
-
-        pub fn send_image(&mut self, name: &str, array: numpy::borrow::PyReadonlyArray2<u8>) {
-            let dims = array.dims();
-            let slice = array.as_slice().unwrap();
-
-            super::send_image(
-                &mut self.inner,
-                &mut self.values,
-                name,
-                slice,
-                dims[0] as u32,
-                dims[1] as u32,
-            );
-        }
-    }
-
-    #[pyclass]
-    #[derive(Clone)]
-    pub struct PatternWithOptions {
-        pattern: String,
-        allow_rot90: bool,
-        allow_vertical_flip: bool,
-    }
-
-    #[pymethods]
-    impl PatternWithOptions {
-        #[new]
-        fn new(pattern: String, allow_rot90: Option<bool>, allow_vertical_flip: Option<bool>) -> Self {
-            Self {
-                pattern,
-                allow_rot90: allow_rot90.unwrap_or(true),
-                allow_vertical_flip: allow_vertical_flip.unwrap_or(true)
-            }
-        }
-    }
-
-    #[pyfunction]
-    pub fn rep(
-        mut array: numpy::borrow::PyReadwriteArray2<u8>,
-        patterns: &PyList,
-        priority_after: Option<usize>,
-        times: Option<u32>,
-        priority: Option<bool>,
-    ) {
-        let mut array_2d = Array2D {
-            width: array.dims()[0],
-            height: array.dims()[1],
-            inner: array.as_slice_mut().unwrap(),
-        };
-
-        let mut replaces = Vec::new();
-
-        for pattern in patterns {
-            let pattern = if let Ok(pattern) = pattern.extract::<PatternWithOptions>() {
-                pattern
-            } else {
-                PatternWithOptions::new(pattern.extract::<&str>().unwrap().to_string(), None, None)
-            };
-
-            replaces.push(Replace::from_string(
-                &pattern.pattern,
-                pattern.allow_rot90,
-                pattern.allow_vertical_flip,
-                &array_2d,
-            ));
-        }
-
-        let mut rng = rand::rngs::SmallRng::from_entropy();
-
-        execute_rule(
-            &mut array_2d,
-            &mut rng,
-            &mut replaces,
-            times.unwrap_or(0),
-            priority_after.or(priority.filter(|&boolean| boolean).map(|_| 0)),
-        );
-    }
-
-    #[pyfunction]
-    pub fn rep_all(mut array: numpy::borrow::PyReadwriteArray2<u8>, patterns: &PyList) {
-        let mut array_2d = Array2D {
-            width: array.dims()[0],
-            height: array.dims()[1],
-            inner: array.as_slice_mut().unwrap(),
-        };
-
-        let mut replaces = Vec::new();
-
-        for pattern in patterns {
-            replaces.push(Replace::from_string(
-                pattern.extract::<&str>().unwrap(),
-                true,
-                true,
-                &array_2d,
-            ));
-        }
-        execute_rule_all(&mut array_2d, &mut replaces);
-    }
-
-    #[pyfunction]
-    pub fn index_for_colour(colour: char) -> Option<u8> {
-        super::index_for_colour(colour)
-    }
-}
-
 #[pymodule]
 fn markov(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python::rep, m)?)?;
@@ -235,60 +118,6 @@ fn markov(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<python::PatternWithOptions>()?;
     m.add_class::<python::TevClient>()?;
     Ok(())
-}
-
-use rand::SeedableRng;
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-struct Array2D<T = Vec<u8>> {
-    inner: T,
-    width: usize,
-    height: usize,
-}
-
-impl Array2D<Vec<u8>> {
-    fn new(slice: &[u8], width: usize) -> Self {
-        Self {
-            inner: slice.to_owned(),
-            width,
-            height: slice.len() / width,
-        }
-    }
-}
-
-trait MutByteSlice: std::ops::Deref<Target = [u8]> + std::ops::DerefMut + Sync {}
-
-impl<T> MutByteSlice for T where T: std::ops::Deref<Target = [u8]> + std::ops::DerefMut + Sync {}
-
-impl<T: MutByteSlice> Array2D<T> {
-    fn put(&mut self, index: usize, value: u8) -> bool {
-        let previous_value = self.inner[index];
-        self.inner[index] = value;
-        previous_value != value
-    }
-
-    fn permute<F: Fn(usize, usize) -> (usize, usize)>(
-        &self,
-        width: usize,
-        height: usize,
-        remap: F,
-    ) -> Array2D {
-        let mut array = Array2D {
-            inner: vec![0; width * height],
-            width,
-            height,
-        };
-
-        for x in 0..self.width {
-            for y in 0..self.height {
-                let value = self.inner[y * self.width + x];
-                let (x, y) = remap(x, y);
-                array.inner[y * width + x] = value;
-            }
-        }
-
-        array
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -368,9 +197,9 @@ fn execute_rule<R: rand::Rng, T: MutByteSlice>(
         interactions.push(replacment_interactions);
     }
 
-    for rep in replaces.iter_mut() {
+    replaces.par_iter_mut().for_each(|rep| {
         rep.store_initial_matches(state);
-    }
+    });
 
     let mut updated = Vec::new();
     let mut rule_indices = Vec::new();
@@ -451,77 +280,6 @@ fn execute_rule_all<T: MutByteSlice>(state: &mut Array2D<T>, replaces: &mut [Rep
 
 const WILDCARD: u8 = 255;
 
-struct Permutation {
-    //regex: regex::bytes::Regex,
-    bespoke_regex: bespoke_regex::BespokeRegex,
-    pattern_len: usize,
-    to: Array2D,
-}
-
-impl Permutation {
-    fn new<T: MutByteSlice>(state: &Array2D<T>, pair: ArrayPair) -> Self {
-        //let mut regex = String::new();
-        let mut bespoke_values = Vec::new();
-        let mut pattern_len = 0;
-
-        for y in 0..pair.from.height {
-            for x in 0..pair.from.width {
-                let index = y * pair.from.width + x;
-                let value = pair.from.inner[index];
-
-                if value == WILDCARD {
-                    bespoke_values.push(bespoke_regex::LiteralsOrWildcards::Wildcards(1));
-                } else {
-                    bespoke_values.push(bespoke_regex::LiteralsOrWildcards::Literal(vec![value]));
-                }
-            }
-
-            pattern_len += pair.from.width;
-
-            if y < pair.from.height - 1 {
-                //regex += &format!(r".{{{}}}", state.width - pair.from.width);
-                bespoke_values.push(bespoke_regex::LiteralsOrWildcards::Wildcards(
-                    state.width - pair.from.width,
-                ));
-                pattern_len += state.width - pair.from.width;
-            }
-        }
-
-        Self {
-            pattern_len,
-            /*
-            regex: regex::bytes::RegexBuilder::new(&string)
-                .unicode(false)
-                .dot_matches_new_line(true)
-                .build()
-                .unwrap(),
-            */
-            bespoke_regex: bespoke_regex::BespokeRegex::new(&bespoke_values),
-            to: pair.to,
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-struct ArrayPair {
-    to: Array2D,
-    from: Array2D,
-}
-
-impl ArrayPair {
-    fn permute<F: Fn(usize, usize) -> (usize, usize)>(
-        &self,
-        width: usize,
-        height: usize,
-        remap: F,
-    ) -> Self {
-        Self {
-            to: self.to.permute(width, height, &remap),
-            from: self.from.permute(width, height, &remap),
-        }
-    }
-}
-
 struct Replace {
     permutations: Vec<Permutation>,
     potential_matches: Vec<Match>,
@@ -554,7 +312,8 @@ impl Replace {
         permutations.insert(pair.permute(width, height, |x, y| (width - 1 - x, y)));
         if allow_vertical_flip {
             permutations.insert(pair.permute(width, height, |x, y| (x, height - 1 - y)));
-            permutations.insert(pair.permute(width, height, |x, y| (width - 1 - x, height - 1 - y)));
+            permutations
+                .insert(pair.permute(width, height, |x, y| (width - 1 - x, height - 1 - y)));
         }
         if allow_rot90 {
             permutations.insert(pair.permute(height, width, |x, y| (y, x)));
@@ -576,7 +335,12 @@ impl Replace {
         }
     }
 
-    fn from_string<T: MutByteSlice>(string: &str, allow_rot90: bool, allow_vertical_flip: bool, state: &Array2D<T>) -> Self {
+    fn from_string<T: MutByteSlice>(
+        string: &str,
+        allow_rot90: bool,
+        allow_vertical_flip: bool,
+        state: &Array2D<T>,
+    ) -> Self {
         let (from, to) = string.split_once('=').unwrap();
         let (from, from_len, from_width) = pattern_from_chars(from);
         let (to, to_len, to_width) = pattern_from_chars(to);
@@ -592,16 +356,19 @@ impl Replace {
     }
 
     fn store_initial_matches<T: MutByteSlice>(&mut self, state: &Array2D<T>) {
-        self.potential_matches = self.permutations.par_iter().enumerate()
+        self.potential_matches = self
+            .permutations
+            .par_iter()
+            .enumerate()
             .flat_map_iter(|(i, permutation)| {
                 OverlappingRegexIter::new(&permutation.bespoke_regex, &state.inner)
                     .filter(|index| (index % state.width + permutation.to.width) <= state.width)
-                    .map(move |index| {
-                        Match {
-                            index: index as u32,
-                            permutation: i as u8,
-                        }
-                    })}).collect();
+                    .map(move |index| Match {
+                        index: index as u32,
+                        permutation: i as u8,
+                    })
+            })
+            .collect();
     }
 
     fn get_match_and_update_state<T: MutByteSlice, R: rand::Rng>(
@@ -653,45 +420,4 @@ impl Replace {
             }
         }
     }
-}
-
-struct OverlappingRegexIter<'a> {
-    regex: &'a bespoke_regex::BespokeRegex,
-    haystack: &'a [u8],
-    offset: usize
-}
-
-impl<'a> OverlappingRegexIter<'a> {
-    fn new(regex: &'a bespoke_regex::BespokeRegex, haystack: &'a [u8]) -> Self {
-        Self {
-            regex, haystack,
-            offset: 0
-        }
-    }
-}
-
-impl<'a> Iterator for OverlappingRegexIter<'a> {
-    type Item = usize;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.regex.find(&self.haystack[self.offset..]) {
-            Some(start) => {
-                let index = self.offset + start;
-                self.offset += start + 1;
-                Some(index)
-            },
-            None => None
-        }
-    }
-}
-
-fn match_pattern<T: MutByteSlice>(regex: &Permutation, state: &Array2D<T>, index: u32) -> bool {
-    let end = index as usize + regex.pattern_len;
-    if end > state.inner.len() || (index as usize % state.width + regex.to.width) > state.width {
-        return false;
-    }
-    //regex.regex.is_match(&state.inner[index as usize..end])
-    regex
-        .bespoke_regex
-        .is_immediate_match(&state.inner[index as usize..end])
 }
