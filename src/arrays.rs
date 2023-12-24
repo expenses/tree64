@@ -13,18 +13,6 @@ impl Array2D<Vec<u8>> {
             height: slice.len() / width,
         }
     }
-}
-
-pub trait MutByteSlice: std::ops::Deref<Target = [u8]> + std::ops::DerefMut + Sync {}
-
-impl<T> MutByteSlice for T where T: std::ops::Deref<Target = [u8]> + std::ops::DerefMut + Sync {}
-
-impl<T: MutByteSlice> Array2D<T> {
-    pub fn put(&mut self, index: usize, value: u8) -> bool {
-        let previous_value = self.inner[index];
-        self.inner[index] = value;
-        previous_value != value
-    }
 
     pub fn permute<F: Fn(usize, usize) -> (usize, usize)>(
         &self,
@@ -47,6 +35,14 @@ impl<T: MutByteSlice> Array2D<T> {
         }
 
         array
+    }
+}
+
+impl Array2D<&mut [u8]> {
+    pub fn put(&mut self, index: usize, value: u8) -> bool {
+        let previous_value = self.inner[index];
+        self.inner[index] = value;
+        previous_value != value
     }
 }
 

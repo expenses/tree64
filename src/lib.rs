@@ -4,9 +4,9 @@ use rayon::iter::{
 };
 use std::collections::HashSet;
 
-use arrays::{Array2D, ArrayPair, MutByteSlice};
+use arrays::{Array2D, ArrayPair};
 use pattern_matching::{match_pattern, OverlappingRegexIter, Permutation};
-use rand::SeedableRng;
+use rand::{rngs::SmallRng, Rng, SeedableRng};
 
 mod arrays;
 mod bespoke_regex;
@@ -128,9 +128,9 @@ struct Match {
 
 // Keep sampling random values from a list until a valid one is found.
 // Values are removed when sampled.
-fn sample_until_valid<T, R: rand::Rng, F: FnMut(&T, &mut R) -> bool>(
+fn sample_until_valid<T, F: FnMut(&T, &mut SmallRng) -> bool>(
     values: &mut Vec<T>,
-    rng: &mut R,
+    rng: &mut SmallRng,
     mut valid: F,
 ) -> Option<T> {
     while !values.is_empty() {
@@ -173,9 +173,9 @@ fn pattern_from_chars(chars: &str) -> ([u8; 100], usize, usize) {
     (pattern, i, row_width.unwrap_or(i))
 }
 
-fn execute_rule<R: rand::Rng, T: MutByteSlice>(
-    state: &mut Array2D<T>,
-    rng: &mut R,
+fn execute_rule(
+    state: &mut Array2D<&mut [u8]>,
+    rng: &mut SmallRng,
     replaces: &mut [Replace],
     n_times_or_inf: u32,
     stop_after_nth_replace: Option<usize>,
@@ -253,12 +253,12 @@ fn execute_rule<R: rand::Rng, T: MutByteSlice>(
     }
 }
 
-fn execute_rule_all<T: MutByteSlice>(state: &mut Array2D<T>, replaces: &mut [Replace]) {
+fn execute_rule_all(state: &mut Array2D<&mut [u8]>, replaces: &mut [Replace]) {
     for rep in replaces.iter_mut() {
-        rep.store_initial_matches(&state);
+        rep.store_initial_matches(state);
 
         for &m in &rep.potential_matches {
-            if !match_pattern(&rep.permutations[m.permutation as usize], &state, m.index) {
+            if !match_pattern(&rep.permutations[m.permutation as usize], state, m.index) {
                 continue;
             }
 
@@ -288,13 +288,13 @@ struct Replace {
 }
 
 impl Replace {
-    fn new<T: MutByteSlice>(
+    fn new(
         from: &[u8],
         to: &[u8],
         width: usize,
         allow_rot90: bool,
         allow_vertical_flip: bool,
-        state: &Array2D<T>,
+        state: &Array2D<&mut [u8]>,
     ) -> Self {
         let height = from.len() / width;
 
@@ -335,11 +335,11 @@ impl Replace {
         }
     }
 
-    fn from_string<T: MutByteSlice>(
+    fn from_string(
         string: &str,
         allow_rot90: bool,
         allow_vertical_flip: bool,
-        state: &Array2D<T>,
+        state: &Array2D<&mut [u8]>,
     ) -> Self {
         let (from, to) = string.split_once('=').unwrap();
         let (from, from_len, from_width) = pattern_from_chars(from);
@@ -355,13 +355,13 @@ impl Replace {
         )
     }
 
-    fn store_initial_matches<T: MutByteSlice>(&mut self, state: &Array2D<T>) {
+    fn store_initial_matches(&mut self, state: &Array2D<&mut [u8]>) {
         self.potential_matches = self
             .permutations
             .par_iter()
             .enumerate()
             .flat_map_iter(|(i, permutation)| {
-                OverlappingRegexIter::new(&permutation.bespoke_regex, &state.inner)
+                OverlappingRegexIter::new(&permutation.bespoke_regex, state.inner)
                     .filter(|index| (index % state.width + permutation.to.width) <= state.width)
                     .map(move |index| Match {
                         index: index as u32,
@@ -371,10 +371,10 @@ impl Replace {
             .collect();
     }
 
-    fn get_match_and_update_state<T: MutByteSlice, R: rand::Rng>(
+    fn get_match_and_update_state(
         &mut self,
-        state: &mut Array2D<T>,
-        rng: &mut R,
+        state: &mut Array2D<&mut [u8]>,
+        rng: &mut SmallRng,
         updated: &mut Vec<u32>,
     ) -> bool {
         let m = match sample_until_valid(&mut self.potential_matches, rng, |&m, _| {
@@ -402,7 +402,7 @@ impl Replace {
         true
     }
 
-    fn update_matches<T: MutByteSlice>(&mut self, state: &Array2D<T>, updated_cells: &[u32]) {
+    fn update_matches(&mut self, state: &Array2D<&mut [u8]>, updated_cells: &[u32]) {
         for &index in updated_cells {
             for (i, permutation) in self.permutations.iter().enumerate() {
                 for x in 0..permutation.to.width {
