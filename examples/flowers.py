@@ -1,4 +1,4 @@
-from markov import rep, index_for_colour, PatternWithOptions, TevClient
+from markov import rep, index_for_colour, PatternWithOptions, TevClient, One, Markov
 import numpy as np
 import subprocess
 import time
@@ -7,8 +7,8 @@ subprocess.Popen("tev", stdout=subprocess.PIPE)
 time.sleep(1.0 / 60.0)
 client = TevClient()
 
-width = 4096
-height = 4096
+width = 1024
+height = 1024
 arr = np.zeros((width, height), dtype=np.uint8)
 arr[: height - 4] = index_for_colour("U")
 arr[height - 4] = index_for_colour("G")
@@ -17,9 +17,10 @@ arr[height - 3 :] = index_for_colour("N")
 client.send_image("initial", arr)
 rep(
     arr,
-    [
-        PatternWithOptions(
-            """
+    Markov(
+        One(
+            PatternWithOptions(
+                """
         UUU,
         UUU,
         UPU
@@ -28,9 +29,10 @@ rep(
         *P*,
         *E*
     """,
-            allow_rot90=False,
-        ),
-        PatternWithOptions("""
+                allow_rot90=False,
+            ),
+            PatternWithOptions(
+                """
         UUU,
         UUU,
         UUU,
@@ -43,9 +45,10 @@ rep(
         EE*,
         ***
     """,
-    allow_rot90 = False),
-        PatternWithOptions(
-            """
+                allow_rot90=False,
+            ),
+            PatternWithOptions(
+                """
         UUUUU,
         UUUUU,
         UUUUU,
@@ -58,10 +61,9 @@ rep(
         *EEE*,
         *****
     """,
-            allow_rot90=False,
-        ),
-
-    """
+                allow_rot90=False,
+            ),
+            """
         UUU,
         UPU,
         UEU,
@@ -72,6 +74,7 @@ rep(
         *Y*,
         ***,
     """,
+        ),
         """
         UUUUU,
         UUUUU,
@@ -85,13 +88,11 @@ rep(
         GGEGG,
         NNENN
     """,
-    ],
-    priority_after=4,
+    ),
 )
 rep(
     arr,
-    [
-        """
+    """
             ***,
             *P*,
             ***,
@@ -99,7 +100,6 @@ rep(
             *Y*,
             YEY,
             *Y*
-        """
-    ]
+        """,
 )
 client.send_image("final", arr)

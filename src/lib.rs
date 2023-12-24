@@ -13,6 +13,166 @@ mod bespoke_regex;
 mod pattern_matching;
 mod python;
 
+#[derive(Clone, Debug)]
+enum Node<T> {
+    // Try to apply a rewrite rule
+    Rule(T),
+    // Try to apply a child node in sequential order
+    Markov(Vec<Node<T>>),
+    // Try to apply a child node in random order
+    One(Vec<Node<T>>),
+}
+
+fn map_node<T, U, F: Fn(&T) -> U>(node: &Node<T>, map: &F) -> Node<U> {
+    match node {
+        Node::Rule(rule) => Node::Rule(map(rule)),
+        Node::Markov(children) => {
+            Node::Markov(children.iter().map(|node| map_node(node, map)).collect())
+        }
+        Node::One(children) => Node::One(children.iter().map(|node| map_node(node, map)).collect()),
+    }
+}
+
+fn index_node(node: Node<Replace>, replaces: &mut Vec<Replace>) -> IndexNode {
+    match node {
+        Node::Rule(rep) => {
+            let index = replaces.len();
+            replaces.push(rep);
+            IndexNode::Rule(index)
+        }
+        Node::Markov(nodes) => IndexNode::Markov(
+            nodes
+                .into_iter()
+                .map(|node| index_node(node, replaces))
+                .collect(),
+        ),
+        Node::One(nodes) => IndexNode::One {
+            children: nodes
+                .into_iter()
+                .map(|node| index_node(node, replaces))
+                .collect(),
+            node_index_storage: Vec::new(),
+        },
+    }
+}
+
+enum IndexNode {
+    Rule(usize),
+    Markov(Vec<IndexNode>),
+    One {
+        children: Vec<IndexNode>,
+        node_index_storage: Vec<usize>,
+    },
+}
+
+fn execute_root_node(
+    root: Node<Replace>,
+    state: &mut Array2D<&mut [u8]>,
+    rng: &mut SmallRng,
+    max_iterations: Option<u32>,
+) {
+    let mut replaces = Vec::new();
+    let mut root = index_node(root, &mut replaces);
+
+    // Record which pattern outputs effect which pattern inputs.
+    let mut interactions = Vec::with_capacity(replaces.len());
+
+    for i in 0..replaces.len() {
+        let prev = &replaces[i];
+
+        let replacment_interactions: Vec<bool> = (0..replaces.len())
+            .map(|j| {
+                let next = &replaces[j];
+                next.from_values.contains(&WILDCARD)
+                    || !next.from_values.is_disjoint(&prev.to_values)
+            })
+            .collect();
+
+        interactions.push(replacment_interactions);
+    }
+
+    replaces.par_iter_mut().for_each(|rep| {
+        rep.store_initial_matches(state);
+    });
+
+    let mut updated = Vec::new();
+
+    for rule_iter in 1.. {
+        if !execute_node(
+            &mut root,
+            state,
+            &mut replaces,
+            &interactions,
+            rng,
+            &mut updated,
+        ) {
+            return;
+        }
+
+        if let Some(max_iterations) = max_iterations {
+            if rule_iter >= max_iterations {
+                return;
+            }
+        }
+    }
+}
+
+fn execute_node(
+    node: &mut IndexNode,
+    state: &mut Array2D<&mut [u8]>,
+    replaces: &mut [Replace],
+    interactions: &[Vec<bool>],
+    rng: &mut SmallRng,
+    updated: &mut Vec<u32>,
+) -> bool {
+    match node {
+        IndexNode::Rule(index) => {
+            updated.clear();
+
+            if replaces[*index].get_match_and_update_state(state, rng, updated) {
+                for (i, replace) in replaces.iter_mut().enumerate() {
+                    if !interactions[*index][i] {
+                        continue;
+                    }
+                    replace.update_matches(state, updated);
+                }
+
+                true
+            } else {
+                false
+            }
+        }
+        IndexNode::Markov(nodes) => {
+            for node in nodes {
+                if execute_node(node, state, replaces, interactions, rng, updated) {
+                    return true;
+                }
+            }
+
+            false
+        }
+        IndexNode::One {
+            children,
+            node_index_storage,
+        } => {
+            node_index_storage.clear();
+            node_index_storage.extend(0..children.len());
+
+            sample_until_valid(node_index_storage, rng, |&node_index, rng| {
+                execute_node(
+                    &mut children[node_index],
+                    state,
+                    replaces,
+                    interactions,
+                    rng,
+                    updated,
+                )
+            })
+            .is_some()
+        }
+    }
+}
+
 // From https://github.com/mxgmn/MarkovJunior#rewrite-rules,
 // but swapped around to have B then W then R.
 pub const PALETTE: [char; 16] = [
@@ -117,6 +277,8 @@ fn markov(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python::index_for_colour, m)?)?;
     m.add_class::<python::PatternWithOptions>()?;
     m.add_class::<python::TevClient>()?;
+    m.add_class::<python::One>()?;
+    m.add_class::<python::Markov>()?;
     Ok(())
 }
 
@@ -171,86 +333,6 @@ fn pattern_from_chars(chars: &str) -> ([u8; 100], usize, usize) {
     }
 
     (pattern, i, row_width.unwrap_or(i))
-}
-
-fn execute_rule(
-    state: &mut Array2D<&mut [u8]>,
-    rng: &mut SmallRng,
-    replaces: &mut [Replace],
-    n_times_or_inf: u32,
-    stop_after_nth_replace: Option<usize>,
-) {
-    // Record which pattern outputs effect which pattern inputs.
-    let mut interactions = Vec::with_capacity(replaces.len());
-
-    for i in 0..replaces.len() {
-        let prev = &replaces[i];
-
-        let replacment_interactions: Vec<bool> = (0..replaces.len())
-            .map(|j| {
-                let next = &replaces[j];
-                next.from_values.contains(&WILDCARD)
-                    || !next.from_values.is_disjoint(&prev.to_values)
-            })
-            .collect();
-
-        interactions.push(replacment_interactions);
-    }
-
-    replaces.par_iter_mut().for_each(|rep| {
-        rep.store_initial_matches(state);
-    });
-
-    let mut updated = Vec::new();
-    let mut rule_indices = Vec::new();
-
-    for rule_iter in 1.. {
-        let mut rule_finished = true;
-
-        rule_indices.extend(0..stop_after_nth_replace.unwrap_or(replaces.len()));
-
-        // Try all the non-fallback rules first. Randomly select a valid one.
-        sample_until_valid(&mut rule_indices, rng, |&rule_index, rng| {
-            updated.clear();
-
-            if replaces[rule_index].get_match_and_update_state(state, rng, &mut updated) {
-                for (i, replace) in replaces.iter_mut().enumerate() {
-                    if !interactions[rule_index][i] {
-                        continue;
-                    }
-                    replace.update_matches(state, &updated);
-                }
-
-                rule_finished = false;
-                true
-            } else {
-                false
-            }
-        });
-
-        if rule_finished {
-            if let Some(nth) = stop_after_nth_replace {
-                for i in nth..replaces.len() {
-                    updated.clear();
-                    if replaces[i].get_match_and_update_state(state, rng, &mut updated) {
-                        for (j, replace) in replaces.iter_mut().enumerate() {
-                            if !interactions[i][j] {
-                                continue;
-                            }
-                            replace.update_matches(state, &updated);
-                        }
-
-                        rule_finished = false;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if rule_finished || rule_iter == n_times_or_inf {
-            return;
-        }
-    }
 }
 
 fn execute_rule_all(state: &mut Array2D<&mut [u8]>, replaces: &mut [Replace]) {

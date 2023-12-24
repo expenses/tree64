@@ -1,5 +1,5 @@
 use super::*;
-use pyo3::types::PyList;
+use pyo3::types::PyTuple;
 
 #[pyclass]
 pub struct TevClient {
@@ -54,50 +54,106 @@ impl PatternWithOptions {
     }
 }
 
+#[derive(Clone)]
+#[pyclass]
+pub struct One {
+    inner: Node<PatternWithOptions>,
+}
+
+#[pymethods]
+impl One {
+    #[new]
+    #[pyo3(signature = (*list))]
+    fn new(list: &PyTuple) -> PyResult<Self> {
+        Ok(Self {
+            inner: Node::One(
+                list.iter()
+                    .map(|item| {
+                        item.extract::<PythonNode>()
+                            .map(|python_node| python_node.convert())
+                    })
+                    .collect::<PyResult<Vec<Node<PatternWithOptions>>>>()?,
+            ),
+        })
+    }
+}
+
+
+#[derive(Clone)]
+#[pyclass]
+pub struct Markov {
+    inner: Node<PatternWithOptions>,
+}
+
+#[pymethods]
+impl Markov {
+    #[new]
+    #[pyo3(signature = (*list))]
+    fn new(list: &PyTuple) -> PyResult<Self> {
+        Ok(Self {
+            inner: Node::Markov(
+                list.iter()
+                    .map(|item| {
+                        item.extract::<PythonNode>()
+                            .map(|python_node| python_node.convert())
+                    })
+                    .collect::<PyResult<Vec<Node<PatternWithOptions>>>>()?,
+            ),
+        })
+    }
+}
+
+#[derive(FromPyObject)]
+enum PythonNode {
+    One(One),
+    Markov(Markov),
+    String(String),
+    PatternWithOptions(PatternWithOptions)
+}
+
+impl PythonNode {
+    fn convert(self) -> Node<PatternWithOptions> {
+        match self {
+            Self::One(one) => one.inner,
+            Self::Markov(markov) => markov.inner,
+            Self::String(string) => Node::Rule(PatternWithOptions::new(string, None, None)),
+            Self::PatternWithOptions(pattern) => Node::Rule(pattern)
+        }
+    }
+}
+
 #[pyfunction]
 pub fn rep(
     mut array: numpy::borrow::PyReadwriteArray2<u8>,
-    patterns: &PyList,
-    priority_after: Option<usize>,
+    node: &PyAny,
     times: Option<u32>,
-    priority: Option<bool>,
-) {
+) -> PyResult<()> {
     let mut array_2d = Array2D {
         width: array.dims()[0],
         height: array.dims()[1],
         inner: array.as_slice_mut().unwrap(),
     };
 
-    let mut replaces = Vec::new();
+    let node = node.extract::<PythonNode>()?.convert();
 
-    for pattern in patterns {
-        let pattern = if let Ok(pattern) = pattern.extract::<PatternWithOptions>() {
-            pattern
-        } else {
-            PatternWithOptions::new(pattern.extract::<&str>().unwrap().to_string(), None, None)
-        };
-
-        replaces.push(Replace::from_string(
+    let node = map_node(&node, &|pattern| {
+        Replace::from_string(
             &pattern.pattern,
             pattern.allow_rot90,
             pattern.allow_vertical_flip,
             &array_2d,
-        ));
-    }
+        )
+    });
 
     let mut rng = rand::rngs::SmallRng::from_entropy();
 
-    execute_rule(
-        &mut array_2d,
-        &mut rng,
-        &mut replaces,
-        times.unwrap_or(0),
-        priority_after.or(priority.filter(|&boolean| boolean).map(|_| 0)),
-    );
+    execute_root_node(node, &mut array_2d, &mut rng, times);
+
+    Ok(())
 }
 
 #[pyfunction]
-pub fn rep_all(mut array: numpy::borrow::PyReadwriteArray2<u8>, patterns: &PyList) {
+pub fn rep_all(mut array: numpy::borrow::PyReadwriteArray2<u8>, patterns: &PyTuple) {
     let mut array_2d = Array2D {
         width: array.dims()[0],
         height: array.dims()[1],
