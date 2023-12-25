@@ -78,7 +78,6 @@ impl One {
     }
 }
 
-
 #[derive(Clone)]
 #[pyclass]
 pub struct Markov {
@@ -108,7 +107,7 @@ enum PythonNode {
     One(One),
     Markov(Markov),
     String(String),
-    PatternWithOptions(PatternWithOptions)
+    PatternWithOptions(PatternWithOptions),
 }
 
 impl PythonNode {
@@ -117,7 +116,7 @@ impl PythonNode {
             Self::One(one) => one.inner,
             Self::Markov(markov) => markov.inner,
             Self::String(string) => Node::Rule(PatternWithOptions::new(string, None, None)),
-            Self::PatternWithOptions(pattern) => Node::Rule(pattern)
+            Self::PatternWithOptions(pattern) => Node::Rule(pattern),
         }
     }
 }

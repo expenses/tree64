@@ -14,6 +14,36 @@ impl Array2D<Vec<u8>> {
         }
     }
 
+    pub fn rows(&self) -> impl Iterator<Item = &[u8]> {
+        self.inner.chunks_exact(self.width)
+    }
+
+    pub fn get(&self, x: usize, y: usize) -> u8 {
+        self.inner[y * self.width + x]
+    }
+
+    #[inline]
+    pub fn values(&self) -> impl Iterator<Item = (usize, usize, u8)> + '_ {
+        self.rows()
+            .enumerate()
+            .flat_map(|(y, row)| row.iter().enumerate().map(move |(x, v)| (x, y, *v)))
+    }
+
+    #[inline]
+    pub fn non_wildcard_values(&self) -> impl Iterator<Item = (usize, usize, u8)> + '_ {
+        self.values()
+            .filter(|&(_, _, value)| value != crate::WILDCARD)
+    }
+
+    #[inline]
+    pub fn non_wildcard_values_in_state(
+        &self,
+        state_width: usize,
+    ) -> impl Iterator<Item = (usize, u8)> + '_ {
+        self.non_wildcard_values()
+            .map(move |(x, y, value)| (x + y * state_width, value))
+    }
+
     pub fn permute<F: Fn(usize, usize) -> (usize, usize)>(
         &self,
         width: usize,
@@ -26,12 +56,9 @@ impl Array2D<Vec<u8>> {
             height,
         };
 
-        for x in 0..self.width {
-            for y in 0..self.height {
-                let value = self.inner[y * self.width + x];
-                let (x, y) = remap(x, y);
-                array.inner[y * width + x] = value;
-            }
+        for (x, y, value) in self.values() {
+            let (x, y) = remap(x, y);
+            array.inner[y * width + x] = value;
         }
 
         array
@@ -39,10 +66,8 @@ impl Array2D<Vec<u8>> {
 }
 
 impl Array2D<&mut [u8]> {
-    pub fn put(&mut self, index: usize, value: u8) -> bool {
-        let previous_value = self.inner[index];
+    pub fn put(&mut self, index: usize, value: u8) {
         self.inner[index] = value;
-        previous_value != value
     }
 }
 

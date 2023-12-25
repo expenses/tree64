@@ -36,6 +36,7 @@ pub struct Permutation {
     //regex: regex::bytes::Regex,
     pub bespoke_regex: bespoke_regex::BespokeRegex,
     pattern_len: usize,
+    pub from: Array2D,
     pub to: Array2D,
 }
 
@@ -45,11 +46,8 @@ impl Permutation {
         let mut bespoke_values = Vec::new();
         let mut pattern_len = 0;
 
-        for y in 0..pair.from.height {
-            for x in 0..pair.from.width {
-                let index = y * pair.from.width + x;
-                let value = pair.from.inner[index];
-
+        for (y, row) in pair.from.rows().enumerate() {
+            for &value in row {
                 if value == WILDCARD {
                     bespoke_values.push(bespoke_regex::LiteralsOrWildcards::Wildcards(1));
                 } else {
@@ -79,7 +77,16 @@ impl Permutation {
             */
             bespoke_regex: bespoke_regex::BespokeRegex::new(&bespoke_values),
             to: pair.to,
+            from: pair.from,
         }
+    }
+
+    pub fn width(&self) -> usize {
+        self.from.width
+    }
+
+    pub fn height(&self) -> usize {
+        self.to.height
     }
 }
 
