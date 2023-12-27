@@ -55,14 +55,14 @@ impl Permutation {
                 }
             }
 
-            pattern_len += pair.from.width;
+            pattern_len += pair.from.width();
 
-            if y < pair.from.height - 1 {
+            if y < pair.from.height() - 1 {
                 //regex += &format!(r".{{{}}}", state.width - pair.from.width);
                 bespoke_values.push(bespoke_regex::LiteralsOrWildcards::Wildcards(
-                    state.width - pair.from.width,
+                    state.width() - pair.from.width(),
                 ));
-                pattern_len += state.width - pair.from.width;
+                pattern_len += state.width() - pair.from.width();
             }
         }
 
@@ -82,17 +82,19 @@ impl Permutation {
     }
 
     pub fn width(&self) -> usize {
-        self.from.width
+        self.from.width()
     }
 
     pub fn height(&self) -> usize {
-        self.to.height
+        self.to.height()
     }
 }
 
 pub fn match_pattern(regex: &Permutation, state: &Array2D<&mut [u8]>, index: u32) -> bool {
     let end = index as usize + regex.pattern_len;
-    if end > state.inner.len() || (index as usize % state.width + regex.to.width) > state.width {
+    if end > state.inner.len()
+        || (index as usize % state.width() + regex.to.width()) > state.width()
+    {
         return false;
     }
     //regex.regex.is_match(&state.inner[index as usize..end])

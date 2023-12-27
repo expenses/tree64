@@ -1,5 +1,5 @@
 use super::*;
-use pyo3::types::PyTuple;
+use pyo3::types::{PyFunction, PyTuple};
 
 #[pyclass]
 pub struct TevClient {
@@ -103,7 +103,7 @@ impl Markov {
 }
 
 #[derive(FromPyObject)]
-enum PythonNode {
+pub enum PythonNode {
     One(One),
     Markov(Markov),
     String(String),
@@ -121,19 +121,43 @@ impl PythonNode {
     }
 }
 
+#[derive(FromPyObject)]
+pub enum Array<'a> {
+    D2(numpy::borrow::PyReadonlyArray2<'a, u8>),
+    D3(numpy::borrow::PyReadonlyArray3<'a, u8>),
+}
+
 #[pyfunction]
 pub fn rep(
-    mut array: numpy::borrow::PyReadwriteArray2<u8>,
-    node: &PyAny,
+    array: Array,
+    node: PythonNode,
     times: Option<u32>,
+    callback: Option<&PyFunction>,
 ) -> PyResult<()> {
-    let mut array_2d = Array2D {
-        width: array.dims()[0],
-        height: array.dims()[1],
-        inner: array.as_slice_mut().unwrap(),
+    let mut array_2d = match &array {
+        Array::D2(array) => {
+            Array2D::new_from(
+                // I don't like doing this, but it's the only way to get a callback
+                // function working afaik.
+                unsafe { array.as_slice_mut().unwrap() },
+                array.dims()[0],
+                array.dims()[1],
+                1,
+            )
+        }
+        Array::D3(array) => {
+            Array2D::new_from(
+                // I don't like doing this, but it's the only way to get a callback
+                // function working afaik.
+                unsafe { array.as_slice_mut().unwrap() },
+                array.dims()[0],
+                array.dims()[1],
+                array.dims()[2],
+            )
+        }
     };
 
-    let node = node.extract::<PythonNode>()?.convert();
+    let node = node.convert();
 
     let node = map_node(&node, &|pattern| {
         Replace::from_string(
@@ -146,18 +170,22 @@ pub fn rep(
 
     let mut rng = rand::rngs::SmallRng::from_entropy();
 
-    execute_root_node(node, &mut array_2d, &mut rng, times);
+    let callback = callback.map(|callback| {
+        Box::new(|iteration| {
+            callback.call1((iteration,)).unwrap();
+        }) as _
+    });
+
+    execute_root_node(node, &mut array_2d, &mut rng, times, callback);
 
     Ok(())
 }
 
 #[pyfunction]
 pub fn rep_all(mut array: numpy::borrow::PyReadwriteArray2<u8>, patterns: &PyTuple) {
-    let mut array_2d = Array2D {
-        width: array.dims()[0],
-        height: array.dims()[1],
-        inner: array.as_slice_mut().unwrap(),
-    };
+    let width = array.dims()[0];
+    let height = array.dims()[1];
+    let mut array_2d = Array2D::new_from(array.as_slice_mut().unwrap(), width, height, 1);
 
     let mut replaces = Vec::new();
 
@@ -169,10 +197,30 @@ pub fn rep_all(mut array: numpy::borrow::PyReadwriteArray2<u8>, patterns: &PyTup
             &array_2d,
         ));
     }
+
     execute_rule_all(&mut array_2d, &mut replaces);
 }
 
 #[pyfunction]
 pub fn index_for_colour(colour: char) -> Option<u8> {
     super::index_for_colour(colour)
+}
+
+#[pyfunction]
+pub fn colour_image(
+    mut output: numpy::borrow::PyReadwriteArray3<u8>,
+    input: numpy::borrow::PyReadonlyArray2<u8>,
+) {
+    let input_slice = input.as_slice().unwrap();
+    let output_slice = output.as_slice_mut().unwrap();
+
+    let width = input.dims()[0];
+    let height = input.dims()[1];
+
+    for y in 0..height {
+        for x in 0..width {
+            let colour = SRGB_PALETTE_VALUES[input_slice[y * width + x] as usize];
+            output_slice[(y * width + x) * 3..(y * width + x + 1) * 3].copy_from_slice(&colour);
+        }
+    }
 }

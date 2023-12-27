@@ -79,11 +79,12 @@ fn get_unique_values(slice: &[u8]) -> HashSet<u8> {
         .collect()
 }
 
-fn execute_root_node(
+fn execute_root_node<'a>(
     root: Node<Replace>,
     state: &mut Array2D<&mut [u8]>,
     rng: &mut SmallRng,
     max_iterations: Option<u32>,
+    callback: Option<Box<dyn Fn(u32) + 'a>>,
 ) {
     let mut replaces = Vec::new();
     let mut root = index_node(root, &mut replaces);
@@ -127,6 +128,10 @@ fn execute_root_node(
             &mut updated,
         ) {
             return;
+        }
+
+        if let Some(callback) = callback.as_ref() {
+            callback(rule_iter);
         }
 
         if let Some(max_iterations) = max_iterations {
@@ -295,6 +300,7 @@ fn markov(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python::rep, m)?)?;
     m.add_function(wrap_pyfunction!(python::rep_all, m)?)?;
     m.add_function(wrap_pyfunction!(python::index_for_colour, m)?)?;
+    m.add_function(wrap_pyfunction!(python::colour_image, m)?)?;
     m.add_class::<python::PatternWithOptions>()?;
     m.add_class::<python::TevClient>()?;
     m.add_class::<python::One>()?;
@@ -368,7 +374,7 @@ fn execute_rule_all(state: &mut Array2D<&mut [u8]>, replaces: &mut [Replace]) {
 
             let to = &rep.permutations[m.permutation as usize].to;
 
-            for (i, v) in to.non_wildcard_values_in_state(state.width) {
+            for (i, v) in to.non_wildcard_values_in_state(state.width()) {
                 state.put(m.index as usize + i, v);
             }
         }
@@ -480,7 +486,7 @@ impl Replace {
             .enumerate()
             .flat_map_iter(|(i, permutation)| {
                 OverlappingRegexIter::new(&permutation.bespoke_regex, state.inner)
-                    .filter(|index| (index % state.width + permutation.to.width) <= state.width)
+                    .filter(|index| (index % state.width() + permutation.width()) <= state.width())
                     .map(move |index| Match {
                         index: index as u32,
                         permutation: i as u8,
@@ -514,7 +520,7 @@ impl Replace {
 
         let to = &self.permutations[m.permutation as usize].to;
 
-        for (i, v) in to.non_wildcard_values_in_state(state.width) {
+        for (i, v) in to.non_wildcard_values_in_state(state.width()) {
             state.put(m.index as usize + i, v);
             updated.push(m.index + i as u32);
         }
@@ -524,9 +530,9 @@ impl Replace {
     fn update_matches(&mut self, state: &Array2D<&mut [u8]>, updated_cells: &[u32]) {
         for &index in updated_cells {
             for (i, permutation) in self.permutations.iter().enumerate() {
-                for x in 0..permutation.to.width {
-                    for y in 0..permutation.to.height {
-                        let index = index - x as u32 - (state.width * y) as u32;
+                for x in 0..permutation.width() {
+                    for y in 0..permutation.height() {
+                        let index = index - x as u32 - (state.width() * y) as u32;
                         if !match_pattern(permutation, state, index) {
                             continue;
                         }

@@ -1,8 +1,28 @@
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Array2D<T = Vec<u8>> {
     pub inner: T,
-    pub width: usize,
-    pub height: usize,
+    width: usize,
+    height: usize,
+    depth: usize,
+}
+
+impl<T> Array2D<T> {
+    pub fn new_from(array: T, width: usize, height: usize, depth: usize) -> Self {
+        Self {
+            inner: array,
+            width: width,
+            height: height,
+            depth,
+        }
+    }
+
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    pub fn height(&self) -> usize {
+        self.height
+    }
 }
 
 impl Array2D<Vec<u8>> {
@@ -11,6 +31,7 @@ impl Array2D<Vec<u8>> {
             inner: slice.to_owned(),
             width,
             height: slice.len() / width,
+            depth: 1,
         }
     }
 
@@ -54,6 +75,7 @@ impl Array2D<Vec<u8>> {
             inner: vec![0; width * height],
             width,
             height,
+            depth: 1,
         };
 
         for (x, y, value) in self.values() {
