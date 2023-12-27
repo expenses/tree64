@@ -363,13 +363,25 @@ fn pattern_from_chars(chars: &str) -> ([u8; 100], usize, usize) {
     (pattern, i, row_width.unwrap_or(i))
 }
 
-fn execute_rule_all(state: &mut Array2D<&mut [u8]>, replaces: &mut [Replace]) {
+// todo: paths, convolutions.
+
+fn execute_rule_all(
+    state: &mut Array2D<&mut [u8]>,
+    replaces: &mut [Replace],
+    mut rng_and_chance: Option<(&mut SmallRng, f32)>,
+) {
     for rep in replaces.iter_mut() {
         rep.store_initial_matches(state);
 
         for &m in &rep.potential_matches {
             if !match_pattern(&rep.permutations[m.permutation as usize], state, m.index) {
                 continue;
+            }
+
+            if let Some((ref mut rng, value)) = rng_and_chance {
+                if rng.gen_range(0.0..1.0) > value {
+                    continue;
+                }
             }
 
             let to = &rep.permutations[m.permutation as usize].to;
