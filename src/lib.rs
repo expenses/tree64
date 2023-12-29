@@ -374,7 +374,7 @@ fn execute_rule_all(state: &mut Array2D<&mut [u8]>, replaces: &mut [Replace]) {
 
             let to = &rep.permutations[m.permutation as usize].to;
 
-            for (i, v) in to.non_wildcard_values_in_state(state.width()) {
+            for (i, v) in to.non_wildcard_values_in_state(state.width(), state.height()) {
                 state.put(m.index as usize + i, v);
             }
         }
@@ -401,6 +401,7 @@ impl Replace {
         state: &Array2D<&mut [u8]>,
     ) -> Self {
         let height = from.len() / width;
+        let depth = 1;
 
         // Small optimization to reduce the interaction between patterns.
         for i in 0..from.len() {
@@ -432,20 +433,40 @@ impl Replace {
         // Get a set of unique permutations.
         let mut permutations = HashSet::new();
 
-        permutations.insert(pair.permute(width, height, |x, y| (width - 1 - x, y)));
-        if allow_vertical_flip {
-            permutations.insert(pair.permute(width, height, |x, y| (x, height - 1 - y)));
-            permutations
-                .insert(pair.permute(width, height, |x, y| (width - 1 - x, height - 1 - y)));
+        for [x_mapping, y_mapping, z_mapping] in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
+            for flip_bits in 0..8 {
+                let flip_x = flip_bits & 1 == 1;
+                let flip_y = (flip_bits >> 1) & 1 == 1;
+                let flip_z = (flip_bits >> 2) == 1;
+
+                permutations.insert(pair.permute(
+                    [width, height, depth][x_mapping],
+                    [width, height, depth][y_mapping],
+                    [width, height, depth][z_mapping],
+                    |x, y, z| {
+                        let mut array = [x, y, z];
+                        if flip_x {
+                            array[0] = width - 1 - x;
+                        }
+                        if flip_y {
+                            array[1] = height - 1 - y;
+                        }
+                        if flip_z {
+                            array[2] = depth - 1 - z;
+                        }
+
+                        (array[x_mapping], array[y_mapping], array[z_mapping])
+                    },
+                ));
+            }
         }
-        if allow_rot90 {
-            permutations.insert(pair.permute(height, width, |x, y| (y, x)));
-            permutations.insert(pair.permute(height, width, |x, y| (y, width - 1 - x)));
-            permutations.insert(pair.permute(height, width, |x, y| (height - 1 - y, x)));
-            permutations
-                .insert(pair.permute(height, width, |x, y| (height - 1 - y, width - 1 - x)));
-        }
-        permutations.insert(pair);
 
         Self {
             permutations: permutations
@@ -486,7 +507,14 @@ impl Replace {
             .enumerate()
             .flat_map_iter(|(i, permutation)| {
                 OverlappingRegexIter::new(&permutation.bespoke_regex, state.inner)
-                    .filter(|index| (index % state.width() + permutation.width()) <= state.width())
+                    .filter(|&index| {
+                        state.shape_is_inbounds(
+                            index,
+                            permutation.width(),
+                            permutation.height(),
+                            permutation.depth(),
+                        )
+                    })
                     .map(move |index| Match {
                         index: index as u32,
                         permutation: i as u8,
@@ -520,7 +548,7 @@ impl Replace {
 
         let to = &self.permutations[m.permutation as usize].to;
 
-        for (i, v) in to.non_wildcard_values_in_state(state.width()) {
+        for (i, v) in to.non_wildcard_values_in_state(state.width(), state.height()) {
             state.put(m.index as usize + i, v);
             updated.push(m.index + i as u32);
         }
@@ -530,16 +558,23 @@ impl Replace {
     fn update_matches(&mut self, state: &Array2D<&mut [u8]>, updated_cells: &[u32]) {
         for &index in updated_cells {
             for (i, permutation) in self.permutations.iter().enumerate() {
-                for x in 0..permutation.width() {
+                for z in 0..permutation.depth() {
                     for y in 0..permutation.height() {
-                        let index = index - x as u32 - (state.width() * y) as u32;
-                        if !match_pattern(permutation, state, index) {
-                            continue;
+                        for x in 0..permutation.width() {
+                            let offset =
+                                (state.width() * state.height() * z + state.width() * y + x) as u32;
+                            if offset > index {
+                                continue;
+                            }
+                            let index = index - offset;
+                            if !match_pattern(permutation, state, index) {
+                                continue;
+                            }
+                            self.potential_matches.push(Match {
+                                index,
+                                permutation: i as u8,
+                            });
                         }
-                        self.potential_matches.push(Match {
-                            index,
-                            permutation: i as u8,
-                        });
                     }
                 }
             }

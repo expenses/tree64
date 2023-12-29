@@ -46,23 +46,34 @@ impl Permutation {
         let mut bespoke_values = Vec::new();
         let mut pattern_len = 0;
 
-        for (y, row) in pair.from.rows().enumerate() {
-            for &value in row {
-                if value == WILDCARD {
-                    bespoke_values.push(bespoke_regex::LiteralsOrWildcards::Wildcards(1));
-                } else {
-                    bespoke_values.push(bespoke_regex::LiteralsOrWildcards::Literal(vec![value]));
+        let row_offset = state.width() - pair.from.width();
+
+        let layer_offset =
+            (state.width() * state.height()) - (pair.from.width() * pair.from.height());
+
+        for (z, layer) in pair.from.layers().enumerate() {
+            for (y, row) in layer.chunks_exact(pair.from.width()).enumerate() {
+                for &value in row {
+                    if value == WILDCARD {
+                        bespoke_values.push(bespoke_regex::LiteralsOrWildcards::Wildcards(1));
+                    } else {
+                        bespoke_values
+                            .push(bespoke_regex::LiteralsOrWildcards::Literal(vec![value]));
+                    }
+                }
+
+                pattern_len += pair.from.width();
+
+                if y < pair.from.height() - 1 {
+                    //regex += &format!(r".{{{}}}", state.width - pair.from.width);
+                    bespoke_values.push(bespoke_regex::LiteralsOrWildcards::Wildcards(row_offset));
+                    pattern_len += row_offset;
                 }
             }
 
-            pattern_len += pair.from.width();
-
-            if y < pair.from.height() - 1 {
-                //regex += &format!(r".{{{}}}", state.width - pair.from.width);
-                bespoke_values.push(bespoke_regex::LiteralsOrWildcards::Wildcards(
-                    state.width() - pair.from.width(),
-                ));
-                pattern_len += state.width() - pair.from.width();
+            if z < pair.from.depth() - 1 {
+                bespoke_values.push(bespoke_regex::LiteralsOrWildcards::Wildcards(layer_offset));
+                pattern_len += layer_offset;
             }
         }
 
@@ -82,18 +93,28 @@ impl Permutation {
     }
 
     pub fn width(&self) -> usize {
-        self.from.width()
+        self.to.width()
     }
 
     pub fn height(&self) -> usize {
         self.to.height()
     }
+
+    pub fn depth(&self) -> usize {
+        self.to.depth()
+    }
 }
 
 pub fn match_pattern(regex: &Permutation, state: &Array2D<&mut [u8]>, index: u32) -> bool {
     let end = index as usize + regex.pattern_len;
+
     if end > state.inner.len()
-        || (index as usize % state.width() + regex.to.width()) > state.width()
+        || !state.shape_is_inbounds(
+            index as _,
+            regex.to.width(),
+            regex.to.height(),
+            regex.to.depth(),
+        )
     {
         return false;
     }
