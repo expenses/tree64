@@ -41,12 +41,12 @@ impl<T> Array2D<T> {
 }
 
 impl Array2D<Vec<u8>> {
-    pub fn new(slice: &[u8], width: usize) -> Self {
+    pub fn new(slice: &[u8], width: usize, height: usize) -> Self {
         Self {
             inner: slice.to_owned(),
             width,
-            height: slice.len() / width,
-            depth: 1,
+            height,
+            depth: slice.len() / width / height,
         }
     }
 
@@ -116,7 +116,7 @@ fn compose(x: usize, y: usize, z: usize, width: usize, height: usize) -> usize {
     x + y * width + z * width * height
 }
 
-fn decompose(index: usize, width: usize, height: usize) -> (usize, usize, usize) {
+pub fn decompose(index: usize, width: usize, height: usize) -> (usize, usize, usize) {
     (
         index % width,
         (index / width) % height,

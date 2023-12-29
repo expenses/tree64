@@ -48,9 +48,7 @@ impl Permutation {
 
         let row_offset = state.width() - pair.from.width();
 
-        let layer_offset =
-            (state.width() * state.height()) - (pair.from.width() * pair.from.height());
-
+        let layer_offset = (state.width() * (state.height() - pair.from.height())) + row_offset;
         for (z, layer) in pair.from.layers().enumerate() {
             for (y, row) in layer.chunks_exact(pair.from.width()).enumerate() {
                 for &value in row {

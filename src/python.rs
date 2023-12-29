@@ -1,4 +1,5 @@
 use super::*;
+use pyo3::exceptions::PyTypeError;
 use pyo3::types::{PyFunction, PyTuple};
 
 #[pyclass]
@@ -34,10 +35,17 @@ impl TevClient {
     }
 }
 
+fn split_pattern_string(pattern: &str) -> PyResult<(&str, &str)> {
+    pattern
+        .split_once('=')
+        .ok_or_else(|| PyTypeError::new_err("missing '=' in pattern string"))
+}
+
 #[pyclass]
 #[derive(Clone)]
 pub struct PatternWithOptions {
-    pattern: String,
+    from: Vec<String>,
+    to: Vec<String>,
     allow_rot90: bool,
     allow_vertical_flip: bool,
 }
@@ -45,12 +53,18 @@ pub struct PatternWithOptions {
 #[pymethods]
 impl PatternWithOptions {
     #[new]
-    fn new(pattern: String, allow_rot90: Option<bool>, allow_vertical_flip: Option<bool>) -> Self {
-        Self {
-            pattern,
+    fn new(
+        pattern: String,
+        allow_rot90: Option<bool>,
+        allow_vertical_flip: Option<bool>,
+    ) -> PyResult<Self> {
+        let (from, to) = split_pattern_string(&pattern)?;
+        Ok(Self {
+            from: vec![from.to_string()],
+            to: vec![to.to_string()],
             allow_rot90: allow_rot90.unwrap_or(true),
             allow_vertical_flip: allow_vertical_flip.unwrap_or(true),
-        }
+        })
     }
 }
 
@@ -70,7 +84,7 @@ impl One {
                 list.iter()
                     .map(|item| {
                         item.extract::<PythonNode>()
-                            .map(|python_node| python_node.convert())
+                            .and_then(|python_node| python_node.convert())
                     })
                     .collect::<PyResult<Vec<Node<PatternWithOptions>>>>()?,
             ),
@@ -94,7 +108,7 @@ impl Markov {
                 list.iter()
                     .map(|item| {
                         item.extract::<PythonNode>()
-                            .map(|python_node| python_node.convert())
+                            .and_then(|python_node| python_node.convert())
                     })
                     .collect::<PyResult<Vec<Node<PatternWithOptions>>>>()?,
             ),
@@ -103,21 +117,49 @@ impl Markov {
 }
 
 #[derive(FromPyObject)]
-pub enum PythonNode {
+pub enum PythonNode<'a> {
     One(One),
     Markov(Markov),
     String(String),
+    TwoStrings(String, String),
+    TwoLists(&'a PyTuple, &'a PyTuple),
     PatternWithOptions(PatternWithOptions),
 }
 
-impl PythonNode {
-    fn convert(self) -> Node<PatternWithOptions> {
-        match self {
+impl<'a> PythonNode<'a> {
+    fn convert(self) -> PyResult<Node<PatternWithOptions>> {
+        Ok(match self {
             Self::One(one) => one.inner,
             Self::Markov(markov) => markov.inner,
-            Self::String(string) => Node::Rule(PatternWithOptions::new(string, None, None)),
+            Self::String(string) => {
+                let (from, to) = split_pattern_string(&string)?;
+                Node::Rule(PatternWithOptions {
+                    from: vec![from.to_string()],
+                    to: vec![to.to_string()],
+                    allow_rot90: true,
+                    allow_vertical_flip: true,
+                })
+            }
+            Self::TwoLists(from, to) => Node::Rule(PatternWithOptions {
+                from: from
+                    .iter()
+                    .map(|from| from.extract::<String>())
+                    .collect::<PyResult<Vec<_>>>()?,
+                to: to
+                    .iter()
+                    .map(|to| to.extract::<String>())
+                    .collect::<PyResult<Vec<_>>>()?,
+                allow_rot90: true,
+                allow_vertical_flip: true,
+            }),
+            Self::TwoStrings(from, to) => Node::Rule(PatternWithOptions {
+                from: vec![from],
+                to: vec![to],
+                allow_rot90: true,
+                allow_vertical_flip: true,
+            }),
             Self::PatternWithOptions(pattern) => Node::Rule(pattern),
-        }
+        })
     }
 }
 
@@ -157,11 +199,12 @@ pub fn rep(
         }
     };
 
-    let node = node.convert();
+    let node = node.convert()?;
 
     let node = map_node(&node, &|pattern| {
-        Replace::from_string(
-            &pattern.pattern,
+        Replace::from_layers(
+            &pattern.from,
+            &pattern.to,
             pattern.allow_rot90,
             pattern.allow_vertical_flip,
             &array_2d,
@@ -182,7 +225,10 @@ pub fn rep(
 }
 
 #[pyfunction]
-pub fn rep_all(mut array: numpy::borrow::PyReadwriteArray2<u8>, patterns: &PyTuple) {
+pub fn rep_all(
+    mut array: numpy::borrow::PyReadwriteArray2<u8>,
+    patterns: &PyTuple,
+) -> PyResult<()> {
     let width = array.dims()[0];
     let height = array.dims()[1];
     let mut array_2d = Array2D::new_from(array.as_slice_mut().unwrap(), width, height, 1);
@@ -190,15 +236,20 @@ pub fn rep_all(mut array: numpy::borrow::PyReadwriteArray2<u8>, patterns: &PyTup
     let mut replaces = Vec::new();
 
     for pattern in patterns {
-        replaces.push(Replace::from_string(
-            pattern.extract::<&str>().unwrap(),
-            true,
-            true,
+        let pattern =
+            PatternWithOptions::new(pattern.extract::<&str>().unwrap().to_string(), None, None)?;
+        replaces.push(Replace::from_layers(
+            &pattern.from,
+            &pattern.to,
+            pattern.allow_rot90,
+            pattern.allow_vertical_flip,
             &array_2d,
         ));
     }
 
     execute_rule_all(&mut array_2d, &mut replaces);
+
+    Ok(())
 }
 
 #[pyfunction]

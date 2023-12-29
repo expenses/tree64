@@ -334,33 +334,32 @@ fn sample_until_valid<T, F: FnMut(&T, &mut SmallRng) -> bool>(
     None
 }
 
-fn pattern_from_chars(chars: &str) -> ([u8; 100], usize, usize) {
-    let mut pattern = [0; 100];
-    let mut i = 0;
-    let mut row_width = None;
+fn pattern_from_chars(pattern: &mut Vec<u8>, row_width: &mut Option<usize>, chars: &str) -> usize {
     for c in chars.chars() {
         if c == ' ' || c == '\n' {
             continue;
         }
 
         if c == ',' {
-            if row_width.is_none() {
-                row_width = Some(i);
+            if (*row_width).is_none() {
+                *row_width = Some(pattern.len());
             }
             continue;
         }
 
-        pattern[i] = match c {
+        pattern.push(match c {
             '*' => WILDCARD,
             _ => match c.to_digit(10) {
                 Some(digit) => digit as u8,
                 None => index_for_colour(c).unwrap(),
             },
-        };
-        i += 1;
+        });
     }
 
-    (pattern, i, row_width.unwrap_or(i))
+    if (*row_width).is_none() {
+        *row_width = Some(pattern.len());
+    }
+    (*row_width).unwrap_or(pattern.len())
 }
 
 fn execute_rule_all(state: &mut Array2D<&mut [u8]>, replaces: &mut [Replace]) {
@@ -399,9 +398,10 @@ impl Replace {
         allow_rot90: bool,
         allow_vertical_flip: bool,
         state: &Array2D<&mut [u8]>,
+        depth: usize,
     ) -> Self {
-        let height = from.len() / width;
-        let depth = 1;
+        let height = from.len() / width / depth;
+        dbg!(depth, height, width, from.len());
 
         // Small optimization to reduce the interaction between patterns.
         for i in 0..from.len() {
@@ -411,8 +411,8 @@ impl Replace {
         }
 
         let pair = ArrayPair {
-            to: Array2D::new(to, width),
-            from: Array2D::new(from, width),
+            to: Array2D::new(to, width, height),
+            from: Array2D::new(from, width, height),
         };
 
         let from_values: HashSet<u8> = pair
@@ -442,7 +442,7 @@ impl Replace {
             [2, 1, 0],
         ] {
             for flip_bits in 0..8 {
-                let flip_x = flip_bits & 1 == 1;
+                let flip_x = (flip_bits & 1) == 1;
                 let flip_y = (flip_bits >> 1) & 1 == 1;
                 let flip_z = (flip_bits >> 2) == 1;
 
@@ -451,17 +451,11 @@ impl Replace {
                     [width, height, depth][y_mapping],
                     [width, height, depth][z_mapping],
                     |x, y, z| {
-                        let mut array = [x, y, z];
-                        if flip_x {
-                            array[0] = width - 1 - x;
-                        }
-                        if flip_y {
-                            array[1] = height - 1 - y;
-                        }
-                        if flip_z {
-                            array[2] = depth - 1 - z;
-                        }
-
+                        let array = [
+                            if flip_x { width - 1 - x } else { x },
+                            if flip_y { height - 1 - y } else { y },
+                            if flip_z { depth - 1 - z } else { z },
+                        ];
                         (array[x_mapping], array[y_mapping], array[z_mapping])
                     },
                 ));
@@ -480,23 +474,38 @@ impl Replace {
         }
     }
 
-    fn from_string(
-        string: &str,
+    fn from_layers(
+        from_layers: &[String],
+        to_layers: &[String],
         allow_rot90: bool,
         allow_vertical_flip: bool,
         state: &Array2D<&mut [u8]>,
     ) -> Self {
-        let (from, to) = string.split_once('=').unwrap();
-        let (from, from_len, from_width) = pattern_from_chars(from);
-        let (mut to, to_len, to_width) = pattern_from_chars(to);
+        let mut from_vec = Vec::new();
+        let mut to_vec = Vec::new();
+        let mut from_width = None;
+        let mut to_width = None;
+
+        let mut from_width_o = None;
+        let mut to_width_o = None;
+
+        for from in from_layers {
+            from_width = Some(pattern_from_chars(&mut from_vec, &mut from_width_o, from));
+        }
+
+        for to in to_layers {
+            to_width = Some(pattern_from_chars(&mut to_vec, &mut to_width_o, to));
+        }
+
         assert_eq!(from_width, to_width);
         Self::new(
-            &from[..from_len],
-            &mut to[..to_len],
-            from_width,
+            &from_vec,
+            &mut to_vec,
+            from_width.unwrap(),
             allow_rot90,
             allow_vertical_flip,
             state,
+            from_layers.len(),
         )
     }
 
@@ -556,7 +565,11 @@ impl Replace {
     }
 
     fn update_matches(&mut self, state: &Array2D<&mut [u8]>, updated_cells: &[u32]) {
+        //let mut bb = BoundingBox::new();
+
         for &index in updated_cells {
+            //bb.insert(index as _, state.width(), state.height());
+
             for (i, permutation) in self.permutations.iter().enumerate() {
                 for z in 0..permutation.depth() {
                     for y in 0..permutation.height() {
@@ -578,6 +591,35 @@ impl Replace {
                     }
                 }
             }
+
+            //dbg!(updated_cells.len() * self.permutations[0].from.to.len());
         }
+    }
+}
+
+#[derive(Debug)]
+struct BoundingBox {
+    min: [usize; 3],
+    max: [usize; 3],
+}
+
+impl BoundingBox {
+    fn new() -> Self {
+        Self {
+            min: [usize::max_value(); 3],
+            max: [0; 3],
+        }
+    }
+
+    fn insert(&mut self, index: usize, state_width: usize, state_height: usize) {
+        let (x, y, z) = arrays::decompose(index, state_width, state_height);
+
+        self.min[0] = self.min[0].min(x);
+        self.min[1] = self.min[1].min(y);
+        self.min[2] = self.min[2].min(z);
+
+        self.max[0] = self.max[0].max(x);
+        self.max[1] = self.max[1].max(y);
+        self.max[2] = self.max[2].max(z);
     }
 }
