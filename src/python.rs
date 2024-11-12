@@ -46,24 +46,24 @@ fn split_pattern_string(pattern: &str) -> PyResult<(&str, &str)> {
 pub struct PatternWithOptions {
     from: Vec<String>,
     to: Vec<String>,
-    allow_rot90: bool,
-    allow_vertical_flip: bool,
+    allow_dimension_shuffling: bool,
+    apply_all: bool,
 }
 
 #[pymethods]
 impl PatternWithOptions {
     #[new]
     fn new(
-        pattern: String,
-        allow_rot90: Option<bool>,
-        allow_vertical_flip: Option<bool>,
+        pattern: Pattern,
+        allow_dimension_shuffling: Option<bool>,
+        apply_all: Option<bool>,
     ) -> PyResult<Self> {
-        let (from, to) = split_pattern_string(&pattern)?;
+        let (from, to) = pattern.strings()?;
         Ok(Self {
-            from: vec![from.to_string()],
-            to: vec![to.to_string()],
-            allow_rot90: allow_rot90.unwrap_or(true),
-            allow_vertical_flip: allow_vertical_flip.unwrap_or(true),
+            from,
+            to,
+            allow_dimension_shuffling: allow_dimension_shuffling.unwrap_or(true),
+            apply_all: apply_all.unwrap_or(false),
         })
     }
 }
@@ -117,12 +117,37 @@ impl Markov {
 }
 
 #[derive(FromPyObject)]
-pub enum PythonNode<'a> {
-    One(One),
-    Markov(Markov),
+enum Pattern<'a> {
     String(String),
     TwoStrings(String, String),
     TwoLists(&'a PyTuple, &'a PyTuple),
+}
+
+impl<'a> Pattern<'a> {
+    fn strings(self) -> PyResult<(Vec<String>, Vec<String>)> {
+        match self {
+            Self::String(string) => {
+                let (from, to) = split_pattern_string(&string)?;
+                Ok((vec![from.to_string()], vec![to.to_string()]))
+            }
+            Self::TwoLists(from, to) => Ok((
+                from.iter()
+                    .map(|from| from.extract::<String>())
+                    .collect::<PyResult<Vec<_>>>()?,
+                to.iter()
+                    .map(|to| to.extract::<String>())
+                    .collect::<PyResult<Vec<_>>>()?,
+            )),
+            Self::TwoStrings(from, to) => Ok((vec![from], vec![to])),
+        }
+    }
+}
+
+#[derive(FromPyObject)]
+pub enum PythonNode<'a> {
+    One(One),
+    Markov(Markov),
+    Pattern(Pattern<'a>),
     PatternWithOptions(PatternWithOptions),
 }
 
@@ -131,33 +156,7 @@ impl<'a> PythonNode<'a> {
         Ok(match self {
             Self::One(one) => one.inner,
             Self::Markov(markov) => markov.inner,
-            Self::String(string) => {
-                let (from, to) = split_pattern_string(&string)?;
-                Node::Rule(PatternWithOptions {
-                    from: vec![from.to_string()],
-                    to: vec![to.to_string()],
-                    allow_rot90: true,
-                    allow_vertical_flip: true,
-                })
-            }
-            Self::TwoLists(from, to) => Node::Rule(PatternWithOptions {
-                from: from
-                    .iter()
-                    .map(|from| from.extract::<String>())
-                    .collect::<PyResult<Vec<_>>>()?,
-                to: to
-                    .iter()
-                    .map(|to| to.extract::<String>())
-                    .collect::<PyResult<Vec<_>>>()?,
-                allow_rot90: true,
-                allow_vertical_flip: true,
-            }),
-            Self::TwoStrings(from, to) => Node::Rule(PatternWithOptions {
-                from: vec![from],
-                to: vec![to],
-                allow_rot90: true,
-                allow_vertical_flip: true,
-            }),
+            Self::Pattern(pattern) => Node::Rule(PatternWithOptions::new(pattern, None, None)?),
             Self::PatternWithOptions(pattern) => Node::Rule(pattern),
         })
     }
@@ -205,8 +204,8 @@ pub fn rep(
         Replace::from_layers(
             &pattern.from,
             &pattern.to,
-            pattern.allow_rot90,
-            pattern.allow_vertical_flip,
+            pattern.allow_dimension_shuffling,
+            pattern.apply_all,
             &array_2d,
         )
     });
@@ -236,13 +235,12 @@ pub fn rep_all(
     let mut replaces = Vec::new();
 
     for pattern in patterns {
-        let pattern =
-            PatternWithOptions::new(pattern.extract::<&str>().unwrap().to_string(), None, None)?;
+        let pattern = PatternWithOptions::new(pattern.extract::<Pattern>().unwrap(), None, None)?;
         replaces.push(Replace::from_layers(
             &pattern.from,
             &pattern.to,
-            pattern.allow_rot90,
-            pattern.allow_vertical_flip,
+            pattern.allow_dimension_shuffling,
+            pattern.apply_all,
             &array_2d,
         ));
     }

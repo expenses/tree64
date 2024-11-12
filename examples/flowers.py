@@ -25,7 +25,7 @@ rep(
                     *P*,
                     *E*
                 """,
-                allow_rot90=False,
+                allow_dimension_shuffling=False,
             ),
             PatternWithOptions(
                 """
@@ -41,7 +41,7 @@ rep(
                     EE*,
                     ***
                 """,
-                allow_rot90=False,
+                allow_dimension_shuffling=False,
             ),
             PatternWithOptions(
                 """
@@ -57,7 +57,7 @@ rep(
                     *EEE*,
                     *****
                 """,
-                allow_rot90=False,
+                allow_dimension_shuffling=False,
             ),
             """
                 UUU,

@@ -152,19 +152,52 @@ fn execute_node(
 ) -> bool {
     match node {
         IndexNode::Rule(index) => {
-            updated.clear();
+            if replaces[*index].apply_all {
+                let mut any_applied = false;
 
-            if replaces[*index].get_match_and_update_state(state, rng, updated) {
+                {
+                    let replace = &mut replaces[*index];
+
+                    for &m in &replace.potential_matches {
+                        let permutation = &replace.permutations[m.permutation as usize];
+
+                        if !match_pattern(permutation, state, m.index) {
+                            continue;
+                        }
+
+                        for (i, v) in permutation
+                            .to
+                            .non_wildcard_values_in_state(state.width(), state.height())
+                        {
+                            any_applied = true;
+                            state.put(m.index as usize + i, v);
+                        }
+                    }
+                }
+
                 for (i, replace) in replaces.iter_mut().enumerate() {
                     if !interactions[*index][i] {
                         continue;
                     }
-                    replace.update_matches(state, updated);
+                    replace.store_initial_matches(state);
                 }
 
-                true
+                any_applied
             } else {
-                false
+                updated.clear();
+
+                if replaces[*index].get_match_and_update_state(state, rng, updated) {
+                    for (i, replace) in replaces.iter_mut().enumerate() {
+                        if !interactions[*index][i] {
+                            continue;
+                        }
+                        replace.update_matches(state, updated);
+                    }
+
+                    true
+                } else {
+                    false
+                }
             }
         }
         IndexNode::Markov(nodes) => {
@@ -388,6 +421,7 @@ struct Replace {
     from_values: HashSet<u8>,
     to_values: HashSet<u8>,
     reinit: bool,
+    apply_all: bool,
 }
 
 impl Replace {
@@ -395,8 +429,8 @@ impl Replace {
         from: &[u8],
         to: &mut [u8],
         width: usize,
-        allow_rot90: bool,
-        allow_vertical_flip: bool,
+        allow_dimension_shuffling: bool,
+        apply_all: bool,
         state: &Array2D<&mut [u8]>,
         depth: usize,
     ) -> Self {
@@ -433,14 +467,20 @@ impl Replace {
         // Get a set of unique permutations.
         let mut permutations = HashSet::new();
 
-        for [x_mapping, y_mapping, z_mapping] in [
-            [0, 1, 2],
-            [0, 2, 1],
-            [1, 0, 2],
-            [1, 2, 0],
-            [2, 0, 1],
-            [2, 1, 0],
-        ] {
+        let shuffle_permutations: &[[usize; 3]] = if allow_dimension_shuffling {
+            &[
+                [0, 1, 2],
+                [0, 2, 1],
+                [1, 0, 2],
+                [1, 2, 0],
+                [2, 0, 1],
+                [2, 1, 0],
+            ]
+        } else {
+            &[[0, 1, 2]]
+        };
+
+        for &[x_mapping, y_mapping, z_mapping] in shuffle_permutations {
             for flip_bits in 0..8 {
                 let flip_x = (flip_bits & 1) == 1;
                 let flip_y = (flip_bits >> 1) & 1 == 1;
@@ -471,14 +511,15 @@ impl Replace {
             from_values,
             to_values,
             reinit: false,
+            apply_all,
         }
     }
 
     fn from_layers(
         from_layers: &[String],
         to_layers: &[String],
-        allow_rot90: bool,
-        allow_vertical_flip: bool,
+        allow_dimension_shuffling: bool,
+        apply_all: bool,
         state: &Array2D<&mut [u8]>,
     ) -> Self {
         let mut from_vec = Vec::new();
@@ -502,8 +543,8 @@ impl Replace {
             &from_vec,
             &mut to_vec,
             from_width.unwrap(),
-            allow_rot90,
-            allow_vertical_flip,
+            allow_dimension_shuffling,
+            apply_all,
             state,
             from_layers.len(),
         )

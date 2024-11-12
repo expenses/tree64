@@ -67,7 +67,7 @@ impl BespokeRegex {
     pub fn find(&self, slice: &[u8]) -> Option<usize> {
         let mut offset = 0;
 
-        'outer: while offset < slice.len() {
+        'outer: while (offset + self.skip_initial_wildcards) < slice.len() {
             let mut test_slice = &slice[offset + self.skip_initial_wildcards..];
 
             let start = match self.initial_literal.find(test_slice) {
