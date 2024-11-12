@@ -63,7 +63,7 @@ rep(
 )
 rep(arr, "R=W")
 tev_client.send_image("grown offshoots", arr)
-rep_all(arr, ("B=U",), chance=0.00005)
+rep(arr, "B=U", times=20)
 tev_client.send_image("sea points", arr)
 rep(arr, One("WB=WW", "UB=UU"))
 tev_client.send_image("island", arr)

@@ -1,13 +1,18 @@
 from markov import rep, index_for_colour, Markov, One, rep_all
-from util import spawn_tev
+from util import spawn_tev, FfmpegOutput
 import numpy as np
 import subprocess
 import sys
 
 tev_client = spawn_tev()
 
-dim = 4096
+dim = 128
 arr = np.zeros((dim, dim), dtype=np.uint8)
+
+output = FfmpegOutput("tetris.mp4", dim, dim, skip=10)
+
+callback = lambda index: output.write(arr)
+
 rep(
     arr,
     Markov(
@@ -29,5 +34,6 @@ rep(
         """
         ),
     ),
+    callback=callback
 )
 tev_client.send_image("tetris", arr)

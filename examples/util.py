@@ -1,9 +1,7 @@
 from markov import TevClient, colour_image
 import subprocess
 import time
-import ffmpeg
 import numpy as np
-import zstandard as zstd
 
 def spawn_tev():
     subprocess.Popen("tev", stdout=subprocess.PIPE)
@@ -13,6 +11,8 @@ def spawn_tev():
 
 class FfmpegOutput:
     def __init__(self, filename, width, height, skip=1, framerate=60):
+        import ffmpeg
+
         self.process = (
             ffmpeg.input(
                 "pipe:",
@@ -69,6 +69,8 @@ def save_as_voxels(filename, arr):
 
 class CompressedVoxelsOutput:
     def __init__(self, filename):
+        import zstandard as zstd
+        
         self.ctx = zstd.ZstdCompressor()
         self.file = open(filename, "wb")
         self.writer = self.ctx.stream_writer(self.file)
