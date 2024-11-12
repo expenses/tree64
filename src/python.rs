@@ -227,6 +227,7 @@ pub fn rep(
 pub fn rep_all(
     mut array: numpy::borrow::PyReadwriteArray2<u8>,
     patterns: &PyTuple,
+    chance: Option<f32>,
 ) -> PyResult<()> {
     let width = array.dims()[0];
     let height = array.dims()[1];
@@ -245,7 +246,13 @@ pub fn rep_all(
         ));
     }
 
-    execute_rule_all(&mut array_2d, &mut replaces);
+    let mut chance_and_rng = chance.map(|value| (rand::rngs::SmallRng::from_entropy(), value));
+
+    execute_rule_all(
+        &mut array_2d,
+        &mut replaces,
+        chance_and_rng.as_mut().map(|(rng, value)| (rng, *value)),
+    );
 
     Ok(())
 }
