@@ -21,6 +21,7 @@ enum Node<T> {
     Markov(Vec<Node<T>>),
     // Try to apply a child node in random order
     One(Vec<Node<T>>),
+    Sequence(Vec<Node<T>>),
 }
 
 fn map_node<T, U, F: Fn(&T) -> U>(node: &Node<T>, map: &F) -> Node<U> {
@@ -30,35 +31,59 @@ fn map_node<T, U, F: Fn(&T) -> U>(node: &Node<T>, map: &F) -> Node<U> {
             Node::Markov(children.iter().map(|node| map_node(node, map)).collect())
         }
         Node::One(children) => Node::One(children.iter().map(|node| map_node(node, map)).collect()),
+        Node::Sequence(children) => {
+            Node::Sequence(children.iter().map(|node| map_node(node, map)).collect())
+        }
     }
 }
 
 fn index_node(node: Node<Replace>, replaces: &mut Vec<Replace>) -> IndexNode {
-    match node {
-        Node::Rule(rep) => {
-            let index = replaces.len();
-            replaces.push(rep);
-            IndexNode::Rule(index)
-        }
-        Node::Markov(nodes) => IndexNode::Markov(
-            nodes
-                .into_iter()
-                .map(|node| index_node(node, replaces))
-                .collect(),
-        ),
-        Node::One(nodes) => IndexNode::One {
-            children: nodes
-                .into_iter()
-                .map(|node| index_node(node, replaces))
-                .collect(),
-            node_index_storage: Vec::new(),
+    IndexNode {
+        ty: match node {
+            Node::Rule(rep) => {
+                let index = replaces.len();
+                replaces.push(rep);
+                IndexNodeTy::Rule(index)
+            }
+            Node::Markov(nodes) => IndexNodeTy::Markov(
+                nodes
+                    .into_iter()
+                    .map(|node| index_node(node, replaces))
+                    .collect(),
+            ),
+            Node::Sequence(nodes) => IndexNodeTy::Sequence(
+                nodes
+                    .into_iter()
+                    .map(|node| index_node(node, replaces))
+                    .collect(),
+            ),
+
+            Node::One(nodes) => IndexNodeTy::One {
+                children: nodes
+                    .into_iter()
+                    .map(|node| index_node(node, replaces))
+                    .collect(),
+                node_index_storage: Vec::new(),
+            },
         },
+        settings: NodeSettings::default(),
     }
 }
 
-enum IndexNode {
+#[derive(Default)]
+struct NodeSettings {
+    count: Option<u64>,
+}
+
+struct IndexNode {
+    ty: IndexNodeTy,
+    settings: NodeSettings,
+}
+
+enum IndexNodeTy {
     Rule(usize),
     Markov(Vec<IndexNode>),
+    Sequence(Vec<IndexNode>),
     One {
         children: Vec<IndexNode>,
         node_index_storage: Vec<usize>,
@@ -150,8 +175,8 @@ fn execute_node(
     rng: &mut SmallRng,
     updated: &mut Vec<u32>,
 ) -> bool {
-    match node {
-        IndexNode::Rule(index) => {
+    match &mut node.ty {
+        IndexNodeTy::Rule(index) => {
             if replaces[*index].apply_all {
                 let mut any_applied = false;
 
@@ -200,7 +225,7 @@ fn execute_node(
                 }
             }
         }
-        IndexNode::Markov(nodes) => {
+        IndexNodeTy::Markov(nodes) => {
             for node in nodes {
                 if execute_node(node, state, replaces, interactions, rng, updated) {
                     return true;
@@ -209,7 +234,25 @@ fn execute_node(
 
             false
         }
-        IndexNode::One {
+        IndexNodeTy::Sequence(nodes) => {
+            for node in nodes {
+                let mut iteration = 0;
+                while execute_node(node, state, replaces, interactions, rng, updated) {
+                    iteration += 1;
+                    if node
+                        .settings
+                        .count
+                        .map(|count| count <= iteration)
+                        .unwrap_or(false)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            false
+        }
+        IndexNodeTy::One {
             children,
             node_index_storage,
         } => {
@@ -338,6 +381,7 @@ fn markov(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<python::TevClient>()?;
     m.add_class::<python::One>()?;
     m.add_class::<python::Markov>()?;
+    m.add_class::<python::Sequence>()?;
     Ok(())
 }
 

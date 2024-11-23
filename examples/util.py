@@ -2,6 +2,13 @@ from markov import *
 import subprocess
 import time
 import numpy as np
+from PIL import Image
+
+def save_image(filename, arr):
+    width, height = arr.shape
+    buffer = np.zeros((width, height, 3), dtype=np.uint8)
+    colour_image(buffer, arr)
+    Image.fromarray(buffer).save(filename)
 
 
 def rep2(arr, *args, **kwargs):
