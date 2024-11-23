@@ -1,7 +1,19 @@
-from markov import TevClient, colour_image
+from markov import *
 import subprocess
 import time
 import numpy as np
+
+
+def rep2(arr, *args, **kwargs):
+    arr = arr.copy()
+    callback = None
+    if "ffmpeg" in kwargs:
+        ffmpeg = kwargs["ffmpeg"]
+        callback = lambda index: ffmpeg.write(arr)
+        del kwargs["ffmpeg"]
+    rep(arr, *args, callback=callback, **kwargs)
+    return arr
+
 
 def spawn_tev():
     subprocess.Popen("tev", stdout=subprocess.PIPE)
@@ -37,6 +49,9 @@ class FfmpegOutput:
             self.process.stdin.write(self.buffer)
         self.index += 1
 
+    def close():
+        self.process.stdin.close()
+
 
 def save_as_voxels(filename, arr):
     from voxypy.models import Entity
@@ -67,10 +82,11 @@ def save_as_voxels(filename, arr):
     entity.set_palette(palette)
     entity.save(filename)
 
+
 class CompressedVoxelsOutput:
     def __init__(self, filename):
         import zstandard as zstd
-        
+
         self.ctx = zstd.ZstdCompressor()
         self.file = open(filename, "wb")
         self.writer = self.ctx.stream_writer(self.file)

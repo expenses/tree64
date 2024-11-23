@@ -47,6 +47,7 @@ pub struct PatternWithOptions {
     from: Vec<String>,
     to: Vec<String>,
     allow_dimension_shuffling: bool,
+    allow_flip: bool,
     apply_all: bool,
 }
 
@@ -56,6 +57,7 @@ impl PatternWithOptions {
     fn new(
         pattern: Pattern,
         allow_dimension_shuffling: Option<bool>,
+        allow_flip: Option<bool>,
         apply_all: Option<bool>,
     ) -> PyResult<Self> {
         let (from, to) = pattern.strings()?;
@@ -63,6 +65,7 @@ impl PatternWithOptions {
             from,
             to,
             allow_dimension_shuffling: allow_dimension_shuffling.unwrap_or(true),
+            allow_flip: allow_flip.unwrap_or(true),
             apply_all: apply_all.unwrap_or(false),
         })
     }
@@ -156,7 +159,9 @@ impl<'a> PythonNode<'a> {
         Ok(match self {
             Self::One(one) => one.inner,
             Self::Markov(markov) => markov.inner,
-            Self::Pattern(pattern) => Node::Rule(PatternWithOptions::new(pattern, None, None)?),
+            Self::Pattern(pattern) => {
+                Node::Rule(PatternWithOptions::new(pattern, None, None, None)?)
+            }
             Self::PatternWithOptions(pattern) => Node::Rule(pattern),
         })
     }
@@ -205,6 +210,7 @@ pub fn rep(
             &pattern.from,
             &pattern.to,
             pattern.allow_dimension_shuffling,
+            pattern.allow_flip,
             pattern.apply_all,
             &array_2d,
         )
@@ -236,11 +242,13 @@ pub fn rep_all(
     let mut replaces = Vec::new();
 
     for pattern in patterns {
-        let pattern = PatternWithOptions::new(pattern.extract::<Pattern>().unwrap(), None, None)?;
+        let pattern =
+            PatternWithOptions::new(pattern.extract::<Pattern>().unwrap(), None, None, None)?;
         replaces.push(Replace::from_layers(
             &pattern.from,
             &pattern.to,
             pattern.allow_dimension_shuffling,
+            pattern.allow_flip,
             pattern.apply_all,
             &array_2d,
         ));

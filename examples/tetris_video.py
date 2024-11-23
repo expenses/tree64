@@ -34,6 +34,6 @@ rep(
         """
         ),
     ),
-    callback=callback
+    callback=callback,
 )
 tev_client.send_image("tetris", arr)

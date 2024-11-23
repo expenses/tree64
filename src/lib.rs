@@ -442,6 +442,7 @@ impl Replace {
         to: &mut [u8],
         width: usize,
         allow_dimension_shuffling: bool,
+        allow_flip: bool,
         apply_all: bool,
         state: &Array2D<&mut [u8]>,
         depth: usize,
@@ -494,9 +495,9 @@ impl Replace {
 
         for &[x_mapping, y_mapping, z_mapping] in shuffle_permutations {
             for flip_bits in 0..8 {
-                let flip_x = (flip_bits & 1) == 1;
-                let flip_y = (flip_bits >> 1) & 1 == 1;
-                let flip_z = (flip_bits >> 2) == 1;
+                let flip_x = allow_flip && (flip_bits & 1) == 1;
+                let flip_y = allow_flip && (flip_bits >> 1) & 1 == 1;
+                let flip_z = allow_flip && (flip_bits >> 2) == 1;
 
                 permutations.insert(pair.permute(
                     [width, height, depth][x_mapping],
@@ -531,6 +532,7 @@ impl Replace {
         from_layers: &[String],
         to_layers: &[String],
         allow_dimension_shuffling: bool,
+        allow_flip: bool,
         apply_all: bool,
         state: &Array2D<&mut [u8]>,
     ) -> Self {
@@ -556,6 +558,7 @@ impl Replace {
             &mut to_vec,
             from_width.unwrap(),
             allow_dimension_shuffling,
+            allow_flip,
             apply_all,
             state,
             from_layers.len(),

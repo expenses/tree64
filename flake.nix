@@ -43,7 +43,7 @@
         };
         devShells.default = with pkgs;
           mkShell {
-            buildInputs = [black tev (packages.patched-python.withPackages (ps: [ps.markov ps.numpy ps.ffmpeg-python ps.zstandard]))];
+            buildInputs = [black tev (packages.patched-python.withPackages (ps: [ps.markov ps.ipython ps.numpy ps.ffmpeg-python ps.zstandard]))];
           };
       }
     );
