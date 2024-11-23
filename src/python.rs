@@ -84,40 +84,49 @@ fn parse_pattern_list(list: &PyTuple) -> PyResult<PatternList> {
 
 #[derive(Clone)]
 #[pyclass]
-pub struct One(PatternList);
+pub struct One(PatternList, NodeSettings);
 
 #[pymethods]
 impl One {
     #[new]
-    #[pyo3(signature = (*list))]
-    fn new(list: &PyTuple) -> PyResult<Self> {
-        Ok(Self(parse_pattern_list(list)?))
+    #[pyo3(signature = (*list, settings=None))]
+    fn new(list: &PyTuple, settings: Option<NodeSettings>) -> PyResult<Self> {
+        Ok(Self(
+            parse_pattern_list(list)?,
+            settings.unwrap_or_default(),
+        ))
     }
 }
 
 #[derive(Clone)]
 #[pyclass]
-pub struct Markov(PatternList);
+pub struct Markov(PatternList, NodeSettings);
 
 #[pymethods]
 impl Markov {
     #[new]
-    #[pyo3(signature = (*list))]
-    fn new(list: &PyTuple) -> PyResult<Self> {
-        Ok(Self(parse_pattern_list(list)?))
+    #[pyo3(signature = (*list, settings=None))]
+    fn new(list: &PyTuple, settings: Option<NodeSettings>) -> PyResult<Self> {
+        Ok(Self(
+            parse_pattern_list(list)?,
+            settings.unwrap_or_default(),
+        ))
     }
 }
 
 #[derive(Clone)]
 #[pyclass]
-pub struct Sequence(PatternList);
+pub struct Sequence(PatternList, NodeSettings);
 
 #[pymethods]
 impl Sequence {
     #[new]
-    #[pyo3(signature = (*list))]
-    fn new(list: &PyTuple) -> PyResult<Self> {
-        Ok(Self(parse_pattern_list(list)?))
+    #[pyo3(signature = (*list, settings=None))]
+    fn new(list: &PyTuple, settings: Option<NodeSettings>) -> PyResult<Self> {
+        Ok(Self(
+            parse_pattern_list(list)?,
+            settings.unwrap_or_default(),
+        ))
     }
 }
 
@@ -160,13 +169,26 @@ pub enum PythonNode<'a> {
 impl<'a> PythonNode<'a> {
     fn convert(self) -> PyResult<Node<PatternWithOptions>> {
         Ok(match self {
-            Self::One(list) => Node::One(list.0),
-            Self::Markov(list) => Node::Markov(list.0),
-            Self::Sequence(list) => Node::Sequence(list.0),
-            Self::Pattern(pattern) => {
-                Node::Rule(PatternWithOptions::new(pattern, None, None, None)?)
-            }
-            Self::PatternWithOptions(pattern) => Node::Rule(pattern),
+            Self::One(list) => Node {
+                settings: list.1,
+                ty: NodeTy::One(list.0),
+            },
+            Self::Markov(list) => Node {
+                settings: list.1,
+                ty: NodeTy::Markov(list.0),
+            },
+            Self::Sequence(list) => Node {
+                settings: list.1,
+                ty: NodeTy::Sequence(list.0),
+            },
+            Self::Pattern(pattern) => Node {
+                settings: Default::default(),
+                ty: NodeTy::Rule(PatternWithOptions::new(pattern, None, None, None)?),
+            },
+            Self::PatternWithOptions(pattern) => Node {
+                settings: Default::default(),
+                ty: NodeTy::Rule(pattern),
+            },
         })
     }
 }
@@ -178,12 +200,7 @@ pub enum Array<'a> {
 }
 
 #[pyfunction]
-pub fn rep(
-    array: Array,
-    node: PythonNode,
-    times: Option<u32>,
-    callback: Option<&PyFunction>,
-) -> PyResult<()> {
+pub fn rep(array: Array, node: PythonNode, callback: Option<&PyFunction>) -> PyResult<()> {
     let mut array_2d = match &array {
         Array::D2(array) => {
             Array2D::new_from(
@@ -228,7 +245,7 @@ pub fn rep(
         }) as _
     });
 
-    execute_root_node(node, &mut array_2d, &mut rng, times, callback);
+    execute_root_node(node, &mut array_2d, &mut rng, callback);
 
     Ok(())
 }

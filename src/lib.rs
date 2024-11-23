@@ -14,7 +14,13 @@ mod pattern_matching;
 mod python;
 
 #[derive(Clone, Debug)]
-enum Node<T> {
+struct Node<T> {
+    ty: NodeTy<T>,
+    settings: NodeSettings,
+}
+
+#[derive(Clone, Debug)]
+enum NodeTy<T> {
     // Try to apply a rewrite rule
     Rule(T),
     // Try to apply a child node in sequential order
@@ -25,40 +31,45 @@ enum Node<T> {
 }
 
 fn map_node<T, U, F: Fn(&T) -> U>(node: &Node<T>, map: &F) -> Node<U> {
-    match node {
-        Node::Rule(rule) => Node::Rule(map(rule)),
-        Node::Markov(children) => {
-            Node::Markov(children.iter().map(|node| map_node(node, map)).collect())
-        }
-        Node::One(children) => Node::One(children.iter().map(|node| map_node(node, map)).collect()),
-        Node::Sequence(children) => {
-            Node::Sequence(children.iter().map(|node| map_node(node, map)).collect())
-        }
+    Node {
+        ty: match &node.ty {
+            NodeTy::Rule(rule) => NodeTy::Rule(map(rule)),
+            NodeTy::Markov(children) => {
+                NodeTy::Markov(children.iter().map(|node| map_node(node, map)).collect())
+            }
+            NodeTy::One(children) => {
+                NodeTy::One(children.iter().map(|node| map_node(node, map)).collect())
+            }
+            NodeTy::Sequence(children) => {
+                NodeTy::Sequence(children.iter().map(|node| map_node(node, map)).collect())
+            }
+        },
+        settings: node.settings.clone(),
     }
 }
 
 fn index_node(node: Node<Replace>, replaces: &mut Vec<Replace>) -> IndexNode {
     IndexNode {
-        ty: match node {
-            Node::Rule(rep) => {
+        ty: match node.ty {
+            NodeTy::Rule(rep) => {
                 let index = replaces.len();
                 replaces.push(rep);
                 IndexNodeTy::Rule(index)
             }
-            Node::Markov(nodes) => IndexNodeTy::Markov(
+            NodeTy::Markov(nodes) => IndexNodeTy::Markov(
                 nodes
                     .into_iter()
                     .map(|node| index_node(node, replaces))
                     .collect(),
             ),
-            Node::Sequence(nodes) => IndexNodeTy::Sequence(
+            NodeTy::Sequence(nodes) => IndexNodeTy::Sequence(
                 nodes
                     .into_iter()
                     .map(|node| index_node(node, replaces))
                     .collect(),
             ),
 
-            Node::One(nodes) => IndexNodeTy::One {
+            NodeTy::One(nodes) => IndexNodeTy::One {
                 children: nodes
                     .into_iter()
                     .map(|node| index_node(node, replaces))
@@ -66,13 +77,21 @@ fn index_node(node: Node<Replace>, replaces: &mut Vec<Replace>) -> IndexNode {
                 node_index_storage: Vec::new(),
             },
         },
-        settings: NodeSettings::default(),
+        settings: node.settings,
     }
 }
 
-#[derive(Default)]
+#[pyclass]
+#[derive(Default, Clone, Debug)]
 struct NodeSettings {
-    count: Option<u64>,
+    count: Option<u32>,
+}
+#[pymethods]
+impl NodeSettings {
+    #[new]
+    fn new(count: Option<u32>) -> Self {
+        Self { count }
+    }
 }
 
 struct IndexNode {
@@ -108,11 +127,13 @@ fn execute_root_node<'a>(
     root: Node<Replace>,
     state: &mut Array2D<&mut [u8]>,
     rng: &mut SmallRng,
-    max_iterations: Option<u32>,
     callback: Option<Box<dyn Fn(u32) + 'a>>,
 ) {
     let mut replaces = Vec::new();
-    let mut root = index_node(root, &mut replaces);
+    let mut root = IndexNode {
+        settings: Default::default(),
+        ty: IndexNodeTy::Sequence(vec![index_node(root, &mut replaces)]),
+    };
 
     // Record which pattern outputs effect which pattern inputs.
     let mut interactions = Vec::with_capacity(replaces.len());
@@ -142,42 +163,32 @@ fn execute_root_node<'a>(
     });
 
     let mut updated = Vec::new();
-
-    for rule_iter in 1.. {
-        if !execute_node(
-            &mut root,
-            state,
-            &mut replaces,
-            &interactions,
-            rng,
-            &mut updated,
-        ) {
-            return;
-        }
-
-        if let Some(callback) = callback.as_ref() {
-            callback(rule_iter);
-        }
-
-        if let Some(max_iterations) = max_iterations {
-            if rule_iter >= max_iterations {
-                return;
-            }
-        }
-    }
+    let mut global_rule_iter = 0;
+    execute_node(
+        &mut root,
+        state,
+        &mut replaces,
+        &interactions,
+        rng,
+        &mut updated,
+        callback.as_ref(),
+        &mut global_rule_iter,
+    );
 }
 
-fn execute_node(
+fn execute_node<'a>(
     node: &mut IndexNode,
     state: &mut Array2D<&mut [u8]>,
     replaces: &mut [Replace],
     interactions: &[Vec<bool>],
     rng: &mut SmallRng,
     updated: &mut Vec<u32>,
+    callback: Option<&Box<dyn Fn(u32) + 'a>>,
+    global_rule_iter: &mut u32,
 ) -> bool {
     match &mut node.ty {
         IndexNodeTy::Rule(index) => {
-            if replaces[*index].apply_all {
+            let applied = if replaces[*index].apply_all {
                 let mut any_applied = false;
 
                 {
@@ -223,11 +234,29 @@ fn execute_node(
                 } else {
                     false
                 }
+            };
+
+            if applied {
+                if let Some(callback) = callback {
+                    callback(*global_rule_iter);
+                }
+                *global_rule_iter += 1;
             }
+
+            applied
         }
         IndexNodeTy::Markov(nodes) => {
             for node in nodes {
-                if execute_node(node, state, replaces, interactions, rng, updated) {
+                if execute_node(
+                    node,
+                    state,
+                    replaces,
+                    interactions,
+                    rng,
+                    updated,
+                    callback,
+                    global_rule_iter,
+                ) {
                     return true;
                 }
             }
@@ -236,16 +265,28 @@ fn execute_node(
         }
         IndexNodeTy::Sequence(nodes) => {
             for node in nodes {
-                let mut iteration = 0;
-                while execute_node(node, state, replaces, interactions, rng, updated) {
-                    iteration += 1;
-                    if node
-                        .settings
-                        .count
-                        .map(|count| count <= iteration)
-                        .unwrap_or(false)
-                    {
+                for rule_iter in 1.. {
+                    if !execute_node(
+                        node,
+                        state,
+                        replaces,
+                        interactions,
+                        rng,
+                        updated,
+                        callback,
+                        global_rule_iter,
+                    ) {
                         break;
+                    }
+
+                    /*if let Some(callback) = callback.as_ref() {
+                        callback(rule_iter);
+                    }*/
+
+                    if let Some(count) = node.settings.count {
+                        if rule_iter >= count {
+                            break;
+                        }
                     }
                 }
             }
@@ -267,6 +308,8 @@ fn execute_node(
                     interactions,
                     rng,
                     updated,
+                    callback,
+                    global_rule_iter,
                 )
             })
             .is_some()
@@ -382,6 +425,7 @@ fn markov(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<python::One>()?;
     m.add_class::<python::Markov>()?;
     m.add_class::<python::Sequence>()?;
+    m.add_class::<NodeSettings>()?;
     Ok(())
 }
 
