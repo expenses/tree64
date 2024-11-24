@@ -1,15 +1,14 @@
 from markov import rep, index_for_colour, PatternWithOptions, TevClient, One, Markov
 import numpy as np
 import sys
-from util import spawn_tev
+from util import spawn_tev, save_image
 
-client = spawn_tev()
-
-dim = int(sys.argv[1])
-arr = np.zeros((dim, dim), dtype=np.uint8)
-arr[: dim - 4] = index_for_colour("U")
-arr[dim - 4] = index_for_colour("G")
-arr[dim - 3 :] = index_for_colour("N")
+width = int(sys.argv[1])
+height = int(sys.argv[2])
+arr = np.zeros((height, width), dtype=np.uint8)
+arr[: height - 4] = index_for_colour("U")
+arr[height - 4] = index_for_colour("G")
+arr[height - 3 :] = index_for_colour("N")
 
 rep(
     arr,
@@ -26,6 +25,7 @@ rep(
                     *E*
                 """,
                 allow_dimension_shuffling=False,
+                allow_flip=False,
             ),
             PatternWithOptions(
                 """
@@ -58,8 +58,10 @@ rep(
                     *****
                 """,
                 allow_dimension_shuffling=False,
+                allow_flip=False,
             ),
-            """
+            PatternWithOptions(
+                """
                 UUU,
                 UPU,
                 UEU,
@@ -70,8 +72,12 @@ rep(
                 *Y*,
                 ***,
             """,
+                allow_dimension_shuffling=False,
+                allow_flip=False,
+            ),
         ),
-        """
+        PatternWithOptions(
+            """
             UUUUU,
             UUUUU,
             UUUUU,
@@ -84,11 +90,15 @@ rep(
             GGEGG,
             NNENN
         """,
+            allow_dimension_shuffling=False,
+            allow_flip=False,
+        ),
     ),
 )
 rep(
     arr,
-    """
+    PatternWithOptions(
+        """
             ***,
             *P*,
             ***,
@@ -97,5 +107,8 @@ rep(
             YEY,
             *Y*
         """,
+        allow_dimension_shuffling=False,
+        allow_flip=False,
+    ),
 )
-client.send_image("final", arr)
+save_image("flowers.png", arr)

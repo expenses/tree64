@@ -222,8 +222,8 @@ pub fn rep(array: Array, node: PythonNode, callback: Option<&PyFunction>) -> PyR
                 // I don't like doing this, but it's the only way to get a callback
                 // function working afaik.
                 unsafe { array.as_slice_mut().unwrap() },
-                array.dims()[0],
                 array.dims()[1],
+                array.dims()[0],
                 1,
             )
         }
@@ -232,9 +232,9 @@ pub fn rep(array: Array, node: PythonNode, callback: Option<&PyFunction>) -> PyR
                 // I don't like doing this, but it's the only way to get a callback
                 // function working afaik.
                 unsafe { array.as_slice_mut().unwrap() },
-                array.dims()[0],
-                array.dims()[1],
                 array.dims()[2],
+                array.dims()[1],
+                array.dims()[0],
             )
         }
     };
@@ -278,8 +278,8 @@ pub fn colour_image(
     let input_slice = input.as_slice().unwrap();
     let output_slice = output.as_slice_mut().unwrap();
 
-    let width = input.dims()[0];
-    let height = input.dims()[1];
+    let height = input.dims()[0];
+    let width = input.dims()[1];
 
     for y in 0..height {
         for x in 0..width {
