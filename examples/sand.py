@@ -6,11 +6,11 @@ arr = np.zeros((dim, dim), dtype=np.uint8)
 ffmpeg = FfmpegOutput("out.avi", width=dim, height=dim, skip=300)
 
 
-def sand(arr, c):
-    global ffmpeg
-    rep_all(arr, (f"0={c}",), chance=0.1)
-    return rep2(
-        arr,
+def sand(c):
+    return (
+        PatternWithOptions(
+            f"0={c}", apply_all=True, chance=0.1, node_settings=NodeSettings(count=1)
+        ),
         Markov(
             One(
                 PatternWithOptions(
@@ -28,20 +28,21 @@ def sand(arr, c):
                 f"{c},0=0,{c}", allow_dimension_shuffling=False, allow_flip=False
             ),
         ),
-        ffmpeg=ffmpeg,
     )
 
 
-def rainbow(arr):
-    arr = sand(arr, "R")
-    arr = sand(arr, "O")
-    arr = sand(arr, "Y")
-    arr = sand(arr, "G")
-    arr = sand(arr, "U")
-    arr = sand(arr, "I")
-    arr = sand(arr, "P")
-    return arr
-
-
-for i in range(1000):
-    arr = rainbow(arr)
+rep2(
+    arr,
+    Sequence(
+        *(
+            sand("R")
+            + sand("O")
+            + sand("Y")
+            + sand("G")
+            + sand("U")
+            + sand("I")
+            + sand("P")
+        )
+    ),
+    ffmpeg=ffmpeg,
+)

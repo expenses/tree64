@@ -46,9 +46,16 @@ fn split_pattern_string(pattern: &str) -> PyResult<(&str, &str)> {
 pub struct PatternWithOptions {
     from: Vec<String>,
     to: Vec<String>,
+    options: PatternOptions,
+}
+
+#[pyclass]
+#[derive(Clone)]
+pub struct PatternOptions {
     allow_dimension_shuffling: bool,
     allow_flip: bool,
-    apply_all: bool,
+    settings: ReplaceSettings,
+    node_settings: NodeSettings,
 }
 
 #[pymethods]
@@ -59,14 +66,22 @@ impl PatternWithOptions {
         allow_dimension_shuffling: Option<bool>,
         allow_flip: Option<bool>,
         apply_all: Option<bool>,
+        chance: Option<f32>,
+        node_settings: Option<NodeSettings>,
     ) -> PyResult<Self> {
         let (from, to) = pattern.strings()?;
         Ok(Self {
             from,
             to,
-            allow_dimension_shuffling: allow_dimension_shuffling.unwrap_or(true),
-            allow_flip: allow_flip.unwrap_or(true),
-            apply_all: apply_all.unwrap_or(false),
+            options: PatternOptions {
+                allow_dimension_shuffling: allow_dimension_shuffling.unwrap_or(true),
+                allow_flip: allow_flip.unwrap_or(true),
+                settings: ReplaceSettings {
+                    apply_all: apply_all.unwrap_or(false),
+                    chance: chance.unwrap_or(10.0),
+                },
+                node_settings: node_settings.unwrap_or_default(),
+            },
         })
     }
 }
@@ -181,12 +196,12 @@ impl<'a> PythonNode<'a> {
                 settings: list.1,
                 ty: NodeTy::Sequence(list.0),
             },
-            Self::Pattern(pattern) => Node {
-                settings: Default::default(),
-                ty: NodeTy::Rule(PatternWithOptions::new(pattern, None, None, None)?),
-            },
+            Self::Pattern(pattern) => Self::PatternWithOptions(PatternWithOptions::new(
+                pattern, None, None, None, None, None,
+            )?)
+            .convert()?,
             Self::PatternWithOptions(pattern) => Node {
-                settings: Default::default(),
+                settings: pattern.options.node_settings.clone(),
                 ty: NodeTy::Rule(pattern),
             },
         })
@@ -230,9 +245,9 @@ pub fn rep(array: Array, node: PythonNode, callback: Option<&PyFunction>) -> PyR
         Replace::from_layers(
             &pattern.from,
             &pattern.to,
-            pattern.allow_dimension_shuffling,
-            pattern.allow_flip,
-            pattern.apply_all,
+            pattern.options.allow_dimension_shuffling,
+            pattern.options.allow_flip,
+            pattern.options.settings.clone(),
             &array_2d,
         )
     });
@@ -246,42 +261,6 @@ pub fn rep(array: Array, node: PythonNode, callback: Option<&PyFunction>) -> PyR
     });
 
     execute_root_node(node, &mut array_2d, &mut rng, callback);
-
-    Ok(())
-}
-
-#[pyfunction]
-pub fn rep_all(
-    mut array: numpy::borrow::PyReadwriteArray2<u8>,
-    patterns: &PyTuple,
-    chance: Option<f32>,
-) -> PyResult<()> {
-    let width = array.dims()[0];
-    let height = array.dims()[1];
-    let mut array_2d = Array2D::new_from(array.as_slice_mut().unwrap(), width, height, 1);
-
-    let mut replaces = Vec::new();
-
-    for pattern in patterns {
-        let pattern =
-            PatternWithOptions::new(pattern.extract::<Pattern>().unwrap(), None, None, None)?;
-        replaces.push(Replace::from_layers(
-            &pattern.from,
-            &pattern.to,
-            pattern.allow_dimension_shuffling,
-            pattern.allow_flip,
-            pattern.apply_all,
-            &array_2d,
-        ));
-    }
-
-    let mut chance_and_rng = chance.map(|value| (rand::rngs::SmallRng::from_entropy(), value));
-
-    execute_rule_all(
-        &mut array_2d,
-        &mut replaces,
-        chance_and_rng.as_mut().map(|(rng, value)| (rng, *value)),
-    );
 
     Ok(())
 }

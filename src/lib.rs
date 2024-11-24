@@ -163,7 +163,6 @@ fn execute_root_node<'a>(
     });
 
     let mut updated = Vec::new();
-    let mut global_rule_iter = 0;
     execute_node(
         &mut root,
         state,
@@ -172,7 +171,6 @@ fn execute_root_node<'a>(
         rng,
         &mut updated,
         callback.as_ref(),
-        &mut global_rule_iter,
     );
 }
 
@@ -184,20 +182,25 @@ fn execute_node<'a>(
     rng: &mut SmallRng,
     updated: &mut Vec<u32>,
     callback: Option<&Box<dyn Fn(u32) + 'a>>,
-    global_rule_iter: &mut u32,
 ) -> bool {
     match &mut node.ty {
         IndexNodeTy::Rule(index) => {
-            let applied = if replaces[*index].apply_all {
+            let applied = if replaces[*index].settings.apply_all {
                 let mut any_applied = false;
 
                 {
                     let replace = &mut replaces[*index];
 
+                    replace.store_initial_matches(state);
+
                     for &m in &replace.potential_matches {
                         let permutation = &replace.permutations[m.permutation as usize];
 
                         if !match_pattern(permutation, state, m.index) {
+                            continue;
+                        }
+
+                        if rng.gen_range(0.0..1.0) > replace.settings.chance {
                             continue;
                         }
 
@@ -238,25 +241,15 @@ fn execute_node<'a>(
 
             if applied {
                 if let Some(callback) = callback {
-                    callback(*global_rule_iter);
+                    callback(0);
                 }
-                *global_rule_iter += 1;
             }
 
             applied
         }
         IndexNodeTy::Markov(nodes) => {
             for node in nodes {
-                if execute_node(
-                    node,
-                    state,
-                    replaces,
-                    interactions,
-                    rng,
-                    updated,
-                    callback,
-                    global_rule_iter,
-                ) {
+                if execute_node(node, state, replaces, interactions, rng, updated, callback) {
                     return true;
                 }
             }
@@ -264,24 +257,14 @@ fn execute_node<'a>(
             false
         }
         IndexNodeTy::Sequence(nodes) => {
+            let mut applied = false;
             for node in nodes {
                 for rule_iter in 1.. {
-                    if !execute_node(
-                        node,
-                        state,
-                        replaces,
-                        interactions,
-                        rng,
-                        updated,
-                        callback,
-                        global_rule_iter,
-                    ) {
+                    if !execute_node(node, state, replaces, interactions, rng, updated, callback) {
                         break;
+                    } else {
+                        applied = true;
                     }
-
-                    /*if let Some(callback) = callback.as_ref() {
-                        callback(rule_iter);
-                    }*/
 
                     if let Some(count) = node.settings.count {
                         if rule_iter >= count {
@@ -291,7 +274,7 @@ fn execute_node<'a>(
                 }
             }
 
-            false
+            applied
         }
         IndexNodeTy::One {
             children,
@@ -309,7 +292,6 @@ fn execute_node<'a>(
                     rng,
                     updated,
                     callback,
-                    global_rule_iter,
                 )
             })
             .is_some()
@@ -417,7 +399,6 @@ pub fn send_image(
 #[pymodule]
 fn markov(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python::rep, m)?)?;
-    m.add_function(wrap_pyfunction!(python::rep_all, m)?)?;
     m.add_function(wrap_pyfunction!(python::index_for_colour, m)?)?;
     m.add_function(wrap_pyfunction!(python::colour_image, m)?)?;
     m.add_class::<python::PatternWithOptions>()?;
@@ -483,37 +464,15 @@ fn pattern_from_chars(pattern: &mut Vec<u8>, row_width: &mut Option<usize>, char
     (*row_width).unwrap_or(pattern.len())
 }
 
-// todo: paths, convolutions.
-
-fn execute_rule_all(
-    state: &mut Array2D<&mut [u8]>,
-    replaces: &mut [Replace],
-    mut rng_and_chance: Option<(&mut SmallRng, f32)>,
-) {
-    for rep in replaces.iter_mut() {
-        rep.store_initial_matches(state);
-
-        for &m in &rep.potential_matches {
-            if !match_pattern(&rep.permutations[m.permutation as usize], state, m.index) {
-                continue;
-            }
-
-            if let Some((ref mut rng, value)) = rng_and_chance {
-                if rng.gen_range(0.0..1.0) > value {
-                    continue;
-                }
-            }
-
-            let to = &rep.permutations[m.permutation as usize].to;
-
-            for (i, v) in to.non_wildcard_values_in_state(state.width(), state.height()) {
-                state.put(m.index as usize + i, v);
-            }
-        }
-    }
-}
+// todo: paths, convolutions, do in python. rrmove callback index.
 
 const WILDCARD: u8 = 255;
+
+#[derive(Default, Clone)]
+struct ReplaceSettings {
+    apply_all: bool,
+    chance: f32,
+}
 
 struct Replace {
     permutations: Vec<Permutation>,
@@ -521,7 +480,7 @@ struct Replace {
     from_values: HashSet<u8>,
     to_values: HashSet<u8>,
     reinit: bool,
-    apply_all: bool,
+    settings: ReplaceSettings,
 }
 
 impl Replace {
@@ -531,7 +490,7 @@ impl Replace {
         width: usize,
         allow_dimension_shuffling: bool,
         allow_flip: bool,
-        apply_all: bool,
+        settings: ReplaceSettings,
         state: &Array2D<&mut [u8]>,
         depth: usize,
     ) -> Self {
@@ -612,7 +571,7 @@ impl Replace {
             from_values,
             to_values,
             reinit: false,
-            apply_all,
+            settings,
         }
     }
 
@@ -621,7 +580,7 @@ impl Replace {
         to_layers: &[String],
         allow_dimension_shuffling: bool,
         allow_flip: bool,
-        apply_all: bool,
+        settings: ReplaceSettings,
         state: &Array2D<&mut [u8]>,
     ) -> Self {
         let mut from_vec = Vec::new();
@@ -647,7 +606,7 @@ impl Replace {
             from_width.unwrap(),
             allow_dimension_shuffling,
             allow_flip,
-            apply_all,
+            settings,
             state,
             from_layers.len(),
         )

@@ -4,6 +4,7 @@ import time
 import numpy as np
 from PIL import Image
 
+
 def save_image(filename, arr):
     width, height = arr.shape
     buffer = np.zeros((width, height, 3), dtype=np.uint8)

@@ -45,6 +45,7 @@
           mkShell {
             buildInputs = [black tev (packages.patched-python.withPackages (ps: [ps.markov ps.ipython ps.numpy ps.pillow ps.scikit-image ps.ffmpeg-python ps.zstandard]))];
           };
+devShells.build = with pkgs; mkShell {buildInputs=[python3];};
       }
     );
 }
