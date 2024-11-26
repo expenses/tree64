@@ -397,7 +397,7 @@ pub fn send_image(
 }
 
 #[pymodule]
-fn markov(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn markov(_py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python::rep, m)?)?;
     m.add_function(wrap_pyfunction!(python::index_for_colour, m)?)?;
     m.add_function(wrap_pyfunction!(python::colour_image, m)?)?;

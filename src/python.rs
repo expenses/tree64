@@ -1,7 +1,8 @@
 use super::*;
+use numpy::PyArrayMethods;
 use pyo3::exceptions::PyTypeError;
+use pyo3::prelude::PyTupleMethods;
 use pyo3::types::{PyFunction, PyTuple};
-
 #[pyclass]
 pub struct TevClient {
     inner: tev_client::TevClient,
@@ -88,7 +89,7 @@ impl PatternWithOptions {
 
 type PatternList = Vec<Node<PatternWithOptions>>;
 
-fn parse_pattern_list(list: &PyTuple) -> PyResult<PatternList> {
+fn parse_pattern_list(list: Bound<PyTuple>) -> PyResult<PatternList> {
     list.iter()
         .map(|item| {
             item.extract::<PythonNode>()
@@ -105,7 +106,7 @@ pub struct One(PatternList, NodeSettings);
 impl One {
     #[new]
     #[pyo3(signature = (*list, settings=None))]
-    fn new(list: &PyTuple, settings: Option<NodeSettings>) -> PyResult<Self> {
+    fn new(list: Bound<PyTuple>, settings: Option<NodeSettings>) -> PyResult<Self> {
         Ok(Self(
             parse_pattern_list(list)?,
             settings.unwrap_or_default(),
@@ -121,7 +122,7 @@ pub struct Markov(PatternList, NodeSettings);
 impl Markov {
     #[new]
     #[pyo3(signature = (*list, settings=None))]
-    fn new(list: &PyTuple, settings: Option<NodeSettings>) -> PyResult<Self> {
+    fn new(list: Bound<PyTuple>, settings: Option<NodeSettings>) -> PyResult<Self> {
         Ok(Self(
             parse_pattern_list(list)?,
             settings.unwrap_or_default(),
@@ -137,7 +138,7 @@ pub struct Sequence(PatternList, NodeSettings);
 impl Sequence {
     #[new]
     #[pyo3(signature = (*list, settings=None))]
-    fn new(list: &PyTuple, settings: Option<NodeSettings>) -> PyResult<Self> {
+    fn new(list: Bound<PyTuple>, settings: Option<NodeSettings>) -> PyResult<Self> {
         Ok(Self(
             parse_pattern_list(list)?,
             settings.unwrap_or_default(),
@@ -149,7 +150,7 @@ impl Sequence {
 enum Pattern<'a> {
     String(String),
     TwoStrings(String, String),
-    TwoLists(&'a PyTuple, &'a PyTuple),
+    TwoLists(Bound<'a, PyTuple>, Bound<'a, PyTuple>),
 }
 
 impl<'a> Pattern<'a> {
@@ -215,7 +216,7 @@ pub enum Array<'a> {
 }
 
 #[pyfunction]
-pub fn rep(array: Array, node: PythonNode, callback: Option<&PyFunction>) -> PyResult<()> {
+pub fn rep(array: Array, node: PythonNode, callback: Option<&Bound<PyFunction>>) -> PyResult<()> {
     let mut array_2d = match &array {
         Array::D2(array) => {
             Array2D::new_from(
