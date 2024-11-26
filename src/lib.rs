@@ -488,14 +488,15 @@ impl Replace {
         from: &[u8],
         to: &mut [u8],
         width: usize,
-        allow_dimension_shuffling: bool,
-        allow_flip: bool,
+        shuffles: &[[usize; 3]],
+        flips: &[[bool; 3]],
         settings: ReplaceSettings,
         state: &Array2D<&mut [u8]>,
         depth: usize,
     ) -> Self {
         let height = from.len() / width / depth;
         dbg!(depth, height, width, from.len());
+        let dims = [width, height, depth];
 
         // Small optimization to reduce the interaction between patterns.
         for i in 0..from.len() {
@@ -527,29 +528,12 @@ impl Replace {
         // Get a set of unique permutations.
         let mut permutations = HashSet::new();
 
-        let shuffle_permutations: &[[usize; 3]] = if allow_dimension_shuffling {
-            &[
-                [0, 1, 2],
-                [0, 2, 1],
-                [1, 0, 2],
-                [1, 2, 0],
-                [2, 0, 1],
-                [2, 1, 0],
-            ]
-        } else {
-            &[[0, 1, 2]]
-        };
-
-        for &[x_mapping, y_mapping, z_mapping] in shuffle_permutations {
-            for flip_bits in 0..8 {
-                let flip_x = allow_flip && (flip_bits & 1) == 1;
-                let flip_y = allow_flip && (flip_bits >> 1) & 1 == 1;
-                let flip_z = allow_flip && (flip_bits >> 2) == 1;
-
+        for &[x_mapping, y_mapping, z_mapping] in shuffles {
+            for &[flip_x, flip_y, flip_z] in flips {
                 permutations.insert(pair.permute(
-                    [width, height, depth][x_mapping],
-                    [width, height, depth][y_mapping],
-                    [width, height, depth][z_mapping],
+                    dims[x_mapping],
+                    dims[y_mapping],
+                    dims[z_mapping],
                     |x, y, z| {
                         let array = [
                             if flip_x { width - 1 - x } else { x },
@@ -578,8 +562,8 @@ impl Replace {
     fn from_layers(
         from_layers: &[String],
         to_layers: &[String],
-        allow_dimension_shuffling: bool,
-        allow_flip: bool,
+        shuffles: &[[usize; 3]],
+        flips: &[[bool; 3]],
         settings: ReplaceSettings,
         state: &Array2D<&mut [u8]>,
     ) -> Self {
@@ -604,8 +588,8 @@ impl Replace {
             &from_vec,
             &mut to_vec,
             from_width.unwrap(),
-            allow_dimension_shuffling,
-            allow_flip,
+            shuffles,
+            flips,
             settings,
             state,
             from_layers.len(),

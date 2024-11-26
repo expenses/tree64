@@ -242,11 +242,39 @@ pub fn rep(array: Array, node: PythonNode, callback: Option<&PyFunction>) -> PyR
     let node = node.convert()?;
 
     let node = map_node(&node, &|pattern| {
+        let shuffles: &[[usize; 3]] = if pattern.options.allow_dimension_shuffling {
+            &[
+                [0, 1, 2],
+                [0, 2, 1],
+                [1, 0, 2],
+                [1, 2, 0],
+                [2, 0, 1],
+                [2, 1, 0],
+            ]
+        } else {
+            &[[0, 1, 2]]
+        };
+
+        let flips: &[[bool; 3]] = if pattern.options.allow_flip {
+            &[
+                [false, false, false],
+                [false, false, true],
+                [false, true, false],
+                [false, true, true],
+                [true, false, false],
+                [true, false, true],
+                [true, true, false],
+                [true, true, true],
+            ]
+        } else {
+            &[[false; 3]]
+        };
+
         Replace::from_layers(
             &pattern.from,
             &pattern.to,
-            pattern.options.allow_dimension_shuffling,
-            pattern.options.allow_flip,
+            shuffles,
+            flips,
             pattern.options.settings.clone(),
             &array_2d,
         )
