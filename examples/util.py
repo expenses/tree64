@@ -5,6 +5,17 @@ import numpy as np
 from PIL import Image
 
 
+NO_FLIPS = [[False, False, False]]
+NO_SHUFFLES = [[0, 1, 2]]
+
+Y_IS_Z = [[0, 2, 1], [2, 0, 1]]
+TOGGLE_X = [
+    [False, False, False],
+    [True, False, False],
+]
+ROT_AROUND_Z = [[0, 1, 2], [1, 0, 2]]
+
+
 def save_image(filename, arr):
     width, height = arr.shape
     buffer = np.zeros((width, height, 3), dtype=np.uint8)

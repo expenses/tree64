@@ -42,6 +42,26 @@ fn split_pattern_string(pattern: &str) -> PyResult<(&str, &str)> {
         .ok_or_else(|| PyTypeError::new_err("missing '=' in pattern string"))
 }
 
+const ALL_FLIPS: [[bool; 3]; 8] = [
+    [false, false, false],
+    [false, false, true],
+    [false, true, false],
+    [false, true, true],
+    [true, false, false],
+    [true, false, true],
+    [true, true, false],
+    [true, true, true],
+];
+
+const ALL_SHUFFLES: [[usize; 3]; 6] = [
+    [0, 1, 2],
+    [0, 2, 1],
+    [1, 0, 2],
+    [1, 2, 0],
+    [2, 0, 1],
+    [2, 1, 0],
+];
+
 #[pyclass]
 #[derive(Clone)]
 pub struct PatternWithOptions {
@@ -53,10 +73,29 @@ pub struct PatternWithOptions {
 #[pyclass]
 #[derive(Clone)]
 pub struct PatternOptions {
-    allow_dimension_shuffling: bool,
-    allow_flip: bool,
+    shuffles: Vec<[usize; 3]>,
+    flips: Vec<[bool; 3]>,
     settings: ReplaceSettings,
     node_settings: NodeSettings,
+}
+impl PatternWithOptions {
+    fn new_from_pattern(pattern: Pattern) -> PyResult<Self> {
+        let (from, to) = pattern.strings()?;
+        Ok(Self {
+            from,
+            to,
+            options: PatternOptions {
+                shuffles: ALL_SHUFFLES.to_vec(),
+                flips: ALL_FLIPS.to_vec(),
+
+                settings: ReplaceSettings {
+                    apply_all: false,
+                    chance: 10.0,
+                },
+                node_settings: Default::default(),
+            },
+        })
+    }
 }
 
 #[pymethods]
@@ -64,26 +103,20 @@ impl PatternWithOptions {
     #[new]
     fn new(
         pattern: Pattern,
-        allow_dimension_shuffling: Option<bool>,
-        allow_flip: Option<bool>,
+        shuffles: Option<Vec<[usize; 3]>>,
+        flips: Option<Vec<[bool; 3]>>,
         apply_all: Option<bool>,
         chance: Option<f32>,
         node_settings: Option<NodeSettings>,
     ) -> PyResult<Self> {
-        let (from, to) = pattern.strings()?;
-        Ok(Self {
-            from,
-            to,
-            options: PatternOptions {
-                allow_dimension_shuffling: allow_dimension_shuffling.unwrap_or(true),
-                allow_flip: allow_flip.unwrap_or(true),
-                settings: ReplaceSettings {
-                    apply_all: apply_all.unwrap_or(false),
-                    chance: chance.unwrap_or(10.0),
-                },
-                node_settings: node_settings.unwrap_or_default(),
-            },
-        })
+        let mut pattern = Self::new_from_pattern(pattern)?;
+        pattern.options.flips = flips.unwrap_or(pattern.options.flips);
+        pattern.options.shuffles = shuffles.unwrap_or(pattern.options.shuffles);
+        pattern.options.settings.apply_all =
+            apply_all.unwrap_or(pattern.options.settings.apply_all);
+        pattern.options.settings.chance = chance.unwrap_or(pattern.options.settings.chance);
+        pattern.options.node_settings = node_settings.unwrap_or(pattern.options.node_settings);
+        Ok(pattern)
     }
 }
 
@@ -197,10 +230,10 @@ impl<'a> PythonNode<'a> {
                 settings: list.1,
                 ty: NodeTy::Sequence(list.0),
             },
-            Self::Pattern(pattern) => Self::PatternWithOptions(PatternWithOptions::new(
-                pattern, None, None, None, None, None,
-            )?)
-            .convert()?,
+            Self::Pattern(pattern) => {
+                Self::PatternWithOptions(PatternWithOptions::new_from_pattern(pattern)?)
+                    .convert()?
+            }
             Self::PatternWithOptions(pattern) => Node {
                 settings: pattern.options.node_settings.clone(),
                 ty: NodeTy::Rule(pattern),
@@ -243,39 +276,11 @@ pub fn rep(array: Array, node: PythonNode, callback: Option<&Bound<PyFunction>>)
     let node = node.convert()?;
 
     let node = map_node(&node, &|pattern| {
-        let shuffles: &[[usize; 3]] = if pattern.options.allow_dimension_shuffling {
-            &[
-                [0, 1, 2],
-                [0, 2, 1],
-                [1, 0, 2],
-                [1, 2, 0],
-                [2, 0, 1],
-                [2, 1, 0],
-            ]
-        } else {
-            &[[0, 1, 2]]
-        };
-
-        let flips: &[[bool; 3]] = if pattern.options.allow_flip {
-            &[
-                [false, false, false],
-                [false, false, true],
-                [false, true, false],
-                [false, true, true],
-                [true, false, false],
-                [true, false, true],
-                [true, true, false],
-                [true, true, true],
-            ]
-        } else {
-            &[[false; 3]]
-        };
-
         Replace::from_layers(
             &pattern.from,
             &pattern.to,
-            shuffles,
-            flips,
+            &pattern.options.shuffles,
+            &pattern.options.flips,
             pattern.options.settings.clone(),
             &array_2d,
         )
