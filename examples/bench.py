@@ -48,26 +48,4 @@ rep(
     ),
     callback=display,
 )
-save_image("0.png", arr[0])
-save_image("1.png", arr[2])
-save_image("2.png", arr[4])
-save_image("3.png", arr[6])
-
-'''
-PatternWithOptions(
-            """
-  200,
-  ***,
-  ,,1
-  =
-  112,
-  ***,
-  ***
-                    """,
-            flips=[
-                [False, False, False],
-                [True, False, False],
-            ],
-            shuffles=[[0, 2, 1], [2, 0, 1]],
-        ),
-'''
+save_as_voxels("out.vox", arr)
