@@ -48,4 +48,4 @@ rep(
     ),
     callback=display,
 )
-save_as_voxels("out.vox", arr)
+write_usd("bench.usda", arr)

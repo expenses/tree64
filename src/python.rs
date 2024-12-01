@@ -324,3 +324,78 @@ pub fn colour_image(
         }
     }
 }
+
+#[repr(transparent)]
+#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
+struct ByteVoxel(u8);
+
+impl block_mesh::Voxel for ByteVoxel {
+    fn get_visibility(&self) -> block_mesh::VoxelVisibility {
+        if self.0 == 0 {
+            block_mesh::VoxelVisibility::Empty
+        } else {
+            block_mesh::VoxelVisibility::Opaque
+        }
+    }
+}
+
+impl block_mesh::MergeVoxel for ByteVoxel {
+    type MergeValue = u8;
+
+    fn merge_value(&self) -> Self::MergeValue {
+        self.0
+    }
+}
+
+#[pyfunction]
+pub fn mesh_voxels(array: Array) -> (Vec<[f32; 3]>, Vec<u8>) {
+    let (slice, dims) = match &array {
+        Array::D2(array) => (
+            array.as_slice().unwrap(),
+            [array.dims()[1], array.dims()[0], 1],
+        ),
+        Array::D3(array) => (
+            array.as_slice().unwrap(),
+            [array.dims()[2], array.dims()[1], array.dims()[0]],
+        ),
+    };
+
+    let dims = dims.map(|x| x as u32);
+
+    let voxels: &[ByteVoxel] = bytemuck::cast_slice(slice);
+
+    let mut buffer = block_mesh::GreedyQuadsBuffer::new(0);
+
+    block_mesh::greedy_quads(
+        voxels,
+        &ndshape::RuntimeShape::<u32, 3>::new(dims),
+        [0; 3],
+        [dims[0] - 1, dims[1] - 1, dims[2] - 1],
+        &block_mesh::RIGHT_HANDED_Y_UP_CONFIG.faces,
+        &mut buffer,
+    );
+
+    let mut positions = Vec::new();
+    let mut colours = Vec::new();
+
+    for (i, group) in buffer.quads.groups.into_iter().enumerate() {
+        let face = block_mesh::RIGHT_HANDED_Y_UP_CONFIG.faces[i];
+
+        for quad in group.into_iter() {
+            let index =
+                quad.minimum[0] + quad.minimum[1] * dims[0] + quad.minimum[2] * dims[0] * dims[1];
+            let value = slice[index as usize];
+
+            let quad = block_mesh::geometry::UnorientedQuad::from(quad);
+            let face_positions = face.quad_mesh_positions(&quad, 1.0);
+
+            colours.push(value);
+
+            for position in face_positions {
+                positions.push(position);
+            }
+        }
+    }
+
+    (positions, colours)
+}

@@ -15,6 +15,25 @@ TOGGLE_X = [
 ]
 ROT_AROUND_Z = [[0, 1, 2], [1, 0, 2]]
 
+PALETTE = [
+    [0, 0, 0],
+    [255, 241, 232],
+    [255, 0, 7],
+    [29, 43, 83],
+    [126, 37, 83],
+    [0, 135, 81],
+    [171, 82, 54],
+    [95, 87, 79],
+    [194, 195, 199],
+    [255, 163, 0],
+    [255, 236, 39],
+    [0, 228, 54],
+    [41, 173, 255],
+    [131, 118, 156],
+    [255, 119, 168],
+    [255, 204, 170],
+]
+
 
 def save_image(filename, arr):
     width, height = arr.shape
@@ -78,25 +97,7 @@ def save_as_voxels(filename, arr):
     entity = Entity(data=arr.astype(int))
 
     # Copied from source code.
-    palette = [
-        [0, 0, 0],
-        [255, 241, 232],
-        [255, 0, 7],
-        [29, 43, 83],
-        [126, 37, 83],
-        [0, 135, 81],
-        [171, 82, 54],
-        [95, 87, 79],
-        [194, 195, 199],
-        [255, 163, 0],
-        [255, 236, 39],
-        [0, 228, 54],
-        [41, 173, 255],
-        [131, 118, 156],
-        [255, 119, 168],
-        [255, 204, 170],
-    ]
-    palette = [(r, g, b, 255 if i > 0 else 0) for i, (r, g, b) in enumerate(palette)]
+    palette = [(r, g, b, 255 if i > 0 else 0) for i, (r, g, b) in enumerate(PALETTE)]
 
     entity.set_palette(palette)
     entity.save(filename)
@@ -116,3 +117,41 @@ class CompressedVoxelsOutput:
     def close(self):
         self.writer.close()
         self.file.close()
+
+
+def add_to_usd_stage(prim_path, stage, arr):
+    from pxr import Sdf, UsdGeom
+
+    positions, colours = mesh_voxels(np.pad(arr, 1))
+    colours = [[v / 255.0 for v in PALETTE[x]] for x in colours]
+    prim = stage.DefinePrim(prim_path, "Mesh")
+    prim.CreateAttribute("points", Sdf.ValueTypeNames.Float3Array).Set(positions)
+
+    colours_attr = prim.CreateAttribute(
+        "primvars:displayColor", Sdf.ValueTypeNames.Color3fArray
+    )
+    colours_attr.Set(colours)
+    UsdGeom.Primvar(colours_attr).SetInterpolation("uniform")
+
+    num_faces = len(positions) // 4
+
+    prim.CreateAttribute("faceVertexCounts", Sdf.ValueTypeNames.IntArray).Set(
+        [4] * num_faces
+    )
+
+    indices = [
+        index
+        for f in range(num_faces)
+        for index in (f * 4, f * 4 + 1, f * 4 + 3, f * 4 + 2)
+    ]
+
+    prim.CreateAttribute("faceVertexIndices", Sdf.ValueTypeNames.IntArray).Set(indices)
+
+
+def write_usd(filename, arr):
+    from pxr import Usd
+
+    stage = Usd.Stage.CreateNew(filename)
+    stage.SetMetadata("upAxis", "Z")
+    add_to_usd_stage("/mesh", stage, arr)
+    stage.Save()

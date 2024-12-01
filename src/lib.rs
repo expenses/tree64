@@ -402,6 +402,7 @@ fn markov(_py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python::rep, m)?)?;
     m.add_function(wrap_pyfunction!(python::index_for_colour, m)?)?;
     m.add_function(wrap_pyfunction!(python::colour_image, m)?)?;
+    m.add_function(wrap_pyfunction!(python::mesh_voxels, m)?)?;
     m.add_class::<python::PatternWithOptions>()?;
     m.add_class::<python::TevClient>()?;
     m.add_class::<python::One>()?;

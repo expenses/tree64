@@ -14,3 +14,6 @@ numpy = "0.23.0"
 pyo3 = { version = "0.23", features = ["extension-module"] }
 memchr = "2.7.4"
 rayon = "1.10.0"
+block-mesh = "0.2.0"
+bytemuck = { version = "1.20.0", features = ["derive"] }
+ndshape = "0.3.0"
