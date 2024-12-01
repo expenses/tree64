@@ -101,6 +101,7 @@ impl PatternWithOptions {
 #[pymethods]
 impl PatternWithOptions {
     #[new]
+    #[pyo3(signature = (pattern, shuffles = None, flips = None, apply_all = None, chance = None, node_settings = None))]
     fn new(
         pattern: Pattern,
         shuffles: Option<Vec<[usize; 3]>>,
@@ -180,7 +181,7 @@ impl Sequence {
 }
 
 #[derive(FromPyObject)]
-enum Pattern<'a> {
+pub enum Pattern<'a> {
     String(String),
     TwoStrings(String, String),
     TwoLists(Bound<'a, PyTuple>, Bound<'a, PyTuple>),
@@ -249,6 +250,7 @@ pub enum Array<'a> {
 }
 
 #[pyfunction]
+#[pyo3(signature = (array, node, callback = None))]
 pub fn rep(array: Array, node: PythonNode, callback: Option<&Bound<PyFunction>>) -> PyResult<()> {
     let mut array_2d = match &array {
         Array::D2(array) => {

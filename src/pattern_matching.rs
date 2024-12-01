@@ -36,7 +36,7 @@ pub struct Permutation {
     //regex: regex::bytes::Regex,
     pub bespoke_regex: bespoke_regex::BespokeRegex,
     pattern_len: usize,
-    pub from: Array2D,
+    //pub from: Array2D,
     pub to: Array2D,
 }
 
@@ -86,7 +86,7 @@ impl Permutation {
             */
             bespoke_regex: bespoke_regex::BespokeRegex::new(&bespoke_values),
             to: pair.to,
-            from: pair.from,
+            //from: pair.from,
         }
     }
 

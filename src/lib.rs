@@ -89,6 +89,7 @@ struct NodeSettings {
 #[pymethods]
 impl NodeSettings {
     #[new]
+    #[pyo3(signature =  (count = None))]
     fn new(count: Option<u32>) -> Self {
         Self { count }
     }
@@ -151,7 +152,7 @@ fn execute_root_node<'a>(
         interactions.push(replacment_interactions);
     }
 
-    let unique_values = get_unique_values(&state.inner);
+    let unique_values = get_unique_values(state.inner);
 
     replaces.par_iter_mut().for_each(|rep| {
         // Don't bother searching for patterns that don't exist in the state.
@@ -170,7 +171,7 @@ fn execute_root_node<'a>(
         &interactions,
         rng,
         &mut updated,
-        callback.as_ref(),
+        callback.as_deref(),
     );
 }
 
@@ -181,7 +182,7 @@ fn execute_node<'a>(
     interactions: &[Vec<bool>],
     rng: &mut SmallRng,
     updated: &mut Vec<u32>,
-    callback: Option<&Box<dyn Fn(u32) + 'a>>,
+    callback: Option<&(dyn Fn(u32) + 'a)>,
 ) -> bool {
     match &mut node.ty {
         IndexNodeTy::Rule(index) => {
@@ -685,15 +686,17 @@ impl Replace {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct BoundingBox {
     min: [usize; 3],
     max: [usize; 3],
 }
 
+#[allow(dead_code)]
 impl BoundingBox {
     fn new() -> Self {
         Self {
-            min: [usize::max_value(); 3],
+            min: [usize::MAX; 3],
             max: [0; 3],
         }
     }
