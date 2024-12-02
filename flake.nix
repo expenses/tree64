@@ -58,6 +58,7 @@
               inherit voxypy;
             };
           };
+          usd2gltf = with pkgs; writeShellScriptBin "usd2gltf" "${blender}/bin/blender --background -P ${./convert.py} -- $@";
         };
         devShells.default = with pkgs;
           mkShell {
