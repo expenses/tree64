@@ -348,7 +348,7 @@ impl block_mesh::MergeVoxel for ByteVoxel {
 }
 
 #[pyfunction]
-pub fn mesh_voxels(array: Array) -> (Vec<[f32; 3]>, Vec<u8>) {
+pub fn mesh_voxels(array: Array) -> (Vec<[f32; 3]>, Vec<u8>, Vec<u32>) {
     let (slice, dims) = match &array {
         Array::D2(array) => (
             array.as_slice().unwrap(),
@@ -377,9 +377,12 @@ pub fn mesh_voxels(array: Array) -> (Vec<[f32; 3]>, Vec<u8>) {
 
     let mut positions = Vec::new();
     let mut colours = Vec::new();
+    let mut indices = Vec::new();
 
     for (i, group) in buffer.quads.groups.into_iter().enumerate() {
         let face = block_mesh::RIGHT_HANDED_Y_UP_CONFIG.faces[i];
+        
+        let flip_winding = i==1 ||i==2||i==3;
 
         for quad in group.into_iter() {
             let index =
@@ -391,11 +394,21 @@ pub fn mesh_voxels(array: Array) -> (Vec<[f32; 3]>, Vec<u8>) {
 
             colours.push(value);
 
+            let index = positions.len() as u32;
+            if flip_winding {
+
+ indices.extend_from_slice(
+     &[index, index + 2, index +3, index+1]);
+            } else{
+ indices.extend_from_slice(
+ &[index, index + 1, index +3, index+2]);
+            }
+
             for position in face_positions {
                 positions.push(position);
             }
         }
     }
 
-    (positions, colours)
+    (positions, colours, indices)
 }

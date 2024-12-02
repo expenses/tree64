@@ -24,4 +24,4 @@ rep(
     ),
     callback=lambda index: ffmpeg.write(arr[2]),
 )
-save_as_voxels("out.vox", arr)
+write_usd("matrix.usdc", arr)

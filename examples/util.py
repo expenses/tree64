@@ -122,7 +122,7 @@ class CompressedVoxelsOutput:
 def add_to_usd_stage(prim_path, stage, arr):
     from pxr import Sdf, UsdGeom
 
-    positions, colours = mesh_voxels(np.pad(arr, 1))
+    positions, colours, indices = mesh_voxels(np.pad(arr, 1))
     colours = [[v / 255.0 for v in PALETTE[x]] for x in colours]
     prim = stage.DefinePrim(prim_path, "Mesh")
     prim.CreateAttribute("points", Sdf.ValueTypeNames.Float3Array).Set(positions)
@@ -138,12 +138,6 @@ def add_to_usd_stage(prim_path, stage, arr):
     prim.CreateAttribute("faceVertexCounts", Sdf.ValueTypeNames.IntArray).Set(
         [4] * num_faces
     )
-
-    indices = [
-        index
-        for f in range(num_faces)
-        for index in (f * 4, f * 4 + 1, f * 4 + 3, f * 4 + 2)
-    ]
 
     prim.CreateAttribute("faceVertexIndices", Sdf.ValueTypeNames.IntArray).Set(indices)
 

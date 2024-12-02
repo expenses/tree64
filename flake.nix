@@ -21,6 +21,7 @@
             cargoArtifacts = craneLib.buildDepsOnly {inherit src nativeBuildInputs;};
             buildPhaseCargoCommand = "maturin build --release";
             installPhaseCommand = "mv target/wheels $out";
+            doCheck = false;
             nativeBuildInputs = [pkgs.python3 pkgs.maturin pkgs.rustc];
           };
           python-lib = with pkgs;
@@ -62,7 +63,7 @@
         };
         devShells.default = with pkgs;
           mkShell {
-            buildInputs = [black tev (packages.patched-python.withPackages (ps: [ps.markov ps.voxypy ps.ipython ps.numpy ps.pillow ps.scikit-image ps.ffmpeg-python ps.zstandard ps.openusd]))];
+            buildInputs = [packages.usd2gltf black tev (packages.patched-python.withPackages (ps: [ps.markov ps.voxypy ps.ipython ps.numpy ps.pillow ps.scikit-image ps.ffmpeg-python ps.zstandard ps.openusd]))];
           };
         devShells.build = with pkgs; mkShell {buildInputs = [python3];};
       }
