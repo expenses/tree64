@@ -14,6 +14,7 @@
       system: let
         pkgs = nixpkgs.legacyPackages.${system};
         craneLib = crane.mkLib pkgs;
+        python-deps = ps: [ps.ipython ps.numpy ps.pillow ps.scikit-image ps.ffmpeg-python ps.zstandard ps.openusd];
       in rec {
         packages = rec {
           wheel = craneLib.buildPackage rec {
@@ -63,9 +64,26 @@
         };
         devShells.default = with pkgs;
           mkShell {
-            buildInputs = [packages.usd2gltf black tev (packages.patched-python.withPackages (ps: [ps.markov ps.voxypy ps.ipython ps.numpy ps.pillow ps.scikit-image ps.ffmpeg-python ps.zstandard ps.openusd]))];
+            buildInputs = [packages.usd2gltf black tev (packages.patched-python.withPackages (ps: [ps.markov ps.voxypy] ++ (python-deps ps)))];
           };
-        devShells.build = with pkgs; mkShell {buildInputs = [python3];};
+        devShells.build = with pkgs;
+          mkShell {
+            buildInputs =
+              [
+                python3
+                python3.pkgs.pip
+                maturin #nanomsg-py
+              ]
+              ++ (python-deps python3.pkgs);
+            shellHook = ''
+              # Tells pip to put packages into $PIP_PREFIX instead of the usual locations.
+              # See https://pip.pypa.io/en/stable/user_guide/#environment-variables.
+              export PIP_PREFIX=$(pwd)/_build/pip_packages
+              export PYTHONPATH="$PIP_PREFIX/${pkgs.python3.sitePackages}:$PYTHONPATH"
+              export PATH="$PIP_PREFIX/bin:$PATH"
+              unset SOURCE_DATE_EPOCH
+            '';
+          };
       }
     );
 }

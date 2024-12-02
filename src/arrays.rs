@@ -54,12 +54,6 @@ impl Array2D<Vec<u8>> {
         self.inner.chunks_exact(self.width * self.height)
     }
 
-    /*pub fn rows(&self) -> impl Iterator<Item = (usize, &[u8])> {
-        self.layers()
-            .enumerate()
-            .flat_map(|(z, layer)| layer.chunks_exact(self.width).map(move |row| (z, row)))
-    }*/
-
     #[inline]
     pub fn values(&self) -> impl Iterator<Item = (usize, usize, usize, u8)> + '_ {
         self.layers()

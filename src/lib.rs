@@ -654,11 +654,7 @@ impl Replace {
     }
 
     fn update_matches(&mut self, state: &Array2D<&mut [u8]>, updated_cells: &[u32]) {
-        //let mut bb = BoundingBox::new();
-
         for &index in updated_cells {
-            //bb.insert(index as _, state.width(), state.height());
-
             for (i, permutation) in self.permutations.iter().enumerate() {
                 for z in 0..permutation.depth() {
                     for y in 0..permutation.height() {
@@ -680,37 +676,6 @@ impl Replace {
                     }
                 }
             }
-
-            //dbg!(updated_cells.len() * self.permutations[0].from.to.len());
         }
-    }
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-struct BoundingBox {
-    min: [usize; 3],
-    max: [usize; 3],
-}
-
-#[allow(dead_code)]
-impl BoundingBox {
-    fn new() -> Self {
-        Self {
-            min: [usize::MAX; 3],
-            max: [0; 3],
-        }
-    }
-
-    fn insert(&mut self, index: usize, state_width: usize, state_height: usize) {
-        let (x, y, z) = arrays::decompose(index, state_width, state_height);
-
-        self.min[0] = self.min[0].min(x);
-        self.min[1] = self.min[1].min(y);
-        self.min[2] = self.min[2].min(z);
-
-        self.max[0] = self.max[0].max(x);
-        self.max[1] = self.max[1].max(y);
-        self.max[2] = self.max[2].max(z);
     }
 }
