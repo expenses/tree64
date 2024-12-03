@@ -8,19 +8,19 @@ ffmpeg = FfmpegWriter("out.avi", (dim,dim), skip=300)
 
 def sand(c):
     return (
-        PatternWithOptions(
+        Pattern(
             f"0={c}",
             apply_all=True,
             chance=0.1,
             node_settings=NodeSettings(count=1),
         ),
         Markov(
-            PatternWithOptions(
+            Pattern(
                 f"{c}0,{c}0=00,{c}{c}",
                 shuffles=NO_SHUFFLES,
                 flips=[[False, False, False], [True, False, False]],
             ),
-            PatternWithOptions(
+            Pattern(
                 f"{c},0=0,{c}",
                 flips=NO_FLIPS,
                 shuffles=NO_SHUFFLES,

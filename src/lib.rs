@@ -382,7 +382,7 @@ fn markov(_py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python::colour_image, m)?)?;
     m.add_function(wrap_pyfunction!(python::mesh_voxels, m)?)?;
     m.add_function(wrap_pyfunction!(index_for_colour, m)?)?;
-    m.add_class::<python::PatternWithOptions>()?;
+    m.add_class::<python::Pattern>()?;
     m.add_class::<python::TevClient>()?;
     m.add_class::<python::One>()?;
     m.add_class::<python::Markov>()?;
@@ -416,34 +416,6 @@ fn sample_until_valid<T, F: FnMut(&T, &mut SmallRng) -> bool>(
     }
 
     None
-}
-
-fn pattern_from_chars(pattern: &mut Vec<u8>, row_width: &mut Option<usize>, chars: &str) -> usize {
-    for c in chars.chars() {
-        if c == ' ' || c == '\n' {
-            continue;
-        }
-
-        if c == ',' {
-            if (*row_width).is_none() {
-                *row_width = Some(pattern.len());
-            }
-            continue;
-        }
-
-        pattern.push(match c {
-            '*' => WILDCARD,
-            _ => match c.to_digit(10) {
-                Some(digit) => digit as u8,
-                None => PALETTE.iter().position(|&v| v == c).unwrap() as _,
-            },
-        });
-    }
-
-    if (*row_width).is_none() {
-        *row_width = Some(pattern.len());
-    }
-    (*row_width).unwrap_or(pattern.len())
 }
 
 // todo: paths, convolutions, do in python. rrmove callback index.

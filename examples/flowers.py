@@ -13,7 +13,7 @@ rep(
     arr,
     Markov(
         One(
-            PatternWithOptions(
+            Pattern(
                 """
                     UUU,
                     UUU,
@@ -26,7 +26,7 @@ rep(
                 shuffles=NO_SHUFFLES,
                 flips=NO_FLIPS,
             ),
-            PatternWithOptions(
+            Pattern(
                 """
                     UUU,
                     UUU,
@@ -43,7 +43,7 @@ rep(
                 shuffles=NO_SHUFFLES,
                 flips=[[False, False, False], [True, False, False]],
             ),
-            PatternWithOptions(
+            Pattern(
                 """
                     UUUUU,
                     UUUUU,
@@ -60,7 +60,7 @@ rep(
                 shuffles=NO_SHUFFLES,
                 flips=NO_FLIPS,
             ),
-            PatternWithOptions(
+            Pattern(
                 """
                 UUU,
                 UPU,
@@ -76,7 +76,7 @@ rep(
                 flips=NO_FLIPS,
             ),
         ),
-        PatternWithOptions(
+        Pattern(
             """
             UUUUU,
             UUUUU,

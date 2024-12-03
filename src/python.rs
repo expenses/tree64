@@ -71,7 +71,7 @@ const ALL_SHUFFLES: [[usize; 3]; 6] = [
 
 #[pyclass]
 #[derive(Clone)]
-pub struct PatternWithOptions {
+pub struct Pattern {
     from: Array2D,
     to: Array2D,
     options: PatternOptions,
@@ -85,9 +85,9 @@ pub struct PatternOptions {
     settings: ReplaceSettings,
     node_settings: NodeSettings,
 }
-impl PatternWithOptions {
-    fn new_from_pattern(pattern: Pattern) -> PyResult<Self> {
-        let (from, to) = pattern.strings()?;
+impl Pattern {
+    fn new_from_pattern(pattern: PatternInput) -> PyResult<Self> {
+        let (from, to) = pattern.arrays()?;
         Ok(Self {
             from,
             to,
@@ -106,11 +106,11 @@ impl PatternWithOptions {
 }
 
 #[pymethods]
-impl PatternWithOptions {
+impl Pattern {
     #[new]
     #[pyo3(signature = (pattern, shuffles = None, flips = None, apply_all = None, chance = None, node_settings = None))]
     fn new(
-        pattern: Pattern,
+        pattern: PatternInput,
         shuffles: Option<Vec<[usize; 3]>>,
         flips: Option<Vec<[bool; 3]>>,
         apply_all: Option<bool>,
@@ -128,7 +128,7 @@ impl PatternWithOptions {
     }
 }
 
-type PatternList = Vec<Node<PatternWithOptions>>;
+type PatternList = Vec<Node<Pattern>>;
 
 fn parse_pattern_list(list: Bound<PyTuple>) -> PyResult<PatternList> {
     list.iter()
@@ -136,7 +136,7 @@ fn parse_pattern_list(list: Bound<PyTuple>) -> PyResult<PatternList> {
             item.extract::<PythonNode>()
                 .and_then(|python_node| python_node.convert())
         })
-        .collect::<PyResult<Vec<Node<PatternWithOptions>>>>()
+        .collect::<PyResult<Vec<Node<Pattern>>>>()
 }
 
 #[derive(Clone)]
@@ -188,21 +188,39 @@ impl Sequence {
 }
 
 #[derive(FromPyObject)]
-pub enum Pattern {
+pub enum PatternInput<'a> {
     String(String),
     TwoStrings(String, String),
-    //TwoArrays(numpy::PyArray3<'a, u8>, numpy::PyArray3<'a, u8>),
+    TwoArrays(Array<'a>, Array<'a>),
 }
 
-impl Pattern {
-    fn strings(self) -> PyResult<(Array2D, Array2D)> {
+impl<'a> PatternInput<'a> {
+    fn arrays(self) -> PyResult<(Array2D, Array2D)> {
         match self {
             Self::String(string) => {
                 let (from, to) = split_pattern_string(&string)?;
-                Self::TwoStrings(from.to_string(), to.to_string()).strings()
+                Self::TwoStrings(from.to_string(), to.to_string()).arrays()
             }
             Self::TwoStrings(from, to) => Ok((string_to_array(&from), string_to_array(&to))),
+            Self::TwoArrays(from, to) => Ok((array_to_owned(from), array_to_owned(to))),
         }
+    }
+}
+
+fn array_to_owned(array: Array) -> Array2D {
+    match array {
+        Array::D2(array) => Array2D::new_from(
+            array.as_slice().unwrap().to_vec(),
+            array.dims()[1],
+            array.dims()[0],
+            1,
+        ),
+        Array::D3(array) => Array2D::new_from(
+            array.as_slice().unwrap().to_vec(),
+            array.dims()[2],
+            array.dims()[1],
+            array.dims()[0],
+        ),
     }
 }
 
@@ -240,16 +258,16 @@ fn string_to_array(string: &str) -> Array2D {
 }
 
 #[derive(FromPyObject)]
-pub enum PythonNode {
+pub enum PythonNode<'a> {
     One(One),
     Markov(Markov),
     Sequence(Sequence),
-    Pattern(Pattern),
-    PatternWithOptions(PatternWithOptions),
+    Pattern(PatternInput<'a>),
+    PatternWithOptions(Pattern),
 }
 
-impl PythonNode {
-    fn convert(self) -> PyResult<Node<PatternWithOptions>> {
+impl<'a> PythonNode<'a> {
+    fn convert(self) -> PyResult<Node<Pattern>> {
         Ok(match self {
             Self::One(list) => Node {
                 settings: list.1,
@@ -264,8 +282,7 @@ impl PythonNode {
                 ty: NodeTy::Sequence(list.0),
             },
             Self::Pattern(pattern) => {
-                Self::PatternWithOptions(PatternWithOptions::new_from_pattern(pattern)?)
-                    .convert()?
+                Self::PatternWithOptions(Pattern::new_from_pattern(pattern)?).convert()?
             }
             Self::PatternWithOptions(pattern) => Node {
                 settings: pattern.options.node_settings.clone(),
