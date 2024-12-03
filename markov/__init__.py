@@ -2,6 +2,11 @@ from markov import markov
 from markov.markov import *
 import numpy as np
 
+ONCE = NodeSettings(count=1)
+
+def all(pattern, **kwargs):
+    return Pattern(pattern, apply_all=True, **kwargs)
+
 def rep(array, node, callback=None, writer=None, inplace=True):
     if not inplace:
         array = array.copy()
@@ -18,6 +23,12 @@ Y_IS_Z = [[0, 2, 1], [2, 0, 1]]
 TOGGLE_X = [
     [False, False, False],
     [True, False, False],
+]
+TOGGLE_XY = [
+    [False, False, False],
+    [True, False, False],
+    [False, True, False],
+    [True, True, False],
 ]
 ROT_AROUND_Z = [[0, 1, 2], [1, 0, 2]]
 
@@ -82,11 +93,11 @@ def save_image(filename, arr, palette=PICO8_PALETTE):
     colour_image(buffer, arr, palette)
     Image.fromarray(buffer).save(filename)
 
-def add_to_usd_stage(prim_path, stage, arr, time=1):
+def add_to_usd_stage(prim_path, stage, arr, time=1, palette=PICO8_PALETTE):
     from pxr import Sdf, UsdGeom
 
     positions, colours, indices = mesh_voxels(np.pad(arr, 1))
-    colours = [PICO8_PALETTE.linear[x] for x in colours]
+    colours = [palette.linear[x] for x in colours]
     prim = stage.DefinePrim(prim_path, "Mesh")
     prim.CreateAttribute("points", Sdf.ValueTypeNames.Float3Array).Set(positions, time)
 
@@ -112,6 +123,7 @@ def write_usd(filename, arr):
     stage = Usd.Stage.CreateNew(filename)
     stage.SetMetadata("upAxis", "Z")
     add_to_usd_stage("/mesh", stage, arr)
+    stage.Save()
 
 
 class UsdWriter:
@@ -133,3 +145,4 @@ class UsdWriter:
         print(self.frameindex)
         add_to_usd_stage("/arr", self.stage, arr, time=self.frameindex)
         self.stage.SetEndTimeCode(self.frameindex)
+        self.stage.Save()
