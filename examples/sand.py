@@ -3,7 +3,7 @@ from util import *
 
 dim = 128
 arr = np.zeros((dim, dim), dtype=np.uint8)
-ffmpeg = FfmpegWriter("out.avi", (dim,dim), skip=300)
+ffmpeg = FfmpegWriter("out.avi", (dim, dim), skip=300)
 
 
 def sand(c):
