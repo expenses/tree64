@@ -112,6 +112,7 @@ def write_usd(filename, arr):
     stage = Usd.Stage.CreateNew(filename)
     stage.SetMetadata("upAxis", "Z")
     add_to_usd_stage("/mesh", stage, arr)
+    stage.Save()
 
 
 class UsdWriter:
