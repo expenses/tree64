@@ -321,54 +321,24 @@ pub const PALETTE: [char; 16] = [
     'F', // Light peach
 ];
 
-// https://pico-8.fandom.com/wiki/Palette
-pub const SRGB_PALETTE_VALUES: [[u8; 3]; 16] = [
-    [0, 0, 0],
-    [255, 241, 232],
-    [255, 0, 7],
-    [29, 43, 83],
-    [126, 37, 83],
-    [0, 135, 81],
-    [171, 82, 54],
-    [95, 87, 79],
-    [194, 195, 199],
-    [255, 163, 0],
-    [255, 236, 39],
-    [0, 228, 54],
-    [41, 173, 255],
-    [131, 118, 156],
-    [255, 119, 168],
-    [255, 204, 170],
-];
-
+#[pyfunction]
 fn index_for_colour(colour: char) -> Option<u8> {
     PALETTE.iter().position(|&c| c == colour).map(|v| v as u8)
-}
-
-fn srgb_to_linear(value: u8) -> f32 {
-    let value = value as f32 / 255.0;
-
-    if value <= 0.04045 {
-        value / 12.92
-    } else {
-        ((value + 0.055) / 1.055).powf(2.4)
-    }
 }
 
 pub fn send_image(
     client: &mut tev_client::TevClient,
     values: &mut Vec<f32>,
+    linear_palette: &[[f32; 3]],
     name: &str,
     slice: &[u8],
     width: u32,
     height: u32,
 ) {
-    let colours = SRGB_PALETTE_VALUES.map(|v| v.map(srgb_to_linear));
-
     values.resize(slice.len() * 3, 0.0);
 
     for i in 0..slice.len() {
-        let colour = &colours[slice[i] as usize];
+        let colour = &linear_palette[slice[i] as usize];
         values[i * 3..(i + 1) * 3].copy_from_slice(colour);
     }
 
@@ -400,14 +370,15 @@ pub fn send_image(
 #[pymodule]
 fn markov(_py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python::rep, m)?)?;
-    m.add_function(wrap_pyfunction!(python::index_for_colour, m)?)?;
     m.add_function(wrap_pyfunction!(python::colour_image, m)?)?;
     m.add_function(wrap_pyfunction!(python::mesh_voxels, m)?)?;
+    m.add_function(wrap_pyfunction!(index_for_colour, m)?)?;
     m.add_class::<python::PatternWithOptions>()?;
     m.add_class::<python::TevClient>()?;
     m.add_class::<python::One>()?;
     m.add_class::<python::Markov>()?;
     m.add_class::<python::Sequence>()?;
+    m.add_class::<python::Palette>()?;
     m.add_class::<NodeSettings>()?;
     Ok(())
 }
@@ -455,7 +426,7 @@ fn pattern_from_chars(pattern: &mut Vec<u8>, row_width: &mut Option<usize>, char
             '*' => WILDCARD,
             _ => match c.to_digit(10) {
                 Some(digit) => digit as u8,
-                None => index_for_colour(c).unwrap(),
+                None => PALETTE.iter().position(|&v| v == c).unwrap() as _,
             },
         });
     }

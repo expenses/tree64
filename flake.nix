@@ -63,7 +63,7 @@
         };
         devShells.default = with pkgs;
           mkShell {
-            buildInputs = [packages.usd2gltf black tev (packages.patched-python.withPackages (ps: [ps.markov ps.voxypy ps.ipython ps.numpy ps.pillow ps.scikit-image ps.ffmpeg-python ps.zstandard ps.openusd]))];
+            buildInputs = [packages.usd2gltf black tev openusd (packages.patched-python.withPackages (ps: [ps.markov ps.voxypy ps.ipython ps.numpy ps.pillow ps.scikit-image ps.ffmpeg-python ps.zstandard ps.openusd]))];
           };
         devShells.build = with pkgs; mkShell {buildInputs = [python3];};
       }

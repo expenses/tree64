@@ -15,30 +15,73 @@ TOGGLE_X = [
 ]
 ROT_AROUND_Z = [[0, 1, 2], [1, 0, 2]]
 
-PALETTE = [
-    [0, 0, 0],
-    [255, 241, 232],
-    [255, 0, 7],
-    [29, 43, 83],
-    [126, 37, 83],
-    [0, 135, 81],
-    [171, 82, 54],
-    [95, 87, 79],
-    [194, 195, 199],
-    [255, 163, 0],
-    [255, 236, 39],
-    [0, 228, 54],
-    [41, 173, 255],
-    [131, 118, 156],
-    [255, 119, 168],
-    [255, 204, 170],
+PALETTE_LETTERS = [
+    'B', # Black
+    'W', # White
+    'R', # Red
+    'I', # Dark blue
+    'P', # Dark purple
+    'E', # Dark green
+    'N', # Brown
+    'D', # Dark grey (Dead)
+    'A', # Light grey (Alive)
+    'O', # Orange
+    'Y', # Yellow
+    'G', # Green
+    'U', # Blue
+    'S', # Lavender
+    'K', # Pink
+    'F', # Light peach
 ]
 
+# https://pico-8.fandom.com/wiki/Palette
+PALETTE = Palette(
+    [
+        [0, 0, 0],
+        [255, 241, 232],
+        [255, 0, 7],
+        [29, 43, 83],
+        [126, 37, 83],
+        [0, 135, 81],
+        [171, 82, 54],
+        [95, 87, 79],
+        [194, 195, 199],
+        [255, 163, 0],
+        [255, 236, 39],
+        [0, 228, 54],
+        [41, 173, 255],
+        [131, 118, 156],
+        [255, 119, 168],
+        [255, 204, 170],
+    ]
+)
+
+def array_from_chars(chars):
+    width = None
+    array = []
+    for char in chars:
+        if char == ' ' or char == '\n':
+            continue
+        elif char == ',':
+            if width == None:
+                width = len(array)
+        elif char == '*':
+            array.append(255)
+        else:
+            try:
+                array.append(int(char))
+            except ValueError:
+                array.append(PALETTE_LETTERS.index(char))
+
+    if width == None:
+        return np.array(array)
+    else:
+        return np.reshape(array, (-1, width))
 
 def save_image(filename, arr):
     width, height = arr.shape
     buffer = np.zeros((width, height, 3), dtype=np.uint8)
-    colour_image(buffer, arr)
+    colour_image(buffer, arr, PALETTE)
     Image.fromarray(buffer).save(filename)
 
 
@@ -83,7 +126,7 @@ class FfmpegOutput:
 
     def write(self, array):
         if self.index % self.skip == 0:
-            colour_image(self.buffer, array)
+            colour_image(self.buffer, array, PALETTE)
             self.process.stdin.write(self.buffer)
         self.index += 1
 
@@ -97,7 +140,9 @@ def save_as_voxels(filename, arr):
     entity = Entity(data=arr.astype(int))
 
     # Copied from source code.
-    palette = [(r, g, b, 255 if i > 0 else 0) for i, (r, g, b) in enumerate(PALETTE)]
+    palette = [
+        (r, g, b, 255 if i > 0 else 0) for i, (r, g, b) in enumerate(PALETTE.srgb)
+    ]
 
     entity.set_palette(palette)
     entity.save(filename)
@@ -119,27 +164,29 @@ class CompressedVoxelsOutput:
         self.file.close()
 
 
-def add_to_usd_stage(prim_path, stage, arr):
+def add_to_usd_stage(prim_path, stage, arr, time=1):
     from pxr import Sdf, UsdGeom
 
     positions, colours, indices = mesh_voxels(np.pad(arr, 1))
-    colours = [[v / 255.0 for v in PALETTE[x]] for x in colours]
+    colours = [PALETTE.linear[x] for x in colours]
     prim = stage.DefinePrim(prim_path, "Mesh")
-    prim.CreateAttribute("points", Sdf.ValueTypeNames.Float3Array).Set(positions)
+    prim.CreateAttribute("points", Sdf.ValueTypeNames.Float3Array).Set(positions, time)
 
     colours_attr = prim.CreateAttribute(
         "primvars:displayColor", Sdf.ValueTypeNames.Color3fArray
     )
-    colours_attr.Set(colours)
+    colours_attr.Set(colours, time)
     UsdGeom.Primvar(colours_attr).SetInterpolation("uniform")
 
     num_faces = len(positions) // 4
 
     prim.CreateAttribute("faceVertexCounts", Sdf.ValueTypeNames.IntArray).Set(
-        [4] * num_faces
+        [4] * num_faces, time
     )
 
-    prim.CreateAttribute("faceVertexIndices", Sdf.ValueTypeNames.IntArray).Set(indices)
+    prim.CreateAttribute("faceVertexIndices", Sdf.ValueTypeNames.IntArray).Set(
+        indices, time
+    )
 
 
 def write_usd(filename, arr):
@@ -148,4 +195,3 @@ def write_usd(filename, arr):
     stage = Usd.Stage.CreateNew(filename)
     stage.SetMetadata("upAxis", "Z")
     add_to_usd_stage("/mesh", stage, arr)
-    stage.Save()

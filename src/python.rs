@@ -21,13 +21,19 @@ impl TevClient {
         }
     }
 
-    pub fn send_image(&mut self, name: &str, array: numpy::borrow::PyReadonlyArray2<u8>) {
+    pub fn send_image(
+        &mut self,
+        name: &str,
+        array: numpy::borrow::PyReadonlyArray2<u8>,
+        palette: &Palette,
+    ) {
         let dims = array.dims();
         let slice = array.as_slice().unwrap();
 
         super::send_image(
             &mut self.inner,
             &mut self.values,
+            &palette.linear,
             name,
             slice,
             dims[0] as u32,
@@ -301,15 +307,40 @@ pub fn rep(array: Array, node: PythonNode, callback: Option<&Bound<PyFunction>>)
     Ok(())
 }
 
-#[pyfunction]
-pub fn index_for_colour(colour: char) -> Option<u8> {
-    super::index_for_colour(colour)
+fn srgb_to_linear(value: u8) -> f32 {
+    let value = value as f32 / 255.0;
+
+    if value <= 0.04045 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+#[pyclass]
+pub struct Palette {
+    #[pyo3(get)]
+    linear: Vec<[f32; 3]>,
+    #[pyo3(get)]
+    srgb: Vec<[u8; 3]>,
+}
+
+#[pymethods]
+impl Palette {
+    #[new]
+    fn new(srgb: Vec<[u8; 3]>) -> Self {
+        Self {
+            linear: srgb.iter().map(|col| col.map(srgb_to_linear)).collect(),
+            srgb,
+        }
+    }
 }
 
 #[pyfunction]
 pub fn colour_image(
     mut output: numpy::borrow::PyReadwriteArray3<u8>,
     input: numpy::borrow::PyReadonlyArray2<u8>,
+    palette: &Palette,
 ) {
     let input_slice = input.as_slice().unwrap();
     let output_slice = output.as_slice_mut().unwrap();
@@ -319,7 +350,7 @@ pub fn colour_image(
 
     for y in 0..height {
         for x in 0..width {
-            let colour = SRGB_PALETTE_VALUES[input_slice[y * width + x] as usize];
+            let colour = palette.srgb[input_slice[y * width + x] as usize];
             output_slice[(y * width + x) * 3..(y * width + x + 1) * 3].copy_from_slice(&colour);
         }
     }
@@ -381,27 +412,23 @@ pub fn mesh_voxels(array: Array) -> (Vec<[f32; 3]>, Vec<u8>, Vec<u32>) {
 
     for (i, group) in buffer.quads.groups.into_iter().enumerate() {
         let face = block_mesh::RIGHT_HANDED_Y_UP_CONFIG.faces[i];
-        
-        let flip_winding = i==1 ||i==2||i==3;
+
+        let flip_winding = i == 1 || i == 2 || i == 3;
 
         for quad in group.into_iter() {
             let index =
                 quad.minimum[0] + quad.minimum[1] * dims[0] + quad.minimum[2] * dims[0] * dims[1];
             let value = slice[index as usize];
 
-            let quad = block_mesh::geometry::UnorientedQuad::from(quad);
             let face_positions = face.quad_mesh_positions(&quad, 1.0);
 
             colours.push(value);
 
             let index = positions.len() as u32;
             if flip_winding {
-
- indices.extend_from_slice(
-     &[index, index + 2, index +3, index+1]);
-            } else{
- indices.extend_from_slice(
- &[index, index + 1, index +3, index+2]);
+                indices.extend_from_slice(&[index, index + 2, index + 3, index + 1]);
+            } else {
+                indices.extend_from_slice(&[index, index + 1, index + 3, index + 2]);
             }
 
             for position in face_positions {
