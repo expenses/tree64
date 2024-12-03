@@ -30,19 +30,28 @@ enum NodeTy<T> {
     Sequence(Vec<Node<T>>),
 }
 
-fn map_node<T, U, F: Fn(&T) -> U>(node: &Node<T>, map: &F) -> Node<U> {
+fn map_node<T, U, F: Fn(T) -> U>(node: Node<T>, map: &F) -> Node<U> {
     Node {
-        ty: match &node.ty {
+        ty: match node.ty {
             NodeTy::Rule(rule) => NodeTy::Rule(map(rule)),
-            NodeTy::Markov(children) => {
-                NodeTy::Markov(children.iter().map(|node| map_node(node, map)).collect())
-            }
-            NodeTy::One(children) => {
-                NodeTy::One(children.iter().map(|node| map_node(node, map)).collect())
-            }
-            NodeTy::Sequence(children) => {
-                NodeTy::Sequence(children.iter().map(|node| map_node(node, map)).collect())
-            }
+            NodeTy::Markov(children) => NodeTy::Markov(
+                children
+                    .into_iter()
+                    .map(|node| map_node(node, map))
+                    .collect(),
+            ),
+            NodeTy::One(children) => NodeTy::One(
+                children
+                    .into_iter()
+                    .map(|node| map_node(node, map))
+                    .collect(),
+            ),
+            NodeTy::Sequence(children) => NodeTy::Sequence(
+                children
+                    .into_iter()
+                    .map(|node| map_node(node, map))
+                    .collect(),
+            ),
         },
         settings: node.settings.clone(),
     }
@@ -458,30 +467,25 @@ struct Replace {
 
 impl Replace {
     fn new(
-        from: &[u8],
-        to: &mut [u8],
-        width: usize,
+        from: Array2D,
+        mut to: Array2D,
         shuffles: &[[usize; 3]],
         flips: &[[bool; 3]],
         settings: ReplaceSettings,
         state: &Array2D<&mut [u8]>,
-        depth: usize,
     ) -> Self {
-        let height = from.len() / width / depth;
-        dbg!(depth, height, width, from.len());
-        let dims = [width, height, depth];
+        let dims = from.dims();
+        let [width, height, depth] = dims;
+        assert_eq!(from.dims(), to.dims());
 
         // Small optimization to reduce the interaction between patterns.
-        for i in 0..from.len() {
-            if from[i] == to[i] {
-                to[i] = WILDCARD;
+        for i in 0..from.inner.len() {
+            if from.inner[i] == to.inner[i] {
+                to.inner[i] = WILDCARD;
             }
         }
 
-        let pair = ArrayPair {
-            to: Array2D::new(to, width, height),
-            from: Array2D::new(from, width, height),
-        };
+        let pair = ArrayPair { to, from };
 
         let from_values: HashSet<u8> = pair
             .from
@@ -530,43 +534,6 @@ impl Replace {
             reinit: false,
             settings,
         }
-    }
-
-    fn from_layers(
-        from_layers: &[String],
-        to_layers: &[String],
-        shuffles: &[[usize; 3]],
-        flips: &[[bool; 3]],
-        settings: ReplaceSettings,
-        state: &Array2D<&mut [u8]>,
-    ) -> Self {
-        let mut from_vec = Vec::new();
-        let mut to_vec = Vec::new();
-        let mut from_width = None;
-        let mut to_width = None;
-
-        let mut from_width_o = None;
-        let mut to_width_o = None;
-
-        for from in from_layers {
-            from_width = Some(pattern_from_chars(&mut from_vec, &mut from_width_o, from));
-        }
-
-        for to in to_layers {
-            to_width = Some(pattern_from_chars(&mut to_vec, &mut to_width_o, to));
-        }
-
-        assert_eq!(from_width, to_width);
-        Self::new(
-            &from_vec,
-            &mut to_vec,
-            from_width.unwrap(),
-            shuffles,
-            flips,
-            settings,
-            state,
-            from_layers.len(),
-        )
     }
 
     fn store_initial_matches(&mut self, state: &Array2D<&mut [u8]>) {

@@ -16,6 +16,10 @@ impl<T> Array2D<T> {
         }
     }
 
+    pub fn dims(&self) -> [usize; 3] {
+        [self.width(), self.height(), self.depth()]
+    }
+
     pub fn width(&self) -> usize {
         self.width
     }
@@ -41,15 +45,6 @@ impl<T> Array2D<T> {
 }
 
 impl Array2D<Vec<u8>> {
-    pub fn new(slice: &[u8], width: usize, height: usize) -> Self {
-        Self {
-            inner: slice.to_owned(),
-            width,
-            height,
-            depth: slice.len() / width / height,
-        }
-    }
-
     pub fn layers(&self) -> impl Iterator<Item = &[u8]> {
         self.inner.chunks_exact(self.width * self.height)
     }

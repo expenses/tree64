@@ -3,6 +3,7 @@ use numpy::PyArrayMethods;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::PyTupleMethods;
 use pyo3::types::{PyFunction, PyTuple};
+
 #[pyclass]
 pub struct TevClient {
     inner: tev_client::TevClient,
@@ -71,8 +72,8 @@ const ALL_SHUFFLES: [[usize; 3]; 6] = [
 #[pyclass]
 #[derive(Clone)]
 pub struct PatternWithOptions {
-    from: Vec<String>,
-    to: Vec<String>,
+    from: Array2D,
+    to: Array2D,
     options: PatternOptions,
 }
 
@@ -187,42 +188,67 @@ impl Sequence {
 }
 
 #[derive(FromPyObject)]
-pub enum Pattern<'a> {
+pub enum Pattern {
     String(String),
     TwoStrings(String, String),
-    TwoLists(Bound<'a, PyTuple>, Bound<'a, PyTuple>),
+    //TwoArrays(numpy::PyArray3<'a, u8>, numpy::PyArray3<'a, u8>),
 }
 
-impl<'a> Pattern<'a> {
-    fn strings(self) -> PyResult<(Vec<String>, Vec<String>)> {
+impl Pattern {
+    fn strings(self) -> PyResult<(Array2D, Array2D)> {
         match self {
             Self::String(string) => {
                 let (from, to) = split_pattern_string(&string)?;
-                Ok((vec![from.to_string()], vec![to.to_string()]))
+                Self::TwoStrings(from.to_string(), to.to_string()).strings()
             }
-            Self::TwoLists(from, to) => Ok((
-                from.iter()
-                    .map(|from| from.extract::<String>())
-                    .collect::<PyResult<Vec<_>>>()?,
-                to.iter()
-                    .map(|to| to.extract::<String>())
-                    .collect::<PyResult<Vec<_>>>()?,
-            )),
-            Self::TwoStrings(from, to) => Ok((vec![from], vec![to])),
+            Self::TwoStrings(from, to) => Ok((string_to_array(&from), string_to_array(&to))),
         }
     }
 }
 
+fn string_to_array(string: &str) -> Array2D {
+    let mut width = None;
+    let mut list = Vec::new();
+
+    for c in string.chars() {
+        if c == ' ' || c == '\n' {
+            continue;
+        }
+        if c == ',' {
+            if width.is_none() {
+                width = Some(list.len());
+            }
+            continue;
+        }
+
+        list.push(match c {
+            '*' => WILDCARD,
+            _ => match c.to_digit(10) {
+                Some(digit) => digit as u8,
+                None => PALETTE.iter().position(|&v| v == c).unwrap() as _,
+            },
+        });
+    }
+
+    if let Some(width) = width {
+        let height = list.len() / width;
+        Array2D::new_from(list, width, height, 1)
+    } else {
+        let width = list.len();
+        Array2D::new_from(list, width, 1, 1)
+    }
+}
+
 #[derive(FromPyObject)]
-pub enum PythonNode<'a> {
+pub enum PythonNode {
     One(One),
     Markov(Markov),
     Sequence(Sequence),
-    Pattern(Pattern<'a>),
+    Pattern(Pattern),
     PatternWithOptions(PatternWithOptions),
 }
 
-impl<'a> PythonNode<'a> {
+impl PythonNode {
     fn convert(self) -> PyResult<Node<PatternWithOptions>> {
         Ok(match self {
             Self::One(list) => Node {
@@ -283,10 +309,10 @@ pub fn rep(array: Array, node: PythonNode, callback: Option<&Bound<PyFunction>>)
 
     let node = node.convert()?;
 
-    let node = map_node(&node, &|pattern| {
-        Replace::from_layers(
-            &pattern.from,
-            &pattern.to,
+    let node = map_node(node, &|pattern| {
+        Replace::new(
+            pattern.from,
+            pattern.to,
             &pattern.options.shuffles,
             &pattern.options.flips,
             pattern.options.settings.clone(),
@@ -303,7 +329,6 @@ pub fn rep(array: Array, node: PythonNode, callback: Option<&Bound<PyFunction>>)
     });
 
     execute_root_node(node, &mut array_2d, &mut rng, callback);
-
     Ok(())
 }
 
