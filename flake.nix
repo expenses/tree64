@@ -18,7 +18,7 @@
       in rec {
         packages = rec {
           wheel = craneLib.buildPackage rec {
-            src = craneLib.cleanCargoSource ./.;
+            src = pkgs.lib.cleanSource ./.;
             cargoArtifacts = craneLib.buildDepsOnly {inherit src nativeBuildInputs;};
             buildPhaseCargoCommand = "maturin build --release";
             installPhaseCommand = "mv target/wheels $out";
@@ -72,7 +72,7 @@
               [
                 python3
                 python3.pkgs.pip
-                maturin #nanomsg-py
+                maturin
               ]
               ++ (python-deps python3.pkgs);
             shellHook = ''

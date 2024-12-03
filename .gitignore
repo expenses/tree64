@@ -1,5 +1,8 @@
 /target
 *.txt
 perf.data*
-examples/__pycache__
+__pycache__
 env
+result
+ignore
+markov/*.so
