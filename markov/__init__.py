@@ -138,8 +138,9 @@ class UsdWriter:
         self.skip = skip
 
     def write(self, arr):
+        index = self.index
         self.index += 1
-        if self.index % self.skip != 0:
+        if index % self.skip != 0:
             return
         self.frameindex += 1
         print(self.frameindex)
