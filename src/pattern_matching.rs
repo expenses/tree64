@@ -1,4 +1,4 @@
-use crate::arrays::{Array2D, ArrayPair};
+use crate::arrays::{Array3D, ArrayPair};
 use crate::{bespoke_regex, WILDCARD};
 
 pub struct OverlappingRegexIter<'a> {
@@ -35,11 +35,11 @@ impl<'a> Iterator for OverlappingRegexIter<'a> {
 pub struct Permutation {
     pub bespoke_regex: bespoke_regex::BespokeRegex,
     pattern_len: usize,
-    pub to: Array2D,
+    pub to: Array3D,
 }
 
 impl Permutation {
-    pub fn new(state: &Array2D<&mut [u8]>, pair: ArrayPair) -> Self {
+    pub fn new(state: &Array3D<&mut [u8]>, pair: ArrayPair) -> Self {
         let mut bespoke_values = Vec::new();
         let mut pattern_len = 0;
 
@@ -91,7 +91,7 @@ impl Permutation {
     }
 }
 
-pub fn match_pattern(regex: &Permutation, state: &Array2D<&mut [u8]>, index: u32) -> bool {
+pub fn match_pattern(regex: &Permutation, state: &Array3D<&mut [u8]>, index: u32) -> bool {
     let end = index as usize + regex.pattern_len;
 
     if end > state.inner.len()

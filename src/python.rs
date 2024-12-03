@@ -72,8 +72,8 @@ const ALL_SHUFFLES: [[usize; 3]; 6] = [
 #[pyclass]
 #[derive(Clone)]
 pub struct Pattern {
-    from: Array2D,
-    to: Array2D,
+    from: Array3D,
+    to: Array3D,
     options: PatternOptions,
 }
 
@@ -195,7 +195,7 @@ pub enum PatternInput<'a> {
 }
 
 impl<'a> PatternInput<'a> {
-    fn arrays(self) -> PyResult<(Array2D, Array2D)> {
+    fn arrays(self) -> PyResult<(Array3D, Array3D)> {
         match self {
             Self::String(string) => {
                 let (from, to) = split_pattern_string(&string)?;
@@ -207,15 +207,15 @@ impl<'a> PatternInput<'a> {
     }
 }
 
-fn array_to_owned(array: Array) -> Array2D {
+fn array_to_owned(array: Array) -> Array3D {
     match array {
-        Array::D2(array) => Array2D::new_from(
+        Array::D2(array) => Array3D::new_from(
             array.as_slice().unwrap().to_vec(),
             array.dims()[1],
             array.dims()[0],
             1,
         ),
-        Array::D3(array) => Array2D::new_from(
+        Array::D3(array) => Array3D::new_from(
             array.as_slice().unwrap().to_vec(),
             array.dims()[2],
             array.dims()[1],
@@ -224,7 +224,7 @@ fn array_to_owned(array: Array) -> Array2D {
     }
 }
 
-fn string_to_array(string: &str) -> Array2D {
+fn string_to_array(string: &str) -> Array3D {
     let mut width = None;
     let mut list = Vec::new();
 
@@ -250,10 +250,10 @@ fn string_to_array(string: &str) -> Array2D {
 
     if let Some(width) = width {
         let height = list.len() / width;
-        Array2D::new_from(list, width, height, 1)
+        Array3D::new_from(list, width, height, 1)
     } else {
         let width = list.len();
-        Array2D::new_from(list, width, 1, 1)
+        Array3D::new_from(list, width, 1, 1)
     }
 }
 
@@ -303,7 +303,7 @@ pub enum Array<'a> {
 pub fn rep(array: Array, node: PythonNode, callback: Option<&Bound<PyFunction>>) -> PyResult<()> {
     let mut array_2d = match &array {
         Array::D2(array) => {
-            Array2D::new_from(
+            Array3D::new_from(
                 // I don't like doing this, but it's the only way to get a callback
                 // function working afaik.
                 unsafe { array.as_slice_mut().unwrap() },
@@ -313,7 +313,7 @@ pub fn rep(array: Array, node: PythonNode, callback: Option<&Bound<PyFunction>>)
             )
         }
         Array::D3(array) => {
-            Array2D::new_from(
+            Array3D::new_from(
                 // I don't like doing this, but it's the only way to get a callback
                 // function working afaik.
                 unsafe { array.as_slice_mut().unwrap() },

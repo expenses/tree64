@@ -1,12 +1,12 @@
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct Array2D<T = Vec<u8>> {
+pub struct Array3D<T = Vec<u8>> {
     pub inner: T,
     width: usize,
     height: usize,
     depth: usize,
 }
 
-impl<T> Array2D<T> {
+impl<T> Array3D<T> {
     pub fn new_from(array: T, width: usize, height: usize, depth: usize) -> Self {
         Self {
             inner: array,
@@ -44,7 +44,7 @@ impl<T> Array2D<T> {
     }
 }
 
-impl Array2D<Vec<u8>> {
+impl Array3D<Vec<u8>> {
     pub fn layers(&self) -> impl Iterator<Item = &[u8]> {
         self.inner.chunks_exact(self.width * self.height)
     }
@@ -84,8 +84,8 @@ impl Array2D<Vec<u8>> {
         height: usize,
         depth: usize,
         remap: F,
-    ) -> Array2D {
-        let mut array = Array2D {
+    ) -> Array3D {
+        let mut array = Array3D {
             inner: vec![0; width * height * depth],
             width,
             height,
@@ -113,7 +113,7 @@ pub fn decompose(index: usize, width: usize, height: usize) -> (usize, usize, us
     )
 }
 
-impl Array2D<&mut [u8]> {
+impl Array3D<&mut [u8]> {
     pub fn put(&mut self, index: usize, value: u8) {
         self.inner[index] = value;
     }
@@ -121,8 +121,8 @@ impl Array2D<&mut [u8]> {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ArrayPair {
-    pub to: Array2D,
-    pub from: Array2D,
+    pub to: Array3D,
+    pub from: Array3D,
 }
 
 impl ArrayPair {

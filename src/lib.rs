@@ -4,7 +4,7 @@ use rayon::iter::{
 };
 use std::collections::HashSet;
 
-use arrays::{Array2D, ArrayPair};
+use arrays::{Array3D, ArrayPair};
 use pattern_matching::{match_pattern, OverlappingRegexIter, Permutation};
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 
@@ -135,7 +135,7 @@ fn get_unique_values(slice: &[u8]) -> HashSet<u8> {
 
 fn execute_root_node<'a>(
     root: Node<Replace>,
-    state: &mut Array2D<&mut [u8]>,
+    state: &mut Array3D<&mut [u8]>,
     rng: &mut SmallRng,
     callback: Option<Box<dyn Fn(u32) + 'a>>,
 ) {
@@ -186,7 +186,7 @@ fn execute_root_node<'a>(
 
 fn execute_node<'a>(
     node: &mut IndexNode,
-    state: &mut Array2D<&mut [u8]>,
+    state: &mut Array3D<&mut [u8]>,
     replaces: &mut [Replace],
     interactions: &[Vec<bool>],
     rng: &mut SmallRng,
@@ -439,12 +439,12 @@ struct Replace {
 
 impl Replace {
     fn new(
-        from: Array2D,
-        mut to: Array2D,
+        from: Array3D,
+        mut to: Array3D,
         shuffles: &[[usize; 3]],
         flips: &[[bool; 3]],
         settings: ReplaceSettings,
-        state: &Array2D<&mut [u8]>,
+        state: &Array3D<&mut [u8]>,
     ) -> Self {
         let dims = from.dims();
         let [width, height, depth] = dims;
@@ -508,7 +508,7 @@ impl Replace {
         }
     }
 
-    fn store_initial_matches(&mut self, state: &Array2D<&mut [u8]>) {
+    fn store_initial_matches(&mut self, state: &Array3D<&mut [u8]>) {
         self.potential_matches = self
             .permutations
             .par_iter()
@@ -533,7 +533,7 @@ impl Replace {
 
     fn get_match_and_update_state(
         &mut self,
-        state: &mut Array2D<&mut [u8]>,
+        state: &mut Array3D<&mut [u8]>,
         rng: &mut SmallRng,
         updated: &mut Vec<u32>,
     ) -> bool {
@@ -563,7 +563,7 @@ impl Replace {
         true
     }
 
-    fn update_matches(&mut self, state: &Array2D<&mut [u8]>, updated_cells: &[u32]) {
+    fn update_matches(&mut self, state: &Array3D<&mut [u8]>, updated_cells: &[u32]) {
         for &index in updated_cells {
             for (i, permutation) in self.permutations.iter().enumerate() {
                 for z in 0..permutation.depth() {
