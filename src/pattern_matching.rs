@@ -33,16 +33,13 @@ impl<'a> Iterator for OverlappingRegexIter<'a> {
 }
 
 pub struct Permutation {
-    //regex: regex::bytes::Regex,
     pub bespoke_regex: bespoke_regex::BespokeRegex,
     pattern_len: usize,
-    //pub from: Array2D,
     pub to: Array2D,
 }
 
 impl Permutation {
     pub fn new(state: &Array2D<&mut [u8]>, pair: ArrayPair) -> Self {
-        //let mut regex = String::new();
         let mut bespoke_values = Vec::new();
         let mut pattern_len = 0;
 
@@ -63,7 +60,6 @@ impl Permutation {
                 pattern_len += pair.from.width();
 
                 if y < pair.from.height() - 1 {
-                    //regex += &format!(r".{{{}}}", state.width - pair.from.width);
                     bespoke_values.push(bespoke_regex::LiteralsOrWildcards::Wildcards(row_offset));
                     pattern_len += row_offset;
                 }
@@ -77,16 +73,8 @@ impl Permutation {
 
         Self {
             pattern_len,
-            /*
-            regex: regex::bytes::RegexBuilder::new(&string)
-                .unicode(false)
-                .dot_matches_new_line(true)
-                .build()
-                .unwrap(),
-            */
             bespoke_regex: bespoke_regex::BespokeRegex::new(&bespoke_values),
             to: pair.to,
-            //from: pair.from,
         }
     }
 
@@ -116,7 +104,6 @@ pub fn match_pattern(regex: &Permutation, state: &Array2D<&mut [u8]>, index: u32
     {
         return false;
     }
-    //regex.regex.is_match(&state.inner[index as usize..end])
     regex
         .bespoke_regex
         .is_immediate_match(&state.inner[index as usize..end])

@@ -16,22 +16,22 @@ TOGGLE_X = [
 ROT_AROUND_Z = [[0, 1, 2], [1, 0, 2]]
 
 PALETTE_LETTERS = [
-    'B', # Black
-    'W', # White
-    'R', # Red
-    'I', # Dark blue
-    'P', # Dark purple
-    'E', # Dark green
-    'N', # Brown
-    'D', # Dark grey (Dead)
-    'A', # Light grey (Alive)
-    'O', # Orange
-    'Y', # Yellow
-    'G', # Green
-    'U', # Blue
-    'S', # Lavender
-    'K', # Pink
-    'F', # Light peach
+    "B",  # Black
+    "W",  # White
+    "R",  # Red
+    "I",  # Dark blue
+    "P",  # Dark purple
+    "E",  # Dark green
+    "N",  # Brown
+    "D",  # Dark grey (Dead)
+    "A",  # Light grey (Alive)
+    "O",  # Orange
+    "Y",  # Yellow
+    "G",  # Green
+    "U",  # Blue
+    "S",  # Lavender
+    "K",  # Pink
+    "F",  # Light peach
 ]
 
 # https://pico-8.fandom.com/wiki/Palette
@@ -56,16 +56,17 @@ PALETTE = Palette(
     ]
 )
 
+
 def array_from_chars(chars):
     width = None
     array = []
     for char in chars:
-        if char == ' ' or char == '\n':
+        if char == " " or char == "\n":
             continue
-        elif char == ',':
+        elif char == ",":
             if width == None:
                 width = len(array)
-        elif char == '*':
+        elif char == "*":
             array.append(255)
         else:
             try:
@@ -77,6 +78,7 @@ def array_from_chars(chars):
         return np.array(array)
     else:
         return np.reshape(array, (-1, width))
+
 
 def save_image(filename, arr):
     width, height = arr.shape
