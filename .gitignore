@@ -3,6 +3,8 @@
 perf.data*
 __pycache__
 env
+_build
 result
 ignore
 markov/*.so
+>>>>>>> me/main
