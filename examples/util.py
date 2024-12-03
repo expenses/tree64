@@ -23,6 +23,7 @@ PALETTE_LETTERS = [
     "F",  # Light peach
 ]
 
+
 def array_from_chars(chars):
     width = None
     array = []
@@ -45,10 +46,12 @@ def array_from_chars(chars):
     else:
         return np.reshape(array, (-1, width))
 
+
 def spawn_tev():
     subprocess.Popen("tev", stdout=subprocess.PIPE)
     time.sleep(1.0 / 60.0)
     return TevClient()
+
 
 def save_as_voxels(filename, arr):
     from voxypy.models import Entity
@@ -78,4 +81,3 @@ class CompressedVoxelsOutput:
     def close(self):
         self.writer.close()
         self.file.close()
-

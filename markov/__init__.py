@@ -4,8 +4,10 @@ import numpy as np
 
 ONCE = NodeSettings(count=1)
 
+
 def all(pattern, **kwargs):
     return Pattern(pattern, apply_all=True, **kwargs)
+
 
 def rep(array, node, callback=None, writer=None, inplace=True):
     if not inplace:
@@ -20,6 +22,9 @@ NO_FLIPS = [[False, False, False]]
 NO_SHUFFLES = [[0, 1, 2]]
 
 Y_IS_Z = [[0, 2, 1], [2, 0, 1]]
+Y_IS_Z_FLIP = [[False, True, False]]
+Y_IS_Z_TOGGLE_X = [[False, True, False], [True, True, False]]
+
 TOGGLE_X = [
     [False, False, False],
     [True, False, False],
@@ -55,6 +60,7 @@ PICO8_PALETTE = Palette(
     ]
 )
 
+
 class FfmpegWriter:
     def __init__(self, filename, dims, skip=1, framerate=60):
         import ffmpeg
@@ -79,11 +85,12 @@ class FfmpegWriter:
         self.skip = skip
         self.index = 0
 
-    def write(self, array, palette = PICO8_PALETTE):
+    def write(self, array, palette=PICO8_PALETTE):
         if self.index % self.skip == 0:
             colour_image(self.buffer, array, palette)
             self.process.stdin.write(self.buffer)
         self.index += 1
+
 
 def save_image(filename, arr, palette=PICO8_PALETTE):
     from PIL import Image
@@ -92,6 +99,7 @@ def save_image(filename, arr, palette=PICO8_PALETTE):
     buffer = np.zeros((width, height, 3), dtype=np.uint8)
     colour_image(buffer, arr, palette)
     Image.fromarray(buffer).save(filename)
+
 
 def add_to_usd_stage(prim_path, stage, arr, time=1, palette=PICO8_PALETTE):
     from pxr import Sdf, UsdGeom
@@ -116,6 +124,7 @@ def add_to_usd_stage(prim_path, stage, arr, time=1, palette=PICO8_PALETTE):
     prim.CreateAttribute("faceVertexIndices", Sdf.ValueTypeNames.IntArray).Set(
         indices, time
     )
+
 
 def write_usd(filename, arr):
     from pxr import Usd
