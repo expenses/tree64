@@ -23,7 +23,7 @@ def display(index):
 rep(
     arr,
     Markov(
-        PatternWithOptions(
+        Pattern(
             """
   2**,
   0**,
@@ -39,12 +39,12 @@ rep(
             ],
             shuffles=Y_IS_Z,
         ),
-        PatternWithOptions(
+        Pattern(
             "200=112",
             flips=TOGGLE_X,
             shuffles=ROT_AROUND_Z,
         ),
-        PatternWithOptions("200=112", flips=NO_FLIPS, shuffles=[[2, 1, 0]]),
+        Pattern("200=112", flips=NO_FLIPS, shuffles=[[2, 1, 0]]),
     ),
     callback=display,
 )

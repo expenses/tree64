@@ -1,6 +1,10 @@
 /target
 *.txt
 perf.data*
-examples/__pycache__
+__pycache__
 env
 _build
+result
+ignore
+markov/*.so
+>>>>>>> me/main

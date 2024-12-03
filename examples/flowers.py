@@ -1,7 +1,6 @@
-from markov import rep, index_for_colour, PatternWithOptions, TevClient, One, Markov
 import numpy as np
 import sys
-from util import spawn_tev, save_image
+from util import *
 
 width = int(sys.argv[1])
 height = int(sys.argv[2])
@@ -14,7 +13,7 @@ rep(
     arr,
     Markov(
         One(
-            PatternWithOptions(
+            Pattern(
                 """
                     UUU,
                     UUU,
@@ -24,10 +23,10 @@ rep(
                     *P*,
                     *E*
                 """,
-                allow_dimension_shuffling=False,
-                allow_flip=False,
+                shuffles=NO_SHUFFLES,
+                flips=NO_FLIPS,
             ),
-            PatternWithOptions(
+            Pattern(
                 """
                     UUU,
                     UUU,
@@ -41,9 +40,10 @@ rep(
                     EE*,
                     ***
                 """,
-                allow_dimension_shuffling=False,
+                shuffles=NO_SHUFFLES,
+                flips=[[False, False, False], [True, False, False]],
             ),
-            PatternWithOptions(
+            Pattern(
                 """
                     UUUUU,
                     UUUUU,
@@ -57,10 +57,10 @@ rep(
                     *EEE*,
                     *****
                 """,
-                allow_dimension_shuffling=False,
-                allow_flip=False,
+                shuffles=NO_SHUFFLES,
+                flips=NO_FLIPS,
             ),
-            PatternWithOptions(
+            Pattern(
                 """
                 UUU,
                 UPU,
@@ -72,11 +72,11 @@ rep(
                 *Y*,
                 ***,
             """,
-                allow_dimension_shuffling=False,
-                allow_flip=False,
+                shuffles=NO_SHUFFLES,
+                flips=NO_FLIPS,
             ),
         ),
-        PatternWithOptions(
+        Pattern(
             """
             UUUUU,
             UUUUU,
@@ -90,25 +90,21 @@ rep(
             GGEGG,
             NNENN
         """,
-            allow_dimension_shuffling=False,
-            allow_flip=False,
+            shuffles=NO_SHUFFLES,
+            flips=NO_FLIPS,
         ),
     ),
 )
 rep(
     arr,
-    PatternWithOptions(
-        """
-            ***,
-            *P*,
-            ***,
-            =
-            *Y*,
-            YEY,
-            *Y*
-        """,
-        allow_dimension_shuffling=False,
-        allow_flip=False,
-    ),
+    """
+    ***,
+    *P*,
+    ***,
+    =
+    *Y*,
+    YEY,
+    *Y*
+""",
 )
 save_image("flowers.png", arr)

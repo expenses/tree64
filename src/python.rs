@@ -3,6 +3,7 @@ use numpy::PyArrayMethods;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::PyTupleMethods;
 use pyo3::types::{PyFunction, PyTuple};
+
 #[pyclass]
 pub struct TevClient {
     inner: tev_client::TevClient,
@@ -21,13 +22,19 @@ impl TevClient {
         }
     }
 
-    pub fn send_image(&mut self, name: &str, array: numpy::borrow::PyReadonlyArray2<u8>) {
+    pub fn send_image(
+        &mut self,
+        name: &str,
+        array: numpy::borrow::PyReadonlyArray2<u8>,
+        palette: &Palette,
+    ) {
         let dims = array.dims();
         let slice = array.as_slice().unwrap();
 
         super::send_image(
             &mut self.inner,
             &mut self.values,
+            &palette.linear,
             name,
             slice,
             dims[0] as u32,
@@ -64,9 +71,9 @@ const ALL_SHUFFLES: [[usize; 3]; 6] = [
 
 #[pyclass]
 #[derive(Clone)]
-pub struct PatternWithOptions {
-    from: Vec<String>,
-    to: Vec<String>,
+pub struct Pattern {
+    from: Array3D,
+    to: Array3D,
     options: PatternOptions,
 }
 
@@ -78,9 +85,9 @@ pub struct PatternOptions {
     settings: ReplaceSettings,
     node_settings: NodeSettings,
 }
-impl PatternWithOptions {
-    fn new_from_pattern(pattern: Pattern) -> PyResult<Self> {
-        let (from, to) = pattern.strings()?;
+impl Pattern {
+    fn new_from_pattern(pattern: PatternInput) -> PyResult<Self> {
+        let (from, to) = pattern.arrays()?;
         Ok(Self {
             from,
             to,
@@ -99,11 +106,11 @@ impl PatternWithOptions {
 }
 
 #[pymethods]
-impl PatternWithOptions {
+impl Pattern {
     #[new]
     #[pyo3(signature = (pattern, shuffles = None, flips = None, apply_all = None, chance = None, node_settings = None))]
     fn new(
-        pattern: Pattern,
+        pattern: PatternInput,
         shuffles: Option<Vec<[usize; 3]>>,
         flips: Option<Vec<[bool; 3]>>,
         apply_all: Option<bool>,
@@ -121,7 +128,7 @@ impl PatternWithOptions {
     }
 }
 
-type PatternList = Vec<Node<PatternWithOptions>>;
+type PatternList = Vec<Node<Pattern>>;
 
 fn parse_pattern_list(list: Bound<PyTuple>) -> PyResult<PatternList> {
     list.iter()
@@ -129,7 +136,7 @@ fn parse_pattern_list(list: Bound<PyTuple>) -> PyResult<PatternList> {
             item.extract::<PythonNode>()
                 .and_then(|python_node| python_node.convert())
         })
-        .collect::<PyResult<Vec<Node<PatternWithOptions>>>>()
+        .collect::<PyResult<Vec<Node<Pattern>>>>()
 }
 
 #[derive(Clone)]
@@ -181,29 +188,72 @@ impl Sequence {
 }
 
 #[derive(FromPyObject)]
-pub enum Pattern<'a> {
+pub enum PatternInput<'a> {
     String(String),
     TwoStrings(String, String),
-    TwoLists(Bound<'a, PyTuple>, Bound<'a, PyTuple>),
+    TwoArrays(Array<'a>, Array<'a>),
 }
 
-impl<'a> Pattern<'a> {
-    fn strings(self) -> PyResult<(Vec<String>, Vec<String>)> {
+impl<'a> PatternInput<'a> {
+    fn arrays(self) -> PyResult<(Array3D, Array3D)> {
         match self {
             Self::String(string) => {
                 let (from, to) = split_pattern_string(&string)?;
-                Ok((vec![from.to_string()], vec![to.to_string()]))
+                Self::TwoStrings(from.to_string(), to.to_string()).arrays()
             }
-            Self::TwoLists(from, to) => Ok((
-                from.iter()
-                    .map(|from| from.extract::<String>())
-                    .collect::<PyResult<Vec<_>>>()?,
-                to.iter()
-                    .map(|to| to.extract::<String>())
-                    .collect::<PyResult<Vec<_>>>()?,
-            )),
-            Self::TwoStrings(from, to) => Ok((vec![from], vec![to])),
+            Self::TwoStrings(from, to) => Ok((string_to_array(&from), string_to_array(&to))),
+            Self::TwoArrays(from, to) => Ok((array_to_owned(from), array_to_owned(to))),
         }
+    }
+}
+
+fn array_to_owned(array: Array) -> Array3D {
+    match array {
+        Array::D2(array) => Array3D::new_from(
+            array.as_slice().unwrap().to_vec(),
+            array.dims()[1],
+            array.dims()[0],
+            1,
+        ),
+        Array::D3(array) => Array3D::new_from(
+            array.as_slice().unwrap().to_vec(),
+            array.dims()[2],
+            array.dims()[1],
+            array.dims()[0],
+        ),
+    }
+}
+
+fn string_to_array(string: &str) -> Array3D {
+    let mut width = None;
+    let mut list = Vec::new();
+
+    for c in string.chars() {
+        if c == ' ' || c == '\n' {
+            continue;
+        }
+        if c == ',' {
+            if width.is_none() {
+                width = Some(list.len());
+            }
+            continue;
+        }
+
+        list.push(match c {
+            '*' => WILDCARD,
+            _ => match c.to_digit(10) {
+                Some(digit) => digit as u8,
+                None => PALETTE.iter().position(|&v| v == c).unwrap() as _,
+            },
+        });
+    }
+
+    if let Some(width) = width {
+        let height = list.len() / width;
+        Array3D::new_from(list, width, height, 1)
+    } else {
+        let width = list.len();
+        Array3D::new_from(list, width, 1, 1)
     }
 }
 
@@ -212,12 +262,12 @@ pub enum PythonNode<'a> {
     One(One),
     Markov(Markov),
     Sequence(Sequence),
-    Pattern(Pattern<'a>),
-    PatternWithOptions(PatternWithOptions),
+    Pattern(PatternInput<'a>),
+    PatternWithOptions(Pattern),
 }
 
 impl<'a> PythonNode<'a> {
-    fn convert(self) -> PyResult<Node<PatternWithOptions>> {
+    fn convert(self) -> PyResult<Node<Pattern>> {
         Ok(match self {
             Self::One(list) => Node {
                 settings: list.1,
@@ -232,8 +282,7 @@ impl<'a> PythonNode<'a> {
                 ty: NodeTy::Sequence(list.0),
             },
             Self::Pattern(pattern) => {
-                Self::PatternWithOptions(PatternWithOptions::new_from_pattern(pattern)?)
-                    .convert()?
+                Self::PatternWithOptions(Pattern::new_from_pattern(pattern)?).convert()?
             }
             Self::PatternWithOptions(pattern) => Node {
                 settings: pattern.options.node_settings.clone(),
@@ -254,7 +303,7 @@ pub enum Array<'a> {
 pub fn rep(array: Array, node: PythonNode, callback: Option<&Bound<PyFunction>>) -> PyResult<()> {
     let mut array_2d = match &array {
         Array::D2(array) => {
-            Array2D::new_from(
+            Array3D::new_from(
                 // I don't like doing this, but it's the only way to get a callback
                 // function working afaik.
                 unsafe { array.as_slice_mut().unwrap() },
@@ -264,7 +313,7 @@ pub fn rep(array: Array, node: PythonNode, callback: Option<&Bound<PyFunction>>)
             )
         }
         Array::D3(array) => {
-            Array2D::new_from(
+            Array3D::new_from(
                 // I don't like doing this, but it's the only way to get a callback
                 // function working afaik.
                 unsafe { array.as_slice_mut().unwrap() },
@@ -277,10 +326,10 @@ pub fn rep(array: Array, node: PythonNode, callback: Option<&Bound<PyFunction>>)
 
     let node = node.convert()?;
 
-    let node = map_node(&node, &|pattern| {
-        Replace::from_layers(
-            &pattern.from,
-            &pattern.to,
+    let node = map_node(node, &|pattern| {
+        Replace::new(
+            pattern.from,
+            pattern.to,
             &pattern.options.shuffles,
             &pattern.options.flips,
             pattern.options.settings.clone(),
@@ -297,19 +346,43 @@ pub fn rep(array: Array, node: PythonNode, callback: Option<&Bound<PyFunction>>)
     });
 
     execute_root_node(node, &mut array_2d, &mut rng, callback);
-
     Ok(())
 }
 
-#[pyfunction]
-pub fn index_for_colour(colour: char) -> Option<u8> {
-    super::index_for_colour(colour)
+fn srgb_to_linear(value: u8) -> f32 {
+    let value = value as f32 / 255.0;
+
+    if value <= 0.04045 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+#[pyclass]
+pub struct Palette {
+    #[pyo3(get)]
+    linear: Vec<[f32; 3]>,
+    #[pyo3(get)]
+    srgb: Vec<[u8; 3]>,
+}
+
+#[pymethods]
+impl Palette {
+    #[new]
+    fn new(srgb: Vec<[u8; 3]>) -> Self {
+        Self {
+            linear: srgb.iter().map(|col| col.map(srgb_to_linear)).collect(),
+            srgb,
+        }
+    }
 }
 
 #[pyfunction]
 pub fn colour_image(
     mut output: numpy::borrow::PyReadwriteArray3<u8>,
     input: numpy::borrow::PyReadonlyArray2<u8>,
+    palette: &Palette,
 ) {
     let input_slice = input.as_slice().unwrap();
     let output_slice = output.as_slice_mut().unwrap();
@@ -319,7 +392,7 @@ pub fn colour_image(
 
     for y in 0..height {
         for x in 0..width {
-            let colour = SRGB_PALETTE_VALUES[input_slice[y * width + x] as usize];
+            let colour = palette.srgb[input_slice[y * width + x] as usize];
             output_slice[(y * width + x) * 3..(y * width + x + 1) * 3].copy_from_slice(&colour);
         }
     }
@@ -389,7 +462,6 @@ pub fn mesh_voxels(array: Array) -> (Vec<[f32; 3]>, Vec<u8>, Vec<u32>) {
                 quad.minimum[0] + quad.minimum[1] * dims[0] + quad.minimum[2] * dims[0] * dims[1];
             let value = slice[index as usize];
 
-            let quad = block_mesh::geometry::UnorientedQuad::from(quad);
             let face_positions = face.quad_mesh_positions(&quad, 1.0);
 
             colours.push(value);

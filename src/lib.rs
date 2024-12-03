@@ -4,7 +4,7 @@ use rayon::iter::{
 };
 use std::collections::HashSet;
 
-use arrays::{Array2D, ArrayPair};
+use arrays::{Array3D, ArrayPair};
 use pattern_matching::{match_pattern, OverlappingRegexIter, Permutation};
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 
@@ -30,19 +30,28 @@ enum NodeTy<T> {
     Sequence(Vec<Node<T>>),
 }
 
-fn map_node<T, U, F: Fn(&T) -> U>(node: &Node<T>, map: &F) -> Node<U> {
+fn map_node<T, U, F: Fn(T) -> U>(node: Node<T>, map: &F) -> Node<U> {
     Node {
-        ty: match &node.ty {
+        ty: match node.ty {
             NodeTy::Rule(rule) => NodeTy::Rule(map(rule)),
-            NodeTy::Markov(children) => {
-                NodeTy::Markov(children.iter().map(|node| map_node(node, map)).collect())
-            }
-            NodeTy::One(children) => {
-                NodeTy::One(children.iter().map(|node| map_node(node, map)).collect())
-            }
-            NodeTy::Sequence(children) => {
-                NodeTy::Sequence(children.iter().map(|node| map_node(node, map)).collect())
-            }
+            NodeTy::Markov(children) => NodeTy::Markov(
+                children
+                    .into_iter()
+                    .map(|node| map_node(node, map))
+                    .collect(),
+            ),
+            NodeTy::One(children) => NodeTy::One(
+                children
+                    .into_iter()
+                    .map(|node| map_node(node, map))
+                    .collect(),
+            ),
+            NodeTy::Sequence(children) => NodeTy::Sequence(
+                children
+                    .into_iter()
+                    .map(|node| map_node(node, map))
+                    .collect(),
+            ),
         },
         settings: node.settings.clone(),
     }
@@ -126,7 +135,7 @@ fn get_unique_values(slice: &[u8]) -> HashSet<u8> {
 
 fn execute_root_node<'a>(
     root: Node<Replace>,
-    state: &mut Array2D<&mut [u8]>,
+    state: &mut Array3D<&mut [u8]>,
     rng: &mut SmallRng,
     callback: Option<Box<dyn Fn(u32) + 'a>>,
 ) {
@@ -177,7 +186,7 @@ fn execute_root_node<'a>(
 
 fn execute_node<'a>(
     node: &mut IndexNode,
-    state: &mut Array2D<&mut [u8]>,
+    state: &mut Array3D<&mut [u8]>,
     replaces: &mut [Replace],
     interactions: &[Vec<bool>],
     rng: &mut SmallRng,
@@ -321,54 +330,24 @@ pub const PALETTE: [char; 16] = [
     'F', // Light peach
 ];
 
-// https://pico-8.fandom.com/wiki/Palette
-pub const SRGB_PALETTE_VALUES: [[u8; 3]; 16] = [
-    [0, 0, 0],
-    [255, 241, 232],
-    [255, 0, 7],
-    [29, 43, 83],
-    [126, 37, 83],
-    [0, 135, 81],
-    [171, 82, 54],
-    [95, 87, 79],
-    [194, 195, 199],
-    [255, 163, 0],
-    [255, 236, 39],
-    [0, 228, 54],
-    [41, 173, 255],
-    [131, 118, 156],
-    [255, 119, 168],
-    [255, 204, 170],
-];
-
+#[pyfunction]
 fn index_for_colour(colour: char) -> Option<u8> {
     PALETTE.iter().position(|&c| c == colour).map(|v| v as u8)
-}
-
-fn srgb_to_linear(value: u8) -> f32 {
-    let value = value as f32 / 255.0;
-
-    if value <= 0.04045 {
-        value / 12.92
-    } else {
-        ((value + 0.055) / 1.055).powf(2.4)
-    }
 }
 
 pub fn send_image(
     client: &mut tev_client::TevClient,
     values: &mut Vec<f32>,
+    linear_palette: &[[f32; 3]],
     name: &str,
     slice: &[u8],
     width: u32,
     height: u32,
 ) {
-    let colours = SRGB_PALETTE_VALUES.map(|v| v.map(srgb_to_linear));
-
     values.resize(slice.len() * 3, 0.0);
 
     for i in 0..slice.len() {
-        let colour = &colours[slice[i] as usize];
+        let colour = &linear_palette[slice[i] as usize];
         values[i * 3..(i + 1) * 3].copy_from_slice(colour);
     }
 
@@ -400,14 +379,15 @@ pub fn send_image(
 #[pymodule]
 fn markov(_py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python::rep, m)?)?;
-    m.add_function(wrap_pyfunction!(python::index_for_colour, m)?)?;
     m.add_function(wrap_pyfunction!(python::colour_image, m)?)?;
     m.add_function(wrap_pyfunction!(python::mesh_voxels, m)?)?;
-    m.add_class::<python::PatternWithOptions>()?;
+    m.add_function(wrap_pyfunction!(index_for_colour, m)?)?;
+    m.add_class::<python::Pattern>()?;
     m.add_class::<python::TevClient>()?;
     m.add_class::<python::One>()?;
     m.add_class::<python::Markov>()?;
     m.add_class::<python::Sequence>()?;
+    m.add_class::<python::Palette>()?;
     m.add_class::<NodeSettings>()?;
     Ok(())
 }
@@ -438,34 +418,6 @@ fn sample_until_valid<T, F: FnMut(&T, &mut SmallRng) -> bool>(
     None
 }
 
-fn pattern_from_chars(pattern: &mut Vec<u8>, row_width: &mut Option<usize>, chars: &str) -> usize {
-    for c in chars.chars() {
-        if c == ' ' || c == '\n' {
-            continue;
-        }
-
-        if c == ',' {
-            if (*row_width).is_none() {
-                *row_width = Some(pattern.len());
-            }
-            continue;
-        }
-
-        pattern.push(match c {
-            '*' => WILDCARD,
-            _ => match c.to_digit(10) {
-                Some(digit) => digit as u8,
-                None => index_for_colour(c).unwrap(),
-            },
-        });
-    }
-
-    if (*row_width).is_none() {
-        *row_width = Some(pattern.len());
-    }
-    (*row_width).unwrap_or(pattern.len())
-}
-
 // todo: paths, convolutions, do in python. rrmove callback index.
 
 const WILDCARD: u8 = 255;
@@ -487,30 +439,25 @@ struct Replace {
 
 impl Replace {
     fn new(
-        from: &[u8],
-        to: &mut [u8],
-        width: usize,
+        from: Array3D,
+        mut to: Array3D,
         shuffles: &[[usize; 3]],
         flips: &[[bool; 3]],
         settings: ReplaceSettings,
-        state: &Array2D<&mut [u8]>,
-        depth: usize,
+        state: &Array3D<&mut [u8]>,
     ) -> Self {
-        let height = from.len() / width / depth;
-        dbg!(depth, height, width, from.len());
-        let dims = [width, height, depth];
+        let dims = from.dims();
+        let [width, height, depth] = dims;
+        assert_eq!(from.dims(), to.dims());
 
         // Small optimization to reduce the interaction between patterns.
-        for i in 0..from.len() {
-            if from[i] == to[i] {
-                to[i] = WILDCARD;
+        for i in 0..from.inner.len() {
+            if from.inner[i] == to.inner[i] {
+                to.inner[i] = WILDCARD;
             }
         }
 
-        let pair = ArrayPair {
-            to: Array2D::new(to, width, height),
-            from: Array2D::new(from, width, height),
-        };
+        let pair = ArrayPair { to, from };
 
         let from_values: HashSet<u8> = pair
             .from
@@ -561,44 +508,7 @@ impl Replace {
         }
     }
 
-    fn from_layers(
-        from_layers: &[String],
-        to_layers: &[String],
-        shuffles: &[[usize; 3]],
-        flips: &[[bool; 3]],
-        settings: ReplaceSettings,
-        state: &Array2D<&mut [u8]>,
-    ) -> Self {
-        let mut from_vec = Vec::new();
-        let mut to_vec = Vec::new();
-        let mut from_width = None;
-        let mut to_width = None;
-
-        let mut from_width_o = None;
-        let mut to_width_o = None;
-
-        for from in from_layers {
-            from_width = Some(pattern_from_chars(&mut from_vec, &mut from_width_o, from));
-        }
-
-        for to in to_layers {
-            to_width = Some(pattern_from_chars(&mut to_vec, &mut to_width_o, to));
-        }
-
-        assert_eq!(from_width, to_width);
-        Self::new(
-            &from_vec,
-            &mut to_vec,
-            from_width.unwrap(),
-            shuffles,
-            flips,
-            settings,
-            state,
-            from_layers.len(),
-        )
-    }
-
-    fn store_initial_matches(&mut self, state: &Array2D<&mut [u8]>) {
+    fn store_initial_matches(&mut self, state: &Array3D<&mut [u8]>) {
         self.potential_matches = self
             .permutations
             .par_iter()
@@ -623,7 +533,7 @@ impl Replace {
 
     fn get_match_and_update_state(
         &mut self,
-        state: &mut Array2D<&mut [u8]>,
+        state: &mut Array3D<&mut [u8]>,
         rng: &mut SmallRng,
         updated: &mut Vec<u32>,
     ) -> bool {
@@ -653,7 +563,7 @@ impl Replace {
         true
     }
 
-    fn update_matches(&mut self, state: &Array2D<&mut [u8]>, updated_cells: &[u32]) {
+    fn update_matches(&mut self, state: &Array3D<&mut [u8]>, updated_cells: &[u32]) {
         for &index in updated_cells {
             for (i, permutation) in self.permutations.iter().enumerate() {
                 for z in 0..permutation.depth() {

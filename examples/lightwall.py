@@ -8,14 +8,14 @@ arr = rep2(
     arr,
     Markov(
         One(
-            PatternWithOptions(
+            Pattern(
                 "10=11", allow_dimension_shuffling=False, allow_flip=False
             ),
-            PatternWithOptions(
+            Pattern(
                 "01=11", allow_dimension_shuffling=False, allow_flip=False
             ),
         ),
-        PatternWithOptions(
+        Pattern(
             "0,0,0,0,0=0,0,1,0,0", allow_dimension_shuffling=False, allow_flip=False
         ),
     ),
@@ -25,10 +25,10 @@ arr = rep2(
 rep2(
     arr,
     Markov(
-        PatternWithOptions(
+        Pattern(
             "0,1,1=1,1,1", allow_dimension_shuffling=False, allow_flip=False
         ),
-        PatternWithOptions(
+        Pattern(
             "0,1=1,1", allow_dimension_shuffling=False, allow_flip=False
         ),
     ),

@@ -18,7 +18,7 @@
       in rec {
         packages = rec {
           wheel = craneLib.buildPackage rec {
-            src = craneLib.cleanCargoSource ./.;
+            src = pkgs.lib.cleanSource ./.;
             cargoArtifacts = craneLib.buildDepsOnly {inherit src nativeBuildInputs;};
             buildPhaseCargoCommand = "maturin build --release";
             installPhaseCommand = "mv target/wheels $out";
@@ -60,11 +60,11 @@
               inherit voxypy;
             };
           };
-          usd2gltf = with pkgs; writeShellScriptBin "usd2gltf" "${blender}/bin/blender --background -P ${./convert.py} -- $@";
+          usd2gltf = with pkgs; writeShellScriptBin "usd2gltf" "${blender}/bin/blender --background -P ${./nix/convert.py} -- $@";
         };
         devShells.default = with pkgs;
           mkShell {
-            buildInputs = [packages.usd2gltf black tev (packages.patched-python.withPackages (ps: [ps.markov ps.voxypy] ++ (python-deps ps)))];
+            buildInputs = [packages.usd2gltf black tev openusd (packages.patched-python.withPackages (ps: [ps.markov ps.voxypy] ++ (python-deps ps)))];
           };
         devShells.build = with pkgs;
           mkShell {
@@ -72,7 +72,7 @@
               [
                 python3
                 python3.pkgs.pip
-                maturin #nanomsg-py
+                maturin
               ]
               ++ (python-deps python3.pkgs);
             shellHook = ''
@@ -84,6 +84,20 @@
               unset SOURCE_DATE_EPOCH
             '';
           };
+        devShells.venv =
+          (pkgs.buildFHSUserEnv {
+            name = "pipzone";
+            targetPkgs = pkgs: (with pkgs; [
+              python3
+              python3Packages.pip
+              python3Packages.virtualenv
+              zlib
+              maturin
+              black
+            ]);
+            runScript = "bash";
+          })
+          .env;
       }
     );
 }
