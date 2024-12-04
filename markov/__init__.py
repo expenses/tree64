@@ -1,4 +1,4 @@
-from markov import markov
+
 from markov.markov import *
 import numpy as np
 

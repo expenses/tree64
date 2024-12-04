@@ -12,6 +12,7 @@ mod arrays;
 mod bespoke_regex;
 mod pattern_matching;
 mod python;
+mod wfc;
 
 #[derive(Clone, Debug)]
 struct Node<T> {

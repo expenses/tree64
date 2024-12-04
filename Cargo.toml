@@ -17,3 +17,4 @@ rayon = "1.10.0"
 block-mesh = "0.2.0"
 bytemuck = { version = "1.20.0", features = ["derive"] }
 ndshape = "0.3.0"
+arrayvec = "0.7.6"

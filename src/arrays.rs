@@ -101,7 +101,7 @@ impl Array3D<Vec<u8>> {
     }
 }
 
-fn compose(x: usize, y: usize, z: usize, width: usize, height: usize) -> usize {
+pub fn compose(x: usize, y: usize, z: usize, width: usize, height: usize) -> usize {
     x + y * width + z * width * height
 }
 
