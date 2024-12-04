@@ -1,8 +1,6 @@
-use crate::{
-    arrays::{compose, decompose},
-    Array3D,
-};
-use rand::{prelude::SliceRandom, rngs::SmallRng, Rng, SeedableRng};
+use crate::arrays::{compose, decompose};
+use ordered_float::OrderedFloat;
+use rand::{rngs::SmallRng, Rng, SeedableRng};
 
 type Wave = u64;
 
@@ -39,6 +37,21 @@ impl Axis {
     }
 }
 
+fn tile_list_from_value(value: Wave) -> arrayvec::ArrayVec<u8, { Wave::BITS as _ }> {
+    let mut tile_list = arrayvec::ArrayVec::new();
+
+    for i in 0..Wave::BITS {
+        if ((value >> i) & 1) == 0 {
+            continue;
+        }
+
+        tile_list.push(i as _);
+    }
+
+    tile_list
+}
+
+#[repr(transparent)]
 #[derive(Default, Debug)]
 struct Tile {
     connections: [Wave; 6],
@@ -52,11 +65,11 @@ impl Tile {
 
 struct Wfc {
     tiles: arrayvec::ArrayVec<Tile, { Wave::BITS as _ }>,
+    probabilities: arrayvec::ArrayVec<f32, { Wave::BITS as _ }>,
     array: Vec<Wave>,
     width: usize,
     height: usize,
-    entropy_to_indices: [indexmap::IndexSet<usize>; { Wave::BITS as usize - 2 }],
-    tile_list: arrayvec::ArrayVec<u8, { Wave::BITS as _ }>,
+    entropy_to_indices: [indexmap::IndexSet<usize>; Wave::BITS as usize - 2],
     stack: Vec<(usize, Wave)>,
 }
 
@@ -65,7 +78,7 @@ impl Wfc {
         let (width, height, depth) = size;
         Self {
             tiles: Default::default(),
-            tile_list: Default::default(),
+            probabilities: Default::default(),
             entropy_to_indices: [(); { Wave::BITS as usize - 2 }].map(|()| Default::default()),
             array: vec![0; width * height * depth],
             width,
@@ -78,9 +91,10 @@ impl Wfc {
         self.array.len() / self.width / self.height
     }
 
-    fn add(&mut self) -> usize {
+    fn add(&mut self, probability: f32) -> usize {
         let index = self.tiles.len();
         self.tiles.push(Tile::default());
+        self.probabilities.push(probability);
         index
     }
 
@@ -101,18 +115,6 @@ impl Wfc {
         }
     }
 
-    fn fill_tile_list_from_value(&mut self, value: Wave) {
-        self.tile_list.clear();
-
-        for i in (0..Wave::BITS) {
-            if ((value >> i) & 1) == 0 {
-                continue;
-            }
-
-            self.tile_list.push(i as _);
-        }
-    }
-
     fn find_lowest_entropy(&mut self, rng: &mut SmallRng) -> Option<(usize, u8)> {
         let lowest_entropy_set = match self.entropy_to_indices.iter().find(|set| !set.is_empty()) {
             Some(set) => set,
@@ -124,9 +126,23 @@ impl Wfc {
 
         let value = self.array[index];
 
-        self.fill_tile_list_from_value(value);
+        let mut rolling_probability: arrayvec::ArrayVec<_, { Wave::BITS as _ }> =
+            Default::default();
 
-        let tile = *self.tile_list.choose(rng).unwrap();
+        let list = tile_list_from_value(value);
+
+        let mut sum = 0.0;
+        for &tile in &list {
+            sum += self.probabilities[tile as usize];
+            rolling_probability.push(OrderedFloat(sum));
+        }
+        let num = rng.gen_range(0.0..rolling_probability.last().unwrap().0);
+        let list_index = match rolling_probability.binary_search(&OrderedFloat(num)) {
+            Ok(index) => index,
+            Err(index) => index,
+        };
+
+        let tile = list[list_index];
 
         Some((index, tile))
     }
@@ -150,14 +166,25 @@ impl Wfc {
             self.array[index] &= remaining_possible_states;
             let new = self.array[index];
 
-            if old == new || new == 0 {
+            if old == new {
                 continue;
             }
 
-            self.entropy_to_indices[old.count_ones() as usize - 2].swap_remove(&index);
-            if new.count_ones() > 1 {
-                self.entropy_to_indices[new.count_ones() as usize - 2].insert(index);
+            if old.count_ones() > 1 {
+                debug_assert!(
+                    self.entropy_to_indices[old.count_ones() as usize - 2].swap_remove(&index)
+                );
             }
+
+            if new == 0 {
+                continue;
+            }
+
+            if new.count_ones() > 1 {
+                debug_assert!(self.entropy_to_indices[new.count_ones() as usize - 2].insert(index));
+            }
+
+            let new_tiles = tile_list_from_value(new);
 
             for axis in Axis::ALL {
                 let (mut x, mut y, mut z) = decompose(index, self.width, self.height);
@@ -175,9 +202,7 @@ impl Wfc {
 
                 let mut valid = 0;
 
-                self.fill_tile_list_from_value(new);
-
-                for &tile in self.tile_list.iter() {
+                for &tile in new_tiles.iter() {
                     valid |= self.tiles[tile as usize].connections[axis as usize]
                 }
 
@@ -199,39 +224,71 @@ impl Wfc {
 }
 
 #[test]
-fn test() {
+fn normal() {
     let mut rng = SmallRng::from_entropy();
 
-    {
-        let mut wfc = Wfc::new((1000, 1000, 1));
-        let sea = wfc.add();
-        let beach = wfc.add();
-        let grass = wfc.add();
-        wfc.connect(sea, sea, &Axis::ALL);
-        wfc.connect(sea, beach, &Axis::ALL);
-        wfc.connect(beach, beach, &Axis::ALL);
-        wfc.connect(beach, grass, &Axis::ALL);
-        wfc.connect(grass, grass, &Axis::ALL);
+    let mut wfc = Wfc::new((100, 1000, 1));
+    let sea = wfc.add(1.0);
+    let beach = wfc.add(0.5);
+    let grass = wfc.add(1.0);
+    wfc.connect(sea, sea, &Axis::ALL);
+    wfc.connect(sea, beach, &Axis::ALL);
+    wfc.connect(beach, beach, &Axis::ALL);
+    wfc.connect(beach, grass, &Axis::ALL);
+    wfc.connect(grass, grass, &Axis::ALL);
 
-        assert_eq!(wfc.tiles[sea].connections, [3; 6]);
+    assert_eq!(wfc.tiles[sea].connections, [3; 6]);
 
-        wfc.setup_state();
+    wfc.setup_state();
 
-        assert!(!wfc.all_collapsed());
-        wfc.collapse_all(&mut rng);
-        assert!(
-            wfc.all_collapsed(),
-            "{:?}",
-            &wfc.array.iter().map(|v| v.count_ones()).collect::<Vec<_>>()
-        );
-    }
+    assert!(!wfc.all_collapsed());
+    wfc.collapse_all(&mut rng);
+    assert!(
+        wfc.all_collapsed(),
+        "{:?}",
+        &wfc.array.iter().map(|v| v.count_ones()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn verticals() {
+    let mut rng = SmallRng::from_entropy();
+
+    let mut wfc = Wfc::new((50, 50, 50));
+    let air = wfc.add(1.0);
+    let solid = wfc.add(1.0);
+    wfc.connect(air, air, &Axis::ALL);
+    wfc.connect(solid, solid, &Axis::ALL);
+    // solid cant be above air
+    wfc.connect(
+        solid,
+        air,
+        &[Axis::X, Axis::Y, Axis::Z, Axis::NegX, Axis::NegY],
+    );
+
+    wfc.setup_state();
+
+    assert!(!wfc.all_collapsed());
+    wfc.collapse_all(&mut rng);
+    assert!(
+        wfc.all_collapsed(),
+        "{:?}",
+        &wfc.array.iter().map(|v| v.count_ones()).collect::<Vec<_>>()
+    );
+    let _v = wfc.values();
+    //panic!("{:?}",v);
+}
+
+#[test]
+fn broken() {
+    let mut rng = SmallRng::from_entropy();
 
     // Wait until there's a collapse failure due to beaches not being able to connect to beaches.
     loop {
         let mut wfc = Wfc::new((10, 10, 1));
-        let sea = wfc.add();
-        let beach = wfc.add();
-        let grass = wfc.add();
+        let sea = wfc.add(1.0);
+        let beach = wfc.add(1.0);
+        let grass = wfc.add(1.0);
         wfc.connect(sea, sea, &Axis::ALL);
         wfc.connect(sea, beach, &Axis::ALL);
         //wfc.connect(beach, beach, &Axis::ALL);
