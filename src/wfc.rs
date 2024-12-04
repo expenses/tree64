@@ -6,7 +6,7 @@ type Wave = u64;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug)]
-enum Axis {
+pub enum Axis {
     X = 0,
     Y = 1,
     Z = 2,
@@ -16,7 +16,7 @@ enum Axis {
 }
 
 impl Axis {
-    const ALL: [Self; 6] = [
+    pub const ALL: [Self; 6] = [
         Self::X,
         Self::Y,
         Self::Z,
@@ -25,7 +25,7 @@ impl Axis {
         Self::NegZ,
     ];
 
-    fn opp(&self) -> Axis {
+    pub fn opp(&self) -> Axis {
         match self {
             Self::X => Self::NegX,
             Self::Y => Self::NegY,
@@ -63,7 +63,35 @@ impl Tile {
     }
 }
 
-struct Wfc {
+/*#[derive(Default)]
+struct Tileset {
+    tiles: arrayvec::ArrayVec<Tile, { Wave::BITS as _ }>,
+    probabilities: arrayvec::ArrayVec<f32, { Wave::BITS as _ }>,
+}
+
+impl Tileset {
+    fn add(&mut self, probability: f32) -> usize {
+        let index = self.tiles.len();
+        self.tiles.push(Tile::default());
+        self.probabilities.push(probability);
+        index
+    }
+
+    fn connect(&mut self, from: usize, to: usize, axises: &[Axis]) {
+        for &axis in axises {
+            self.tiles[from].connect(to, axis);
+            self.tiles[to].connect(from, axis.opp());
+        }
+    }
+
+    fn connect_to_all(&mut self, tile: usize) {
+        for other in 0..self.tiles.len() {
+            self.connect(tile, other, &Axis::ALL)
+        }
+    }
+}*/
+
+pub struct Wfc {
     tiles: arrayvec::ArrayVec<Tile, { Wave::BITS as _ }>,
     probabilities: arrayvec::ArrayVec<f32, { Wave::BITS as _ }>,
     array: Vec<Wave>,
@@ -74,7 +102,7 @@ struct Wfc {
 }
 
 impl Wfc {
-    fn new(size: (usize, usize, usize)) -> Self {
+    pub fn new(size: (usize, usize, usize)) -> Self {
         let (width, height, depth) = size;
         Self {
             tiles: Default::default(),
@@ -91,21 +119,27 @@ impl Wfc {
         self.array.len() / self.width / self.height
     }
 
-    fn add(&mut self, probability: f32) -> usize {
+    pub fn add(&mut self, probability: f32) -> usize {
         let index = self.tiles.len();
         self.tiles.push(Tile::default());
         self.probabilities.push(probability);
         index
     }
 
-    fn connect(&mut self, from: usize, to: usize, axises: &[Axis]) {
+    pub fn connect(&mut self, from: usize, to: usize, axises: &[Axis]) {
         for &axis in axises {
             self.tiles[from].connect(to, axis);
             self.tiles[to].connect(from, axis.opp());
         }
     }
 
-    fn setup_state(&mut self) {
+    pub fn connect_to_all(&mut self, tile: usize) {
+        for other in 0..self.tiles.len() {
+            self.connect(tile, other, &Axis::ALL)
+        }
+    }
+
+    pub fn setup_state(&mut self) {
         let wave = Wave::MAX >> (Wave::BITS as usize - self.tiles.len());
         for value in &mut self.array {
             *value = wave;
@@ -136,7 +170,7 @@ impl Wfc {
             sum += self.probabilities[tile as usize];
             rolling_probability.push(OrderedFloat(sum));
         }
-        let num = rng.gen_range(0.0..rolling_probability.last().unwrap().0);
+        let num = rng.gen_range(0.0..=rolling_probability.last().unwrap().0);
         let list_index = match rolling_probability.binary_search(&OrderedFloat(num)) {
             Ok(index) => index,
             Err(index) => index,
@@ -147,13 +181,13 @@ impl Wfc {
         Some((index, tile))
     }
 
-    fn collapse_all(&mut self, rng: &mut SmallRng) {
+    pub fn collapse_all(&mut self, rng: &mut SmallRng) {
         while let Some((index, tile)) = self.find_lowest_entropy(rng) {
             self.collapse(index, tile);
         }
     }
 
-    fn collapse(&mut self, index: usize, tile: u8) {
+    pub fn collapse(&mut self, index: usize, tile: u8) {
         self.set(index, 1 << tile);
     }
 
@@ -211,11 +245,11 @@ impl Wfc {
         }
     }
 
-    fn all_collapsed(&self) -> bool {
+    pub fn all_collapsed(&self) -> bool {
         self.array.iter().all(|&value| value.count_ones() == 1)
     }
 
-    fn values(&self) -> Vec<u8> {
+    pub fn values(&self) -> Vec<u8> {
         self.array
             .iter()
             .map(|&value| value.trailing_zeros() as u8)
@@ -277,6 +311,28 @@ fn verticals() {
     );
     let _v = wfc.values();
     //panic!("{:?}",v);
+}
+
+#[test]
+fn stairs() {
+    let mut rng = SmallRng::from_entropy();
+
+    let mut wfc = Wfc::new((5, 5, 5));
+    let empty = wfc.add(0.0);
+    let ground = wfc.add(1.0);
+    wfc.connect(ground, ground, &[Axis::X, Axis::Y]);
+    let stairs_top = wfc.add(1.0);
+    let stairs_bottom = wfc.add(10.0);
+    wfc.connect(stairs_top, stairs_bottom, &[Axis::X, Axis::NegZ]);
+    wfc.connect(stairs_top, ground, &[Axis::X]);
+    wfc.connect(stairs_bottom, ground, &[Axis::NegX]);
+    //wfc.connect(solid, solid, &Axis::ALL);
+
+    wfc.connect_to_all(empty);
+    wfc.setup_state();
+
+    wfc.collapse_all(&mut rng);
+    assert!(wfc.all_collapsed(),);
 }
 
 #[test]

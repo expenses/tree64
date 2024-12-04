@@ -360,6 +360,55 @@ fn srgb_to_linear(value: u8) -> f32 {
 }
 
 #[pyclass]
+pub struct Wfc(crate::wfc::Wfc);
+
+#[pymethods]
+impl Wfc {
+    #[new]
+    fn new(dims: (usize, usize, usize)) -> Self {
+        Self(crate::wfc::Wfc::new(dims))
+    }
+
+    fn add(&mut self, prob: f32) -> usize {
+        self.0.add(prob)
+    }
+
+    fn connect_to_all(&mut self, tile: usize) {
+        self.0.connect_to_all(tile)
+    }
+
+    fn connect(&mut self, from: usize, to: usize, axises: Vec<String>) {
+        let axises = axises
+            .into_iter()
+            .map(|string| match &(string.to_lowercase())[..] {
+                "x" => crate::wfc::Axis::X,
+                "y" => crate::wfc::Axis::Y,
+                "z" => crate::wfc::Axis::Z,
+                "negx" => crate::wfc::Axis::NegX,
+                "negy" => crate::wfc::Axis::NegY,
+                "negz" => crate::wfc::Axis::NegZ,
+                _ => panic!(),
+            })
+            .collect::<Vec<_>>();
+        self.0.connect(from, to, &axises)
+    }
+
+    fn setup_state(&mut self) {
+        self.0.setup_state()
+    }
+
+    fn values(&self) -> Vec<u8> {
+        self.0.values()
+    }
+
+    fn collapse_all(&mut self) {
+        let mut rng = rand::rngs::SmallRng::from_entropy();
+
+        self.0.collapse_all(&mut rng)
+    }
+}
+
+#[pyclass]
 pub struct Palette {
     #[pyo3(get)]
     linear: Vec<[f32; 3]>,
