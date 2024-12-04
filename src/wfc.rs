@@ -115,14 +115,14 @@ impl Wfc {
         }
     }
 
-    fn width(&self) -> usize {
+    pub fn width(&self) -> usize {
         self.width
     }
-    fn height(&self) -> usize {
+    pub fn height(&self) -> usize {
         self.height
     }
 
-    fn depth(&self) -> usize {
+    pub fn depth(&self) -> usize {
         self.array.len() / self.width / self.height
     }
 
@@ -156,7 +156,7 @@ impl Wfc {
         }
     }
 
-    fn find_lowest_entropy(&mut self, rng: &mut SmallRng) -> Option<(usize, u8)> {
+    pub fn find_lowest_entropy(&self, rng: &mut SmallRng) -> Option<(usize, u8)> {
         let lowest_entropy_set = match self.entropy_to_indices.iter().find(|set| !set.is_empty()) {
             Some(set) => set,
             None => return None,
@@ -212,9 +212,9 @@ impl Wfc {
             }
 
             if old.count_ones() > 1 {
-                debug_assert!(
-                    self.entropy_to_indices[old.count_ones() as usize - 2].swap_remove(&index)
-                );
+                let _val =
+                    self.entropy_to_indices[old.count_ones() as usize - 2].swap_remove(&index);
+                debug_assert!(_val);
             }
 
             if new == 0 {
@@ -222,7 +222,8 @@ impl Wfc {
             }
 
             if new.count_ones() > 1 {
-                debug_assert!(self.entropy_to_indices[new.count_ones() as usize - 2].insert(index));
+                let _val = self.entropy_to_indices[new.count_ones() as usize - 2].insert(index);
+                debug_assert!(_val);
             }
 
             let new_tiles = tile_list_from_value(new);
@@ -244,7 +245,7 @@ impl Wfc {
                 let mut valid = 0;
 
                 for &tile in new_tiles.iter() {
-                    valid |= self.tiles[tile as usize].connections[axis as usize]
+                    valid |= self.tiles[tile as usize].connections[axis as usize];
                 }
 
                 self.stack.push((index, valid));

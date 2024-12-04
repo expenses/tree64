@@ -397,14 +397,31 @@ impl Wfc {
         self.0.setup_state()
     }
 
-    fn values(&self) -> Vec<u8> {
-        self.0.values()
+    fn values<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, numpy::array::PyArray3<u8>>> {
+        numpy::array::PyArray1::from_vec(py, self.0.values()).reshape((
+            self.0.depth(),
+            self.0.height(),
+            self.0.width(),
+        ))
     }
 
     fn collapse_all(&mut self) {
         let mut rng = rand::rngs::SmallRng::from_entropy();
 
         self.0.collapse_all(&mut rng)
+    }
+
+    fn all_collapsed(&self) -> bool {
+        self.0.all_collapsed()
+    }
+
+    fn collapse(&mut self, index: usize, tile: u8) {
+        self.0.collapse(index, tile)
+    }
+
+    fn find_lowest_entropy(&self) -> Option<(usize, u8)> {
+        let mut rng = rand::rngs::SmallRng::from_entropy();
+        self.0.find_lowest_entropy(&mut rng)
     }
 }
 

@@ -126,12 +126,12 @@ def add_to_usd_stage(prim_path, stage, arr, time=1, palette=PICO8_PALETTE):
     )
 
 
-def write_usd(filename, arr):
+def write_usd(filename, arr, palette=PICO8_PALETTE):
     from pxr import Usd
 
     stage = Usd.Stage.CreateNew(filename)
     stage.SetMetadata("upAxis", "Z")
-    add_to_usd_stage("/mesh", stage, arr)
+    add_to_usd_stage("/mesh", stage, arr, palette=palette)
     stage.Save()
 
 
