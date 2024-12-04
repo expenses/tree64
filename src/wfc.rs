@@ -55,7 +55,7 @@ struct Wfc {
     array: Vec<Wave>,
     width: usize,
     height: usize,
-    entropy_to_indices: [Vec<usize>; { Wave::BITS as usize - 2 }],
+    entropy_to_indices: [indexmap::IndexSet<usize>; { Wave::BITS as usize - 2 }],
     tile_list: arrayvec::ArrayVec<u8, { Wave::BITS as _ }>,
     stack: Vec<(usize, Wave)>,
 }
@@ -96,6 +96,9 @@ impl Wfc {
         for value in &mut self.array {
             *value = wave;
         }
+        for i in 0..self.array.len() {
+            self.entropy_to_indices[self.tiles.len() - 2].insert(i);
+        }
     }
 
     fn fill_tile_list_from_value(&mut self, value: Wave) {
@@ -111,24 +114,13 @@ impl Wfc {
     }
 
     fn find_lowest_entropy(&mut self, rng: &mut SmallRng) -> Option<(usize, u8)> {
-        for list in self.entropy_to_indices.iter_mut() {
-            list.clear();
-        }
-
-        for (index, value) in self.array.iter().enumerate() {
-            let entropy = value.count_ones();
-            if entropy > 1 {
-                self.entropy_to_indices[entropy as usize - 2].push(index);
-            }
-        }
-
-        let lowest_entropy_list = match self.entropy_to_indices.iter().find(|list| !list.is_empty())
-        {
-            Some(list) => list,
+        let lowest_entropy_set = match self.entropy_to_indices.iter().find(|set| !set.is_empty()) {
+            Some(set) => set,
             None => return None,
         };
 
-        let index = *lowest_entropy_list.choose(rng).unwrap();
+        let index = rng.gen_range(0..lowest_entropy_set.len());
+        let index = *lowest_entropy_set.get_index(index).unwrap();
 
         let value = self.array[index];
 
@@ -160,6 +152,11 @@ impl Wfc {
 
             if old == new || new == 0 {
                 continue;
+            }
+
+            self.entropy_to_indices[old.count_ones() as usize - 2].swap_remove(&index);
+            if new.count_ones() > 1 {
+                self.entropy_to_indices[new.count_ones() as usize - 2].insert(index);
             }
 
             for axis in Axis::ALL {
@@ -206,7 +203,7 @@ fn test() {
     let mut rng = SmallRng::from_entropy();
 
     {
-        let mut wfc = Wfc::new((100, 100, 1));
+        let mut wfc = Wfc::new((1000, 1000, 1));
         let sea = wfc.add();
         let beach = wfc.add();
         let grass = wfc.add();
@@ -231,7 +228,7 @@ fn test() {
 
     // Wait until there's a collapse failure due to beaches not being able to connect to beaches.
     loop {
-        let mut wfc = Wfc::new((100, 100, 1));
+        let mut wfc = Wfc::new((10, 10, 1));
         let sea = wfc.add();
         let beach = wfc.add();
         let grass = wfc.add();
