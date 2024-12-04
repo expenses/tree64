@@ -44,7 +44,7 @@ class Wfc:
             self.tiles[to].connect(frm, -axis)
 
     def setup(self, size):
-        self.shape = size
+        self.shape = np.array(size)
         for tile in self.tiles:
             tile.finalize(len(self.tiles))
         self.arr = np.ones((len(self.tiles),) + size, dtype=bool)
@@ -73,7 +73,7 @@ class Wfc:
         for i in range(len(self.tiles)):
             result[i]=i
         result[self.arr == False] = 0
-        return result.sum(0)
+        return result.sum(0).astype(np.uint8)
 
     def collapse_all(self):
         while True:
@@ -84,7 +84,7 @@ class Wfc:
             self.collapse(coords, tile)
 
     def set(self, coord, negate_values):
-        if (coord < 0).any() or np.array(self.shape <= coord).any():
+        if ((coord<0)|(self.shape <= coord)).any():
             return
         updated = negate_values[self.arr[:, *coord][negate_values]]
 
@@ -109,7 +109,7 @@ class Wfc:
 
             delta = [0] * len(self.shape)
             delta[abs(axis) - 1] = sign(axis)
-            self.set(np.array(coord) + delta, negate)
+            self.set(coord + delta, negate)
 
 
 wfc = Wfc()
@@ -125,6 +125,14 @@ wfc.connect(grass, grass, axii)
 wfc.connect(forest, grass, axii)
 wfc.connect(forest, forest, axii)
 wfc.setup((10, 10, 10))
+
+'''
+empty=wfc.add("empty")
+solid=wfc.add("solid")
+wfc.connect(empty,empty,axii)
+wfc.connect(solid,solid,axii)
+wfc.connect(solid,empty,[3,2,-3,-2,1])
+wfc.setup((20,20,20))
 
 '''
 empty=wfc.add("empty")
@@ -147,7 +155,7 @@ for tile in range(len(wfc.tiles)):
     wfc.connect(empty,tile,axii)
 wfc.setup((10,10,10))
 print(wfc.tiles)
-
+'''
 wfc.collapse_all()
 
 status =    wfc.collapse_status()
@@ -157,7 +165,6 @@ if (status!=1).any():
     print(status)
 
 
-print(wfc.result().shape)
-print(wfc.result().shape)
+print(wfc.result())
 
-write_usd("res.usdc",np.array(wfc.result(), dtype=np.uint8))
+write_usd("res.usdc",wfc.result())
