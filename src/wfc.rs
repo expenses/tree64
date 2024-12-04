@@ -115,6 +115,13 @@ impl Wfc {
         }
     }
 
+    fn width(&self) -> usize {
+        self.width
+    }
+    fn height(&self) -> usize {
+        self.height
+    }
+
     fn depth(&self) -> usize {
         self.array.len() / self.width / self.height
     }
