@@ -189,3 +189,80 @@ def rot_z(d):
     if d == "negy":
         return "x"
     return d
+
+
+class Tileset:
+    def __init__(self, wfc):
+        self.wfc = wfc
+        self.tiles = {}
+        self.tag_dir_to_tiles = {}
+        # self.blocklist = set()
+
+    def add(self, prob, tags):
+        tile = self.wfc.add(prob)
+
+        tile_tags = {}
+        connect_to_tags = {}
+
+        for dir, tag in tags.items():
+            # self and connect-to tag is the same unless specified.
+            if type(tag) is str:
+                tag = (tag, tag)
+            tile_tag, connect_to_tag = tag
+            # print(tile_tag, connect_to_tag)
+            tile_tags[dir] = tile_tag
+            connect_to_tags[dir] = connect_to_tag
+
+        self.tiles[tile] = connect_to_tags
+
+        for dir, tag in tile_tags.items():
+            pair = (flip(dir), tag)
+            if not pair in self.tag_dir_to_tiles:
+                self.tag_dir_to_tiles[pair] = []
+            self.tag_dir_to_tiles[pair].append(tile)
+
+        # No point in not doing this unless we're using a blocklist
+        self.connect_all()
+
+        return tile
+
+    def add_mul(self, prob, rots, tags):
+        res = []
+        prob /= rots
+        for i in range(rots):
+            res.append(self.add(prob, tags))
+            tags = rot_z(tags)
+        return res
+
+    def connect_all(self):
+        for frm, tags in self.tiles.items():
+            for dir, tag in tags.items():
+                if not (dir, tag) in self.tag_dir_to_tiles:
+                    print(f"missing ({dir}, {tag})")
+                    continue
+
+                for to in self.tag_dir_to_tiles[(dir, tag)]:
+                    """
+                    if (frm, to) in self.blocklist or (to, frm) in self.blocklist:
+                        # print("skipping")
+                        continue
+                    """
+                    # print(f"connecting {frm} to {to} along {dir}")
+                    self.wfc.connect(frm, to, [dir])
+
+
+def setup_map_tiles(count, shape):
+    tiles = {}
+    for i in range(count):
+        tiles[i] = np.zeros(shape, dtype=np.uint8)
+    return tiles
+
+
+def map_2d(values, output, tiles, tile_shape):
+    tile_h, tile_w = tile_shape
+    for y in range(values.shape[0]):
+        for x in range(values.shape[1]):
+            output[y * tile_h : (y + 1) * tile_h, x * tile_w : (x + 1) * tile_w] = (
+                tiles[values[y, x]]
+            )
+    return output
