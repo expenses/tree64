@@ -1,4 +1,3 @@
-
 from markov.markov import *
 import numpy as np
 
@@ -156,3 +155,37 @@ class UsdWriter:
         add_to_usd_stage("/arr", self.stage, arr, time=self.frameindex)
         self.stage.SetEndTimeCode(self.frameindex)
         self.stage.Save()
+
+
+def flip(d):
+    if d == "x":
+        return "negx"
+    if d == "y":
+        return "negy"
+    if d == "z":
+        return "negz"
+    if d == "negx":
+        return "x"
+    if d == "negy":
+        return "y"
+    if d == "negz":
+        return "z"
+
+
+def rot_z(d):
+    if type(d) is dict:
+        m = d
+        n = {}
+        for d, v in m.items():
+            n[rot_z(d)] = v
+        return n
+
+    if d == "x":
+        return "y"
+    if d == "y":
+        return "negx"
+    if d == "negx":
+        return "negy"
+    if d == "negy":
+        return "x"
+    return d

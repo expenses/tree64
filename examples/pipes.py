@@ -1,103 +1,82 @@
 from markov import *
 
-axises = ["X", "Y"]
-
 dim = 64
 
 wfc = Wfc((dim, dim, 1))
 
-tiles = {}
-tag_dir_to_tiles = {}
 
-blocklist = set()
+class Tileset:
+    def __init__(self, wfc):
+        self.wfc = wfc
+        self.tiles = {}
+        self.tag_dir_to_tiles = {}
+        self.blocklist = set()
 
+    def add(self, prob, tags):
+        tile = self.wfc.add(prob)
 
-def flip(d):
-    if d == "x":
-        return "negx"
-    if d == "y":
-        return "negy"
-    if d == "negx":
-        return "x"
-    if d == "negy":
-        return "y"
-
-
-def rot(d):
-    if d == "x":
-        return "y"
-    if d == "y":
-        return "negx"
-    if d == "negx":
-        return "negy"
-    if d == "negy":
-        return "x"
-
-
-def rot_m(m):
-    n = {}
-    for d, v in m.items():
-        n[rot(d)] = v
-    return n
-
-
-def add(prob, tags):
-    tile = wfc.add(prob)
-
-    tiles[tile] = tags
-
-    for dir, tag in tags.items():
-        pair = (flip(dir), tag)
-        if not pair in tag_dir_to_tiles:
-            tag_dir_to_tiles[pair] = []
-        tag_dir_to_tiles[pair].append(tile)
-    return tile
-
-
-def add_mul(prob, rots, tags):
-    res = []
-    prob /= rots
-    for i in range(rots):
-        res.append(add(prob, tags))
-        tags = rot_m(tags)
-    return res
-
-
-def connect_all():
-    for frm, tags in tiles.items():
         for dir, tag in tags.items():
-            for to in tag_dir_to_tiles[(dir, tag)]:
-                if (frm, to) in blocklist or (to, frm) in blocklist:
-                    # print("skipping")
-                    continue
-                # print(f"connecting {frm} to {to} along {dir}")
-                wfc.connect(frm, to, [dir])
+            if type(tag) is not list:
+                tags[dir] = [tag]
+
+        self.tiles[tile] = tags
+
+        for dir, dir_tags in tags.items():
+            for tag in dir_tags:
+                pair = (flip(dir), tag)
+                if not pair in self.tag_dir_to_tiles:
+                    self.tag_dir_to_tiles[pair] = []
+                self.tag_dir_to_tiles[pair].append(tile)
+        return tile
+
+    def add_mul(self, prob, rots, tags):
+        res = []
+        prob /= rots
+        for i in range(rots):
+            res.append(self.add(prob, tags))
+            tags = rot_z(tags)
+        return res
+
+    def connect_all(self):
+        for frm, tags in self.tiles.items():
+            for dir, dir_tags in tags.items():
+                for tag in dir_tags:
+                    if not (dir, tag) in self.tag_dir_to_tiles:
+                        continue
+
+                    for to in self.tag_dir_to_tiles[(dir, tag)]:
+                        if (frm, to) in self.blocklist or (to, frm) in self.blocklist:
+                            # print("skipping")
+                            continue
+                        # print(f"connecting {frm} to {to} along {dir}")
+                        self.wfc.connect(frm, to, [dir])
 
 
-empty = add(0.0, {"x": "no", "negx": "no", "y": "no", "negy": "no"})
+tileset = Tileset(wfc)
 
-straight_h, straight_v = add_mul(
-    1.0, 2, {"x": "line", "negx": "line", "y": "no", "negy": "no"}
+empty = tileset.add(0.0, {"x": "no", "negx": "no", "y": "no", "negy": "no"})
+
+# straight = tileset.add({"x":("right", "left")})
+
+straight_h, straight_v = tileset.add_mul(
+    1.0, 2, {"x": ("line", "right"), "negx": "line", "y": "no", "negy": "no"}
 )
 
-edge_dr, edge_dl, edge_ul, edge_ur = add_mul(
+edge_dr, edge_dl, edge_ul, edge_ur = tileset.add_mul(
     1.0, 4, {"y": "line", "negy": "no", "x": "line", "negx": "no"}
 )
 
 
-end_r, end_d, end_l, end_u = add_mul(
+end_r, end_d, end_l, end_u = tileset.add_mul(
     0.01, 4, {"y": "no", "negy": "no", "x": "line", "negx": "no"}
 )
 
-cross = add(2.5, {"y": "line", "negy": "line", "x": "line", "negx": "line"})
+cross = tileset.add(2.5, {"y": "line", "negy": "line", "x": "line", "negx": "line"})
 
-blocklist.add((cross, cross))
+tileset.blocklist.add((cross, cross))
 
-print(blocklist)
-print(tag_dir_to_tiles)
-
-connect_all()
-
+tileset.connect_all()
+"""
 
 tiles = {}
 for i in range(cross + 1):
@@ -150,3 +129,4 @@ while True:
 print(i)
 # wfc.collapse_all()
 assert wfc.all_collapsed()
+"""

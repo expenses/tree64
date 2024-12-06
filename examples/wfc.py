@@ -2,7 +2,7 @@ import numpy as np
 import random
 from markov import *
 
-axii = [1, 2, -1, -2, 3,-3]
+axii = [1, 2, -1, -2, 3, -3]
 
 
 class Tile:
@@ -71,7 +71,7 @@ class Wfc:
     def result(self):
         result = np.zeros(self.arr.shape, dtype=np.uint8)
         for i in range(len(self.tiles)):
-            result[i]=i
+            result[i] = i
         result[self.arr == False] = 0
         return result.sum(0).astype(np.uint8)
 
@@ -84,7 +84,7 @@ class Wfc:
             self.collapse(coords, tile)
 
     def set(self, coord, negate_values):
-        if ((coord<0)|(self.shape <= coord)).any():
+        if ((coord < 0) | (self.shape <= coord)).any():
             return
         updated = negate_values[self.arr[:, *coord][negate_values]]
 
@@ -95,7 +95,7 @@ class Wfc:
 
         remaining = self.arr[:, *coord].nonzero()[0]
 
-        if len(remaining)==0:
+        if len(remaining) == 0:
             print(coord)
             return
 
@@ -113,7 +113,7 @@ class Wfc:
 
 
 wfc = Wfc()
-'''
+"""
 forest = wfc.add("forest")
 grass = wfc.add("grass")
 beach = wfc.add("beach")
@@ -126,15 +126,15 @@ wfc.connect(forest, grass, axii)
 wfc.connect(forest, forest, axii)
 wfc.setup((10, 10, 10))
 
-'''
-empty=wfc.add("empty")
-solid=wfc.add("solid")
-wfc.connect(empty,empty,axii)
-wfc.connect(solid,solid,axii)
-wfc.connect(solid,empty,[3,2,-3,-2,1])
-wfc.setup((20,20,20))
+"""
+empty = wfc.add("empty")
+solid = wfc.add("solid")
+wfc.connect(empty, empty, axii)
+wfc.connect(solid, solid, axii)
+wfc.connect(solid, empty, [3, 2, -3, -2, 1])
+wfc.setup((20, 20, 20))
 
-'''
+"""
 empty=wfc.add("empty")
 base = wfc.add("base")
 wfc.connect(base,base,[3,-3,2,-2])
@@ -155,16 +155,16 @@ for tile in range(len(wfc.tiles)):
     wfc.connect(empty,tile,axii)
 wfc.setup((10,10,10))
 print(wfc.tiles)
-'''
+"""
 wfc.collapse_all()
 
-status =    wfc.collapse_status()
+status = wfc.collapse_status()
 
-if (status!=1).any():
+if (status != 1).any():
     print("!!")
     print(status)
 
 
 print(wfc.result())
 
-write_usd("res.usdc",wfc.result())
+write_usd("res.usdc", wfc.result())
