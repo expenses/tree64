@@ -1,6 +1,44 @@
 use crate::arrays::{compose, decompose};
+use indexmap::IndexSet;
 use ordered_float::OrderedFloat;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
+use std::cmp::Ord;
+use std::collections::BinaryHeap;
+use std::collections::HashMap;
+use std::hash::Hash;
+
+#[derive(Default)]
+struct ListQueue<T, P: Ord> {
+    queue: BinaryHeap<P>,
+    lists: HashMap<P, IndexSet<T>>,
+}
+
+impl<T, P: Copy + Ord + Hash> ListQueue<T, P> {
+    fn new(p: P, set: IndexSet<T>) -> Self {
+        let mut queue = BinaryHeap::new();
+        queue.push(p);
+        let mut lists = HashMap::new();
+        lists.insert(p, set);
+        Self { queue, lists }
+    }
+
+    fn try_peek(&mut self) -> Option<Option<&IndexSet<T>>> {
+        while let Some(p) = self.queue.peek_mut() {
+            if let std::collections::hash_map::Entry::Occupied(set) = self.lists.entry(*p) {
+                if !set.get().is_empty() {
+                    return Some(Some(set.into_mut()));
+                } else {
+                    set.remove();
+                }
+            }
+
+            std::collections::binary_heap::PeekMut::pop(p);
+            //return Some(None);
+        }
+
+        None
+    }
+}
 
 type Wave = u64;
 
@@ -115,6 +153,20 @@ impl Wfc {
         }
     }
 
+    pub fn calculate_shannon_entropy(&self, wave: Wave) -> f32 {
+        let mut sum = 0.0;
+        for i in tile_list_from_value(wave) {
+            let prob = self.probabilities[i as usize];
+
+            if prob <= 0.0 {
+                continue;
+            }
+
+            sum -= prob * prob.log2();
+        }
+        sum
+    }
+
     pub fn width(&self) -> usize {
         self.width
     }
@@ -147,6 +199,14 @@ impl Wfc {
     }
 
     pub fn setup_state(&mut self) {
+        let mut sum = 0.0;
+        for &prob in &self.probabilities {
+            sum += prob;
+        }
+        for prob in &mut self.probabilities {
+            *prob /= sum;
+        }
+
         let wave = Wave::MAX >> (Wave::BITS as usize - self.tiles.len());
         for value in &mut self.array {
             *value = wave;
