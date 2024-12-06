@@ -154,7 +154,7 @@ pub struct Wfc {
     width: usize,
     height: usize,
     stack: Vec<(usize, Wave)>,
-    entropy_to_indices: SetQueue<usize, Reverse<u8>>,
+    entropy_to_indices: SetQueue<usize, Reverse<OrderedFloat<f32>>>,
 }
 
 impl Wfc {
@@ -236,8 +236,10 @@ impl Wfc {
             set.insert(i);
         }
 
-        self.entropy_to_indices
-            .insert_set(Reverse(self.tiles.len() as _), set);
+        self.entropy_to_indices.insert_set(
+            Reverse(OrderedFloat(self.calculate_shannon_entropy(wave))),
+            set,
+        );
     }
 
     pub fn find_lowest_entropy(&mut self, rng: &mut SmallRng) -> Option<(usize, u8)> {
@@ -302,9 +304,10 @@ impl Wfc {
             }
 
             if old.count_ones() > 1 {
-                let _val = self
-                    .entropy_to_indices
-                    .remove(Reverse(old.count_ones() as u8), &index);
+                let _val = self.entropy_to_indices.remove(
+                    Reverse(OrderedFloat(self.calculate_shannon_entropy(old))),
+                    &index,
+                );
                 debug_assert!(_val);
             }
 
@@ -313,9 +316,10 @@ impl Wfc {
             }
 
             if new.count_ones() > 1 {
-                let _val = self
-                    .entropy_to_indices
-                    .insert(Reverse(new.count_ones() as u8), index);
+                let _val = self.entropy_to_indices.insert(
+                    Reverse(OrderedFloat(self.calculate_shannon_entropy(new))),
+                    index,
+                );
                 debug_assert!(_val);
             }
 
