@@ -21,7 +21,7 @@ end_r, end_d, end_l, end_u = tileset.add_mul(
     0.01, 4, {"y": "no", "negy": "no", "x": "line", "negx": "no"}
 )
 
-# Disallow self connections by specifying a different self and connect-to tags.
+# Disallow self connections by specifying different self and connect-to tags.
 cross = tileset.add(
     2.5,
     {
