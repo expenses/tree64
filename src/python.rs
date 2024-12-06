@@ -419,7 +419,7 @@ impl Wfc {
         self.0.collapse(index, tile)
     }
 
-    fn find_lowest_entropy(&self) -> Option<(usize, u8)> {
+    fn find_lowest_entropy(&mut self) -> Option<(usize, u8)> {
         let mut rng = rand::rngs::SmallRng::from_entropy();
         self.0.find_lowest_entropy(&mut rng)
     }

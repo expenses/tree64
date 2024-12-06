@@ -1,30 +1,29 @@
 use crate::arrays::{compose, decompose};
 use indexmap::IndexSet;
 use ordered_float::OrderedFloat;
-use rand::{rngs::SmallRng, Rng, SeedableRng};
+use rand::{rngs::SmallRng, Rng};
 use std::cmp::Ord;
-use std::collections::BinaryHeap;
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{binary_heap, hash_map, BinaryHeap, HashMap};
 use std::hash::Hash;
 
 #[derive(Default)]
-struct ListQueue<T, P: Ord> {
+struct SetQueue<T, P: Ord> {
     queue: BinaryHeap<P>,
-    lists: HashMap<P, IndexSet<T>>,
+    sets: HashMap<P, IndexSet<T>>,
 }
 
-impl<T, P: Copy + Ord + Hash> ListQueue<T, P> {
-    fn new(p: P, set: IndexSet<T>) -> Self {
-        let mut queue = BinaryHeap::new();
-        queue.push(p);
-        let mut lists = HashMap::new();
-        lists.insert(p, set);
-        Self { queue, lists }
+impl<T: Hash + Eq, P: Copy + Ord + Hash> SetQueue<T, P> {
+    fn insert_set(&mut self, p: P, set: IndexSet<T>) {
+        self.queue.push(p);
+        self.sets.insert(p, set);
     }
 
+    // Peek only once. Needs the new polonius borrow checker to be enabled
+    // for a looping version (-Zpolonius)
     fn try_peek(&mut self) -> Option<Option<&IndexSet<T>>> {
-        while let Some(p) = self.queue.peek_mut() {
-            if let std::collections::hash_map::Entry::Occupied(set) = self.lists.entry(*p) {
+        if let Some(p) = self.queue.peek_mut() {
+            if let hash_map::Entry::Occupied(set) = self.sets.entry(*p) {
                 if !set.get().is_empty() {
                     return Some(Some(set.into_mut()));
                 } else {
@@ -32,11 +31,30 @@ impl<T, P: Copy + Ord + Hash> ListQueue<T, P> {
                 }
             }
 
-            std::collections::binary_heap::PeekMut::pop(p);
-            //return Some(None);
+            binary_heap::PeekMut::pop(p);
+            return Some(None);
         }
 
         None
+    }
+
+    fn insert(&mut self, p: P, value: T) -> bool {
+        let set = match self.sets.entry(p) {
+            hash_map::Entry::Occupied(set) => set.into_mut(),
+            hash_map::Entry::Vacant(set) => {
+                self.queue.push(p);
+                set.insert(Default::default())
+            }
+        };
+        set.insert(value)
+    }
+
+    fn remove(&mut self, p: P, value: &T) -> bool {
+        if let Some(set) = self.sets.get_mut(&p) {
+            set.swap_remove(value)
+        } else {
+            false
+        }
     }
 }
 
@@ -75,7 +93,7 @@ impl Axis {
     }
 }
 
-fn tile_list_from_value(value: Wave) -> arrayvec::ArrayVec<u8, { Wave::BITS as _ }> {
+fn tile_list_from_wave(value: Wave) -> arrayvec::ArrayVec<u8, { Wave::BITS as _ }> {
     let mut tile_list = arrayvec::ArrayVec::new();
 
     for i in 0..Wave::BITS {
@@ -135,8 +153,8 @@ pub struct Wfc {
     array: Vec<Wave>,
     width: usize,
     height: usize,
-    entropy_to_indices: [indexmap::IndexSet<usize>; Wave::BITS as usize - 2],
     stack: Vec<(usize, Wave)>,
+    entropy_to_indices: SetQueue<usize, Reverse<u8>>,
 }
 
 impl Wfc {
@@ -145,17 +163,17 @@ impl Wfc {
         Self {
             tiles: Default::default(),
             probabilities: Default::default(),
-            entropy_to_indices: [(); { Wave::BITS as usize - 2 }].map(|()| Default::default()),
             array: vec![0; width * height * depth],
             width,
             height,
             stack: Vec::new(),
+            entropy_to_indices: Default::default(),
         }
     }
 
     pub fn calculate_shannon_entropy(&self, wave: Wave) -> f32 {
         let mut sum = 0.0;
-        for i in tile_list_from_value(wave) {
+        for i in tile_list_from_wave(wave) {
             let prob = self.probabilities[i as usize];
 
             if prob <= 0.0 {
@@ -211,15 +229,27 @@ impl Wfc {
         for value in &mut self.array {
             *value = wave;
         }
+
+        let mut set = IndexSet::new();
+
         for i in 0..self.array.len() {
-            self.entropy_to_indices[self.tiles.len() - 2].insert(i);
+            set.insert(i);
         }
+
+        self.entropy_to_indices
+            .insert_set(Reverse(self.tiles.len() as _), set);
     }
 
-    pub fn find_lowest_entropy(&self, rng: &mut SmallRng) -> Option<(usize, u8)> {
-        let lowest_entropy_set = match self.entropy_to_indices.iter().find(|set| !set.is_empty()) {
-            Some(set) => set,
-            None => return None,
+    pub fn find_lowest_entropy(&mut self, rng: &mut SmallRng) -> Option<(usize, u8)> {
+        let lowest_entropy_set = loop {
+            if let Some(v) = self.entropy_to_indices.try_peek() {
+                match v {
+                    None => {}
+                    Some(set) => break set,
+                }
+            } else {
+                return None;
+            }
         };
 
         let index = rng.gen_range(0..lowest_entropy_set.len());
@@ -230,7 +260,7 @@ impl Wfc {
         let mut rolling_probability: arrayvec::ArrayVec<_, { Wave::BITS as _ }> =
             Default::default();
 
-        let list = tile_list_from_value(value);
+        let list = tile_list_from_wave(value);
 
         let mut sum = 0.0;
         for &tile in &list {
@@ -272,8 +302,9 @@ impl Wfc {
             }
 
             if old.count_ones() > 1 {
-                let _val =
-                    self.entropy_to_indices[old.count_ones() as usize - 2].swap_remove(&index);
+                let _val = self
+                    .entropy_to_indices
+                    .remove(Reverse(old.count_ones() as u8), &index);
                 debug_assert!(_val);
             }
 
@@ -282,11 +313,13 @@ impl Wfc {
             }
 
             if new.count_ones() > 1 {
-                let _val = self.entropy_to_indices[new.count_ones() as usize - 2].insert(index);
+                let _val = self
+                    .entropy_to_indices
+                    .insert(Reverse(new.count_ones() as u8), index);
                 debug_assert!(_val);
             }
 
-            let new_tiles = tile_list_from_value(new);
+            let new_tiles = tile_list_from_wave(new);
 
             for axis in Axis::ALL {
                 let (mut x, mut y, mut z) = decompose(index, self.width, self.height);
@@ -325,6 +358,9 @@ impl Wfc {
     }
 }
 
+#[cfg(test)]
+use rand::SeedableRng;
+
 #[test]
 fn normal() {
     let mut rng = SmallRng::from_entropy();
@@ -347,7 +383,7 @@ fn normal() {
     wfc.collapse_all(&mut rng);
     assert!(
         wfc.all_collapsed(),
-        "{:?}",
+        "failed to collapse: {:?}",
         &wfc.array.iter().map(|v| v.count_ones()).collect::<Vec<_>>()
     );
 }

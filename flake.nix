@@ -73,6 +73,8 @@
                 python3
                 python3.pkgs.pip
                 maturin
+                linuxPackages_latest.perf
+                flamegraph
               ]
               ++ (python-deps python3.pkgs);
             shellHook = ''
