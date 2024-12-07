@@ -75,6 +75,8 @@
                 maturin
                 linuxPackages_latest.perf
                 flamegraph
+                black
+                packages.usd2gltf
               ]
               ++ (python-deps python3.pkgs);
             shellHook = ''

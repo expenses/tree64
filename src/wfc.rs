@@ -171,6 +171,10 @@ impl Wfc {
         }
     }
 
+    pub fn num_tiles(&self) -> usize {
+        self.tiles.len()
+    }
+
     pub fn calculate_shannon_entropy(&self, wave: Wave) -> f32 {
         let mut sum = 0.0;
         for i in tile_list_from_wave(wave) {

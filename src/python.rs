@@ -393,6 +393,10 @@ impl Wfc {
         self.0.connect(from, to, &axises)
     }
 
+    fn num_tiles(&self) -> usize {
+        self.0.num_tiles()
+    }
+
     fn setup_state(&mut self) {
         self.0.setup_state()
     }

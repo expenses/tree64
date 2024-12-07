@@ -204,22 +204,28 @@ class Tileset:
         tile_tags = {}
         connect_to_tags = {}
 
-        for dir, tag in tags.items():
-            # self and connect-to tag is the same unless specified.
-            if type(tag) is str:
-                tag = (tag, tag)
-            tile_tag, connect_to_tag = tag
-            # print(tile_tag, connect_to_tag)
-            tile_tags[dir] = tile_tag
-            connect_to_tags[dir] = connect_to_tag
+        for dir, dir_tags in tags.items():
+            if type(dir_tags) is not list:
+                dir_tags = [dir_tags]
+            tile_tags[dir] = []
+            connect_to_tags[dir] = []
+            for tag in dir_tags:
+                # self and connect-to tag is the same unless specified.
+                if type(tag) is str:
+                    tag = (tag, tag)
+                tile_tag, connect_to_tag = tag
+                # print(tile_tag, connect_to_tag)
+                tile_tags[dir].append(tile_tag)
+                connect_to_tags[dir].append(connect_to_tag)
 
         self.tiles[tile] = connect_to_tags
 
-        for dir, tag in tile_tags.items():
-            pair = (flip(dir), tag)
-            if not pair in self.tag_dir_to_tiles:
-                self.tag_dir_to_tiles[pair] = []
-            self.tag_dir_to_tiles[pair].append(tile)
+        for dir, dir_tags in tile_tags.items():
+            for tag in dir_tags:
+                pair = (flip(dir), tag)
+                if not pair in self.tag_dir_to_tiles:
+                    self.tag_dir_to_tiles[pair] = []
+                self.tag_dir_to_tiles[pair].append(tile)
 
         # No point in not doing this unless we're using a blocklist
         self.connect_all()
@@ -236,19 +242,20 @@ class Tileset:
 
     def connect_all(self):
         for frm, tags in self.tiles.items():
-            for dir, tag in tags.items():
-                if not (dir, tag) in self.tag_dir_to_tiles:
-                    print(f"missing ({dir}, {tag})")
-                    continue
-
-                for to in self.tag_dir_to_tiles[(dir, tag)]:
-                    """
-                    if (frm, to) in self.blocklist or (to, frm) in self.blocklist:
-                        # print("skipping")
+            for dir, dir_tags in tags.items():
+                for tag in dir_tags:
+                    if not (dir, tag) in self.tag_dir_to_tiles:
+                        print(f"missing ({dir}, {tag})")
                         continue
-                    """
-                    # print(f"connecting {frm} to {to} along {dir}")
-                    self.wfc.connect(frm, to, [dir])
+
+                    for to in self.tag_dir_to_tiles[(dir, tag)]:
+                        """
+                        if (frm, to) in self.blocklist or (to, frm) in self.blocklist:
+                            # print("skipping")
+                            continue
+                        """
+                        # print(f"connecting {frm} to {to} along {dir}")
+                        self.wfc.connect(frm, to, [dir])
 
 
 def setup_map_tiles(count, shape):
