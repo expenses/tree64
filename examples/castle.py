@@ -125,30 +125,18 @@ for x in range(dim):
 
 
 def pretty():
-    values = wfc.values()[0]
-
-    out = np.copy(values)
-
-    for tile in river + riverturn:
-        out[values == tile] = index_for_colour("U")
-
-    for tile in bridge + [courtyard]:
-        out[values == tile] = index_for_colour("D")
-
-    for tile in road + roadturn + roadfork:
-        out[values == tile] = index_for_colour("A")
-
-    for tile in wall + wallturn + wallturn_inner:
-        out[values == tile] = index_for_colour("P")
-
-    out[values == ground] = index_for_colour("E")
-
-    for tile in park + [tree]:
-        out[values == tile] = index_for_colour("G")
-
-    out[value == 64] = 0
-
-    return out
+    return replace_values(
+        wfc.values()[0],
+        [
+            (river + riverturn, "U"),
+            (bridge + [courtyard], "D"),
+            (road + roadturn + roadfork, "A"),
+            (wall + wallturn + wallturn_inner, "P"),
+            ([ground], "E"),
+            (park + [tree], "G"),
+            ([64], 0),
+        ],
+    )
 
 
 writer = FfmpegWriter("out.avi", (dim, dim))

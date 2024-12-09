@@ -158,21 +158,6 @@ class UsdWriter:
         self.stage.Save()
 
 
-def flip(d):
-    if d == "x":
-        return "negx"
-    if d == "y":
-        return "negy"
-    if d == "z":
-        return "negz"
-    if d == "negx":
-        return "x"
-    if d == "negy":
-        return "y"
-    if d == "negz":
-        return "z"
-
-
 def rot_z(d):
     if type(d) is dict:
         m = d
@@ -188,6 +173,25 @@ def rot_z(d):
     if d == "negx":
         return "negy"
     if d == "negy":
+        return "x"
+    return d
+
+
+def rot_y(d):
+    if type(d) is dict:
+        m = d
+        n = {}
+        for d, v in m.items():
+            n[rot_y(d)] = v
+        return n
+
+    if d == "x":
+        return "z"
+    if d == "z":
+        return "negx"
+    if d == "negx":
+        return "negz"
+    if d == "negz":
         return "x"
     return d
 
@@ -223,14 +227,14 @@ def apply_symmetry(tags, symmetry):
     if type(tags) is not dict:
         tags = {"x": tags}
 
-    for dir in ["x", "y", "negx", "negy"]:
+    for dir in ["x", "y", "negx", "negy", "z", "negz"]:
         if not dir in tags:
             tags[dir] = Tags()
         if type(tags[dir]) is str:
             tags[dir] = Tags(tags[dir])
 
     if symmetry == "X":
-        for dir, t in tags.items():
+        for dir in ["x", "y", "negx", "negy"]:
             for other in tags.values():
                 tags[dir].merge(other)
     if symmetry == "I":
@@ -239,9 +243,20 @@ def apply_symmetry(tags, symmetry):
     if symmetry == "L":
         tags["x"].merge(tags["y"])
         tags["negx"].merge(tags["negy"])
-        print(tags)
     if symmetry == "T":
         tags["x"].merge(tags["negx"])
+    if symmetry == "X_3d":
+        for dir in ["x", "y", "negx", "negy", "z", "negz"]:
+            for other in tags.values():
+                tags[dir].merge(other)
+    if symmetry == "I_3d":
+        tags["x"].merge(tags["negx"])
+        tags["y"].merge(tags["negy"])
+        tags["z"].merge(tags["negz"])
+    if symmetry == "L_3d":
+        tags["x"].merge(tags["y"])
+        tags["negx"].merge(tags["negy"])
+        tags["z"].merge(tags["negz"])
     return tags
 
 
@@ -261,8 +276,8 @@ class Tileset:
         tags = apply_symmetry(tags, symmetry)
 
         for dir, tags in tags.items():
-            # if type(tags) is str:
-            #    tags = Tags(tags)
+            if type(tags) is str:
+                tags = Tags(tags)
 
             tile_tags[dir] = tags.incoming
             connect_to_tags[dir] = tags.outgoing
@@ -271,7 +286,7 @@ class Tileset:
 
         for dir, dir_tags in tile_tags.items():
             for tag in dir_tags:
-                pair = (flip(dir), tag)
+                pair = (FLIPPED[dir], tag)
                 if not pair in self.tag_dir_to_tiles:
                     self.tag_dir_to_tiles[pair] = []
                 self.tag_dir_to_tiles[pair].append(tile)
@@ -315,11 +330,125 @@ def setup_map_tiles(count, shape):
     return tiles
 
 
-def map_2d(values, output, tiles, tile_shape):
-    tile_h, tile_w = tile_shape
+def map_2d(values, output, tiles):
+    tile_h, tile_w = list(tiles.values())[0].shape
     for y in range(values.shape[0]):
         for x in range(values.shape[1]):
-            output[y * tile_h : (y + 1) * tile_h, x * tile_w : (x + 1) * tile_w] = (
-                tiles[values[y, x]]
-            )
+            if values[y, x] < len(tiles):
+                output[y * tile_h : (y + 1) * tile_h, x * tile_w : (x + 1) * tile_w] = (
+                    tiles[values[y, x]]
+                )
+    return output
+
+
+def map_3d(values, output, tiles):
+    tile_d, tile_h, tile_w = list(tiles.values())[0].shape
+    for z in range(values.shape[0]):
+        for y in range(values.shape[1]):
+            for x in range(values.shape[2]):
+                if values[z, y, x] < len(tiles):
+                    output[
+                        z * tile_d : (z + 1) * tile_d,
+                        y * tile_h : (y + 1) * tile_h,
+                        x * tile_w : (x + 1) * tile_w,
+                    ] = tiles[values[z, y, x]]
+    return output
+
+
+FLIPPED = {"x": "negx", "y": "negy", "negx": "x", "negy": "y", "z": "negz", "negz": "z"}
+
+
+def split_xml_tile(string, tiles):
+    split = string.split(" ")
+    if len(split) == 1:
+        return split[0], "x"
+    axis = ["x", "negy", "negx", "y"]
+
+    if split[0] in tiles:
+        return split[0], axis[int(split[1])]
+    else:
+        zs = split[0].count("z")
+        xs = split[0].count("x")
+        ys = split[0].count("y")
+        return split[1], axis[zs]
+
+
+def read_xml(filename, dims, symmetry_override={}):
+    import xmltodict
+
+    tiles = {}
+    d = xmltodict.parse(open(filename).read())
+
+    if "set" in d:
+        d = d["set"]
+    elif "tileset" in d:
+        d = d["tileset"]
+
+    for tile in d["tiles"]["tile"]:
+        name = tile["@name"]
+        tiles[name] = {
+            "symmetry": (
+                tile["@symmetry"]
+                if "@symmetry" in tile
+                else (symmetry_override[name] if name in symmetry_override else "")
+            ),
+            "weight": float(tile["@weight"]) if "@weight" in tile else 1.0,
+            "conns": {"x": Tags(), "y": Tags(), "negx": Tags(), "negy": Tags()},
+        }
+
+    for neighbor in d["neighbors"]["neighbor"]:
+        left, left_axis = split_xml_tile(neighbor["@left"], tiles)
+        right, right_axis = split_xml_tile(neighbor["@right"], tiles)
+        right_axis = FLIPPED[right_axis]
+
+        incoming = f"{left}_{left_axis}"
+        outgoing = f"{right}_{right_axis}"
+        tiles[left]["conns"][left_axis].incoming.add(incoming)
+        tiles[right]["conns"][right_axis].outgoing.add(incoming)
+
+        tiles[left]["conns"][left_axis].outgoing.add(outgoing)
+        tiles[right]["conns"][right_axis].incoming.add(outgoing)
+
+    wfc = Wfc(dims)
+    tileset = Tileset(wfc)
+
+    for name, tile in tiles.items():
+        times = 4
+        if tile["symmetry"] == "X":
+            times = 1
+        elif tile["symmetry"] == "I":
+            times = 2
+
+        tiles[name] = tileset.add_mul(
+            tile["weight"], times, tile["conns"], symmetry=tile["symmetry"]
+        )
+
+    wfc.setup_state()
+
+    return tiles, wfc
+
+
+def collapse_all_with_callback(wfc, callback, skip=1):
+    i = 0
+    while True:
+        value = wfc.find_lowest_entropy()
+        if value is None:
+            break
+        index, tile = value
+        wfc.collapse(index, tile)
+        if i % skip == 0:
+            callback()
+        i += 1
+
+
+def replace_values(input, tiles):
+    output = np.copy(input)
+
+    for tiles, value in tiles:
+        if type(value) is str:
+            value = index_for_colour(value)
+
+        for tile in tiles:
+            output[input == tile] = value
+
     return output
