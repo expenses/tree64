@@ -6,12 +6,7 @@ wfc = Wfc((dim, dim, 1))
 
 tileset = Tileset(wfc)
 
-t_river_out = Tags(outgoing="river")
-t_ground_out = Tags(outgoing="ground")
-t_road_out = Tags(outgoing="road")
-
-riverside = Tags(incoming="riverside", outgoing="ground")
-
+riverside = Tags(incoming="riverside", outgoing=["ground", "wallside", "roadside"])
 roadside = Tags(incoming="roadside", outgoing=["wallside", "ground", "riverside"])
 
 river_prob = 0.002
@@ -23,7 +18,7 @@ tree = tileset.add(1.0, Tags("forest", outgoing="riverside"), symmetry="X")
 
 
 bridge = tileset.add_mul(
-    river_prob * 0.25, 2, {"x": t_river_out, "y": "road"}, symmetry="I"
+    river_prob * 0.25, 2, {"x": Tags(outgoing="river"), "y": "road"}, symmetry="I"
 )
 river = tileset.add_mul(river_prob, 2, {"x": "river", "y": riverside}, symmetry="I")
 
@@ -49,7 +44,7 @@ roadturn = tileset.add_mul(
     1.0,
     4,
     {
-        "x": t_road_out,
+        "x": Tags(outgoing="road"),
         "negx": roadside,
     },
     symmetry="L",
@@ -58,8 +53,8 @@ roadfork = tileset.add_mul(
     1.0,
     4,
     {
-        "x": t_road_out,
-        "y": t_road_out,
+        "x": Tags(outgoing="road"),
+        "y": Tags(outgoing="road"),
         "negy": roadside,
     },
     symmetry="T",
@@ -122,9 +117,7 @@ wfc.setup_state()
 
 
 for x in range(dim):
-    wave = (1 << ground) | (1 << tree)
-    for tile in river + riverturn:
-        wave |= 1 << tile
+    wave = wave_from_tiles(river + riverturn + [ground, tree])
     wfc.partial_collapse(x, wave)
     wfc.partial_collapse(x * dim, wave)
     wfc.partial_collapse(dim * dim - 1 - x, wave)

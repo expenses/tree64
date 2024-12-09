@@ -56,7 +56,8 @@ PICO8_PALETTE = Palette(
         [131, 118, 156],
         [255, 119, 168],
         [255, 204, 170],
-    ] + [[128,128,128]] * 100
+    ]
+    + [[128, 128, 128]] * 100
 )
 
 
@@ -190,6 +191,7 @@ def rot_z(d):
         return "x"
     return d
 
+
 class Tags:
     def __init__(self, *tags, incoming=[], outgoing=[]):
         if type(incoming) is not list:
@@ -209,6 +211,14 @@ class Tags:
     def __repr__(self):
         return f"in: {self.incoming} out: {self.outgoing}"
 
+
+def wave_from_tiles(tiles):
+    wave = 0
+    for tile in tiles:
+        wave |= 1 << tile
+    return wave
+
+
 def apply_symmetry(tags, symmetry):
     if type(tags) is not dict:
         tags = {"x": tags}
@@ -220,7 +230,7 @@ def apply_symmetry(tags, symmetry):
             tags[dir] = Tags(tags[dir])
 
     if symmetry == "X":
-        for (dir, t) in tags.items():
+        for dir, t in tags.items():
             for other in tags.values():
                 tags[dir].merge(other)
     if symmetry == "I":
@@ -234,6 +244,7 @@ def apply_symmetry(tags, symmetry):
         tags["x"].merge(tags["negx"])
     return tags
 
+
 class Tileset:
     def __init__(self, wfc):
         self.wfc = wfc
@@ -241,7 +252,7 @@ class Tileset:
         self.tag_dir_to_tiles = {}
         # self.blocklist = set()
 
-    def add(self, prob, tags, symmetry = ""):
+    def add(self, prob, tags, symmetry=""):
         tile = self.wfc.add(prob)
 
         tile_tags = {}
@@ -250,7 +261,7 @@ class Tileset:
         tags = apply_symmetry(tags, symmetry)
 
         for dir, tags in tags.items():
-            #if type(tags) is str:
+            # if type(tags) is str:
             #    tags = Tags(tags)
 
             tile_tags[dir] = tags.incoming
@@ -270,7 +281,7 @@ class Tileset:
 
         return tile
 
-    def add_mul(self, prob, rots, tags, symmetry = ""):
+    def add_mul(self, prob, rots, tags, symmetry=""):
         res = []
         prob /= rots
         tags = apply_symmetry(tags, symmetry)
@@ -284,7 +295,7 @@ class Tileset:
             for dir, dir_tags in tags.items():
                 for tag in dir_tags:
                     if not (dir, tag) in self.tag_dir_to_tiles:
-                        #print(f"missing ({dir}, {tag})")
+                        # print(f"missing ({dir}, {tag})")
                         continue
 
                     for to in self.tag_dir_to_tiles[(dir, tag)]:
