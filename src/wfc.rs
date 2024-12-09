@@ -58,7 +58,7 @@ impl<T: Hash + Eq, P: Copy + Ord + Hash> SetQueue<T, P> {
     }
 }
 
-type Wave = u64;
+pub type Wave = u64;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug)]
@@ -291,10 +291,10 @@ impl Wfc {
     }
 
     pub fn collapse(&mut self, index: usize, tile: u8) {
-        self.set(index, 1 << tile);
+        self.partial_collapse(index, 1 << tile);
     }
 
-    fn set(&mut self, index: usize, remaining_possible_states: Wave) {
+    pub fn partial_collapse(&mut self, index: usize, remaining_possible_states: Wave) {
         self.stack.clear();
         self.stack.push((index, remaining_possible_states));
 

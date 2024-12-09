@@ -423,6 +423,10 @@ impl Wfc {
         self.0.collapse(index, tile)
     }
 
+    fn partial_collapse(&mut self, index: usize, wave: wfc::Wave) {
+        self.0.partial_collapse(index, wave)
+    }
+
     fn find_lowest_entropy(&mut self) -> Option<(usize, u8)> {
         let mut rng = rand::rngs::SmallRng::from_entropy();
         self.0.find_lowest_entropy(&mut rng)

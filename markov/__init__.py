@@ -56,7 +56,7 @@ PICO8_PALETTE = Palette(
         [131, 118, 156],
         [255, 119, 168],
         [255, 204, 170],
-    ]
+    ] + [[128,128,128]] * 100
 )
 
 
@@ -190,6 +190,49 @@ def rot_z(d):
         return "x"
     return d
 
+class Tags:
+    def __init__(self, *tags, incoming=[], outgoing=[]):
+        if type(incoming) is not list:
+            incoming = [incoming]
+        if type(outgoing) is not list:
+            outgoing = [outgoing]
+
+        self.incoming = set(incoming + list(tags))
+        self.outgoing = set(outgoing + list(tags))
+
+    def merge(self, other):
+        self.incoming |= other.incoming
+        self.outgoing |= other.outgoing
+        other.incoming = self.incoming
+        other.outgoing = self.outgoing
+
+    def __repr__(self):
+        return f"in: {self.incoming} out: {self.outgoing}"
+
+def apply_symmetry(tags, symmetry):
+    if type(tags) is not dict:
+        tags = {"x": tags}
+
+    for dir in ["x", "y", "negx", "negy"]:
+        if not dir in tags:
+            tags[dir] = Tags()
+        if type(tags[dir]) is str:
+            tags[dir] = Tags(tags[dir])
+
+    if symmetry == "X":
+        for (dir, t) in tags.items():
+            for other in tags.values():
+                tags[dir].merge(other)
+    if symmetry == "I":
+        tags["x"].merge(tags["negx"])
+        tags["y"].merge(tags["negy"])
+    if symmetry == "L":
+        tags["x"].merge(tags["y"])
+        tags["negx"].merge(tags["negy"])
+        print(tags)
+    if symmetry == "T":
+        tags["x"].merge(tags["negx"])
+    return tags
 
 class Tileset:
     def __init__(self, wfc):
@@ -198,25 +241,20 @@ class Tileset:
         self.tag_dir_to_tiles = {}
         # self.blocklist = set()
 
-    def add(self, prob, tags):
+    def add(self, prob, tags, symmetry = ""):
         tile = self.wfc.add(prob)
 
         tile_tags = {}
         connect_to_tags = {}
 
-        for dir, dir_tags in tags.items():
-            if type(dir_tags) is not list:
-                dir_tags = [dir_tags]
-            tile_tags[dir] = []
-            connect_to_tags[dir] = []
-            for tag in dir_tags:
-                # self and connect-to tag is the same unless specified.
-                if type(tag) is str:
-                    tag = (tag, tag)
-                tile_tag, connect_to_tag = tag
-                # print(tile_tag, connect_to_tag)
-                tile_tags[dir].append(tile_tag)
-                connect_to_tags[dir].append(connect_to_tag)
+        tags = apply_symmetry(tags, symmetry)
+
+        for dir, tags in tags.items():
+            #if type(tags) is str:
+            #    tags = Tags(tags)
+
+            tile_tags[dir] = tags.incoming
+            connect_to_tags[dir] = tags.outgoing
 
         self.tiles[tile] = connect_to_tags
 
@@ -232,9 +270,10 @@ class Tileset:
 
         return tile
 
-    def add_mul(self, prob, rots, tags):
+    def add_mul(self, prob, rots, tags, symmetry = ""):
         res = []
         prob /= rots
+        tags = apply_symmetry(tags, symmetry)
         for i in range(rots):
             res.append(self.add(prob, tags))
             tags = rot_z(tags)
@@ -245,7 +284,7 @@ class Tileset:
             for dir, dir_tags in tags.items():
                 for tag in dir_tags:
                     if not (dir, tag) in self.tag_dir_to_tiles:
-                        print(f"missing ({dir}, {tag})")
+                        #print(f"missing ({dir}, {tag})")
                         continue
 
                     for to in self.tag_dir_to_tiles[(dir, tag)]:
