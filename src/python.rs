@@ -567,22 +567,19 @@ pub fn map_2d(
     let width = shape[1];
 
     let values_width = values.shape()[1];
-    let values_height = values.shape()[0];
 
     let values = values.as_slice().unwrap();
     let output = output.as_slice_mut().unwrap();
 
-    for y in 0..values_height * height {
+    for (y, value_row) in values.chunks(values_width).enumerate() {
         let row_offset = y * values_width * width;
         let tile_row = y % height;
 
-        for value_x in 0..values_width {
-            let value_y = y / height;
-            let value = values[value_y * values_width + value_x];
+        for (value_x, value) in value_row.iter().copied().enumerate() {
             let tile = &tiles[value as usize].as_slice().unwrap();
 
             output[(value_x * width) + row_offset..((value_x + 1) * width) + row_offset]
-                .copy_from_slice(&tile.chunks(width).nth(tile_row).unwrap());
+                .copy_from_slice(&tile[width * tile_row..width * (tile_row + 1)]);
         }
     }
 }
