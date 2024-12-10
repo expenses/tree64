@@ -32,7 +32,7 @@ cross = tileset.add(
 
 # tileset.connect_all()
 
-tiles = setup_map_tiles(cross + 1, (3, 3))
+tiles = np.zeros((wfc.num_tiles(), 3, 3), dtype=np.uint8)
 
 tiles[straight_h][1] = 1
 tiles[straight_v][:, 1] = 1

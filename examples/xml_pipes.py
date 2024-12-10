@@ -5,7 +5,7 @@ dim = 128
 
 t, wfc = read_xml(sys.argv[1], (dim, dim, 1))
 
-tiles = setup_map_tiles(wfc.num_tiles(), (3, 3))
+tiles = np.zeros((wfc.num_tiles(), 3, 3), dtype=np.uint8)
 
 tiles[t["line"][0]][1] = 1
 tiles[t["line"][1]][:, 1] = 1

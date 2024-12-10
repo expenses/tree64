@@ -322,27 +322,13 @@ class Tileset:
                         # print(f"connecting {frm} to {to} along {dir}")
                         self.wfc.connect(frm, to, [dir])
 
-
-def setup_map_tiles(count, shape):
-    return [np.zeros(shape, dtype=np.uint8) for _ in range(count)]
-
-
 def map_2d(values, output, tiles):
     markov.map_2d(values, output, tiles)
     return output
 
 
 def map_3d(values, output, tiles):
-    tile_d, tile_h, tile_w = list(tiles.values())[0].shape
-    for z in range(values.shape[0]):
-        for y in range(values.shape[1]):
-            for x in range(values.shape[2]):
-                if values[z, y, x] < len(tiles):
-                    output[
-                        z * tile_d : (z + 1) * tile_d,
-                        y * tile_h : (y + 1) * tile_h,
-                        x * tile_w : (x + 1) * tile_w,
-                    ] = tiles[values[z, y, x]]
+    markov.map_3d(values,output,tiles)
     return output
 
 

@@ -560,29 +560,93 @@ pub fn mesh_voxels(array: Array) -> (Vec<[f32; 3]>, Vec<u8>, Vec<u32>) {
 pub fn map_2d(
     values: numpy::borrow::PyReadonlyArray2<u8>,
     mut output: numpy::borrow::PyReadwriteArray2<u8>,
-    tiles: Vec<numpy::borrow::PyReadonlyArray2<u8>>,
+    tiles: numpy::borrow::PyReadonlyArray3<u8>,
 ) {
-    let shape = tiles[0].shape();
-    let height = shape[0];
-    let width = shape[1];
+    let shape = tiles.shape();
+    let height = shape[1];
+    let width = shape[2];
 
     let values_width = values.shape()[1];
-    let values_height = values.shape()[0];
 
     let values = values.as_slice().unwrap();
     let output = output.as_slice_mut().unwrap();
+    let tiles = tiles.as_slice().unwrap();
 
-    for y in 0..values_height * height {
-        let row_offset = y * values_width * width;
-        let tile_row = y % height;
+    output
+        .chunks_exact_mut(values_width * width)
+        .zip(
+            values
+                .chunks_exact(values_width)
+                .flat_map(|row| std::iter::repeat_n(row, height)),
+        )
+        .enumerate()
+        .flat_map(|(y, (output_row, values_row))| {
+            values_row
+                .iter()
+                .copied()
+                .zip(output_row.chunks_exact_mut(width))
+                .map(move |(value, chunk)| (y, value, chunk))
+        })
+        .for_each(|(y, value, chunk)| {
+            let tile_row = y % height;
+            let tile = value as usize;
+            let tile_slice = &tiles[tile * width * height + tile_row * width
+                ..tile * width * height + (tile_row + 1) * width];
+            chunk.copy_from_slice(tile_slice);
+        })
+}
 
-        for value_x in 0..values_width {
-            let value_y = y / height;
-            let value = values[value_y * values_width + value_x];
-            let tile = &tiles[value as usize].as_slice().unwrap();
+#[pyfunction]
+pub fn map_3d(
+    values: numpy::borrow::PyReadonlyArray3<u8>,
+    mut output: numpy::borrow::PyReadwriteArray3<u8>,
+    tiles: numpy::borrow::PyReadonlyArray4<u8>,
+) {
+    let shape = tiles.shape();
+    let depth = shape[1];
+    let height = shape[2];
+    let width = shape[3];
 
-            output[(value_x * width) + row_offset..((value_x + 1) * width) + row_offset]
-                .copy_from_slice(&tile.chunks(width).nth(tile_row).unwrap());
-        }
-    }
+    let values_height = values.shape()[1];
+    let values_width = values.shape()[2];
+
+    let values = values.as_slice().unwrap();
+    let output = output.as_slice_mut().unwrap();
+    let tiles = tiles.as_slice().unwrap();
+
+    output
+        .chunks_exact_mut(values_width * width * values_height * height)
+        .zip(
+            values
+                .chunks_exact(values_width * values_height)
+                .flat_map(|layer| std::iter::repeat_n(layer, depth)),
+        )
+        .enumerate()
+        .flat_map(|(z, (output_layer, values_layer))| {
+            output_layer
+                .chunks_exact_mut(values_width * width)
+                .zip(
+                    values_layer
+                        .chunks_exact(values_width)
+                        .flat_map(|row| std::iter::repeat_n(row, height)),
+                )
+                .enumerate()
+                .map(move |(y, (output_row, value_row))| (y, z, output_row, value_row))
+        })
+        .flat_map(|(y, z, output_row, values_row)| {
+            values_row
+                .iter()
+                .copied()
+                .zip(output_row.chunks_exact_mut(width))
+                .map(move |(value, chunk)| (y, z, value, chunk))
+        })
+        .for_each(|(y, z, value, chunk)| {
+            let tile_layer = z % depth;
+            let tile_row = y % height;
+            let tile = value as usize;
+            let tile_offset = tile * width * height * depth + tile_layer * width * height;
+            let tile_slice =
+                &tiles[tile_offset + tile_row * width..tile_offset + (tile_row + 1) * width];
+            chunk.copy_from_slice(tile_slice);
+        })
 }

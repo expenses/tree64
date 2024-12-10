@@ -2,6 +2,7 @@
   description = "Flake utils demo";
 
   inputs.flake-utils.url = "github:numtide/flake-utils";
+  inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
   inputs.crane.url = "github:ipetkov/crane";
 
   outputs = {
