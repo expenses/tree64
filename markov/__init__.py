@@ -324,20 +324,11 @@ class Tileset:
 
 
 def setup_map_tiles(count, shape):
-    tiles = {}
-    for i in range(count):
-        tiles[i] = np.zeros(shape, dtype=np.uint8)
-    return tiles
+    return [np.zeros(shape, dtype=np.uint8) for _ in range(count)]
 
 
 def map_2d(values, output, tiles):
-    tile_h, tile_w = list(tiles.values())[0].shape
-    for y in range(values.shape[0]):
-        for x in range(values.shape[1]):
-            if values[y, x] < len(tiles):
-                output[y * tile_h : (y + 1) * tile_h, x * tile_w : (x + 1) * tile_w] = (
-                    tiles[values[y, x]]
-                )
+    markov.map_2d(values, output, tiles)
     return output
 
 

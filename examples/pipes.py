@@ -25,11 +25,9 @@ end_r, end_d, end_l, end_u = tileset.add_mul(
 cross = tileset.add(
     2.5,
     {
-        "y": ("cross", "line"),
-        "negy": ("cross", "line"),
-        "x": ("cross", "line"),
-        "negx": ("cross", "line"),
+        "x": Tags(incoming="cross", outgoing="line"),
     },
+    symmetry="X",
 )
 
 # tileset.connect_all()
@@ -77,7 +75,7 @@ while True:
     index, tile = value
     wfc.collapse(index, tile)
     if i % 8 == 0:
-        writer.write(map_2d(wfc.values()[0], arr, tiles, (3, 3)))
+        writer.write(map_2d(wfc.values()[0], arr, tiles))
     i += 1
 print(i)
 # wfc.collapse_all()

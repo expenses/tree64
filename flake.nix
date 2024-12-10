@@ -64,7 +64,15 @@
         };
         devShells.default = with pkgs;
           mkShell {
-            buildInputs = [packages.usd2gltf black tev openusd (packages.patched-python.withPackages (ps: [ps.markov ps.voxypy] ++ (python-deps ps)))];
+            buildInputs = [
+              packages.usd2gltf
+              black
+              tev
+              openusd
+              linuxPackages_latest.perf
+              flamegraph
+              (packages.patched-python.withPackages (ps: [ps.markov ps.voxypy] ++ (python-deps ps)))
+            ];
           };
         devShells.build = with pkgs;
           mkShell {
@@ -98,6 +106,8 @@
               zlib
               maturin
               black
+              linuxPackages_latest.perf
+              flamegraph
             ]);
             runScript = "bash";
           })
