@@ -3,7 +3,9 @@ from markov import *
 
 dim = 128
 
-t, wfc = read_xml(sys.argv[1], (dim, dim, 1))
+t, tileset = read_xml(sys.argv[1])
+
+wfc = tileset.tileset.create_wfc((dim, dim, 1))
 
 tiles = np.zeros((wfc.num_tiles(), 3, 3), dtype=np.uint8)
 
@@ -41,13 +43,11 @@ tiles[t["t"][3]][1, :2] = 1
 tiles[t["t"][1]][:, 1] = 1
 tiles[t["t"][1]][1, 1:] = 1
 
-wfc.setup_state()
-
 writer = FfmpegWriter("out.avi", (dim * 3, dim * 3))
 arr = np.zeros((dim * 3, dim * 3), dtype=np.uint8)
 
 collapse_all_with_callback(
-    wfc, lambda: writer.write(map_2d(wfc.values()[0], arr, tiles, (3, 3))), skip=8
+    wfc, lambda: writer.write(map_2d(wfc.values()[0], arr, tiles)), skip=8
 )
 
 assert wfc.all_collapsed()

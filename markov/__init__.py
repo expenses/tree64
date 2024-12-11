@@ -351,7 +351,7 @@ def split_xml_tile(string, tiles):
         return split[1], axis[zs]
 
 
-def read_xml(filename, dims, symmetry_override={}):
+def read_xml(filename, symmetry_override={}):
     import xmltodict
 
     tiles = {}
@@ -387,8 +387,7 @@ def read_xml(filename, dims, symmetry_override={}):
         tiles[left]["conns"][left_axis].outgoing.add(outgoing)
         tiles[right]["conns"][right_axis].incoming.add(outgoing)
 
-    wfc = Wfc(dims)
-    tileset = Tileset(wfc)
+    tileset = TaggingTileset()
 
     for name, tile in tiles.items():
         times = 4
@@ -401,9 +400,7 @@ def read_xml(filename, dims, symmetry_override={}):
             tile["weight"], times, tile["conns"], symmetry=tile["symmetry"]
         )
 
-    wfc.setup_state()
-
-    return tiles, wfc
+    return tiles, tileset
 
 
 def collapse_all_with_callback(wfc, callback, skip=1):

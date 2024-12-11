@@ -3,17 +3,18 @@ from markov import *
 
 dim = 128
 
-t, wfc = read_xml(
+t, tileset = read_xml(
     sys.argv[1],
-    (dim, dim, 1),
     symmetry_override={"Empty": "X", "Cross": "X", "Line": "I", "Turn": "L"},
 )
+
+wfc = tileset.tileset.create_wfc((dim, dim, 1))
 
 print(t)
 
 writer = FfmpegWriter("out.avi", (dim, dim))
 
-collapse_all_with_callback(
+any_contradictions = collapse_all_with_callback(
     wfc,
     lambda: writer.write(
         replace_values(
@@ -48,4 +49,4 @@ collapse_all_with_callback(
     skip=1,
 )
 
-assert wfc.all_collapsed()
+assert not any_contradictions
