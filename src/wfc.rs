@@ -108,7 +108,7 @@ fn tile_list_from_wave(value: Wave) -> arrayvec::ArrayVec<u8, { Wave::BITS as _ 
 }
 
 #[repr(transparent)]
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct Tile {
     connections: [Wave; 6],
 }
@@ -119,7 +119,7 @@ impl Tile {
     }
 }
 
-/*#[derive(Default)]
+#[derive(Default, Clone)]
 struct Tileset {
     tiles: arrayvec::ArrayVec<Tile, { Wave::BITS as _ }>,
     probabilities: arrayvec::ArrayVec<f32, { Wave::BITS as _ }>,
@@ -145,32 +145,70 @@ impl Tileset {
             self.connect(tile, other, &Axis::ALL)
         }
     }
-}*/
+
+    fn into_wfc(mut self, size: (u32,u32,u32)) ->Wfc{
+        let mut sum = 0.0;
+        for &prob in &self.probabilities {
+            sum += prob;
+        }
+        for prob in &mut self.probabilities {
+            *prob /= sum;
+        }
+
+        let wave = Wave::MAX >> (Wave::BITS as usize - self.tiles.len());
+        for value in &mut self.array {
+            *value = wave;
+        }
+        
+        let (width, height, depth) = size;
+        let mut wfc =  Wfc {
+tiles: self.tiles,
+probabilities: self.probabilities,
+                array: vec![0; (width * height * depth) as usize],
+            width,
+            height,
+            stack: Vec::new(),
+            entropy_to_indices: Default::default(),
+        };
+
+        let mut set = IndexSet::new();
+
+        for i in 0..wfc.array.len() {
+            set.insert(i);
+        }
+
+
+        let mut entropy_to_indices = SetQueue::default();
+        wfc.entropy_to_indices.insert_set(
+            Reverse(OrderedFloat(wfc.calculate_shannon_entropy(wave))),
+            set,
+        );
+
+        wfc
+
+
+    }
+
+    pub fn create_wfc(&self, size:(u32,u32,u32)) ->  Wfc {
+self.0.clone().into_wfc(size)
+    }
+
+    pub fn num_tiles(&self) -> usize {
+        self.tiles.len()
+    }
+}
 
 pub struct Wfc {
     tiles: arrayvec::ArrayVec<Tile, { Wave::BITS as _ }>,
     probabilities: arrayvec::ArrayVec<f32, { Wave::BITS as _ }>,
     array: Vec<Wave>,
-    width: usize,
-    height: usize,
-    stack: Vec<(usize, Wave)>,
-    entropy_to_indices: SetQueue<usize, Reverse<OrderedFloat<f32>>>,
+    width: u32,
+    height: u32,
+    stack: Vec<(u32, Wave)>,
+    entropy_to_indices: SetQueue<u32, Reverse<OrderedFloat<f32>>>,
 }
 
 impl Wfc {
-    pub fn new(size: (usize, usize, usize)) -> Self {
-        let (width, height, depth) = size;
-        Self {
-            tiles: Default::default(),
-            probabilities: Default::default(),
-            array: vec![0; width * height * depth],
-            width,
-            height,
-            stack: Vec::new(),
-            entropy_to_indices: Default::default(),
-        }
-    }
-
     pub fn num_tiles(&self) -> usize {
         self.tiles.len()
     }
@@ -190,63 +228,17 @@ impl Wfc {
     }
 
     pub fn width(&self) -> usize {
-        self.width
+        self.width as usize
     }
     pub fn height(&self) -> usize {
-        self.height
+        self.height as usize
     }
 
     pub fn depth(&self) -> usize {
-        self.array.len() / self.width / self.height
+        self.array.len() / self.width() / self.height()
     }
 
-    pub fn add(&mut self, probability: f32) -> usize {
-        let index = self.tiles.len();
-        self.tiles.push(Tile::default());
-        self.probabilities.push(probability);
-        index
-    }
-
-    pub fn connect(&mut self, from: usize, to: usize, axises: &[Axis]) {
-        for &axis in axises {
-            self.tiles[from].connect(to, axis);
-            self.tiles[to].connect(from, axis.opp());
-        }
-    }
-
-    pub fn connect_to_all(&mut self, tile: usize) {
-        for other in 0..self.tiles.len() {
-            self.connect(tile, other, &Axis::ALL)
-        }
-    }
-
-    pub fn setup_state(&mut self) {
-        let mut sum = 0.0;
-        for &prob in &self.probabilities {
-            sum += prob;
-        }
-        for prob in &mut self.probabilities {
-            *prob /= sum;
-        }
-
-        let wave = Wave::MAX >> (Wave::BITS as usize - self.tiles.len());
-        for value in &mut self.array {
-            *value = wave;
-        }
-
-        let mut set = IndexSet::new();
-
-        for i in 0..self.array.len() {
-            set.insert(i);
-        }
-
-        self.entropy_to_indices.insert_set(
-            Reverse(OrderedFloat(self.calculate_shannon_entropy(wave))),
-            set,
-        );
-    }
-
-    pub fn find_lowest_entropy(&mut self, rng: &mut SmallRng) -> Option<(usize, u8)> {
+    pub fn find_lowest_entropy(&mut self, rng: &mut SmallRng) -> Option<(u32, u8)> {
         let lowest_entropy_set = loop {
             if let Some(v) = self.entropy_to_indices.try_peek() {
                 match v {
@@ -284,24 +276,30 @@ impl Wfc {
         Some((index, tile))
     }
 
-    pub fn collapse_all(&mut self, rng: &mut SmallRng) {
+    pub fn collapse_all(&mut self, rng: &mut SmallRng) -> bool {
+        let mut any_contradictions = false;
         while let Some((index, tile)) = self.find_lowest_entropy(rng) {
-            self.collapse(index, tile);
+            if self.collapse(index, tile) {
+any_contradictions = true;
+            }
         }
+
+        any_contradictions
     }
 
-    pub fn collapse(&mut self, index: usize, tile: u8) {
-        self.partial_collapse(index, 1 << tile);
+    pub fn collapse(&mut self, index: u32, tile: u8) -> bool {
+        self.partial_collapse(index, 1 << tile)
     }
 
-    pub fn partial_collapse(&mut self, index: usize, remaining_possible_states: Wave) {
+    pub fn partial_collapse(&mut self, index: u32, remaining_possible_states: Wave) -> bool {
         self.stack.clear();
         self.stack.push((index, remaining_possible_states));
+        let mut any_contradictions = false;
 
         while let Some((index, remaining_possible_states)) = self.stack.pop() {
-            let old = self.array[index];
+            let old = self.array[index as usize];
             self.array[index] &= remaining_possible_states;
-            let new = self.array[index];
+            let new = self.array[index as usize];
 
             if old == new {
                 continue;
@@ -316,6 +314,7 @@ impl Wfc {
             }
 
             if new == 0 {
+                any_contradictions=true;
                 continue;
             }
 
@@ -330,10 +329,10 @@ impl Wfc {
             let new_tiles = tile_list_from_wave(new);
 
             for axis in Axis::ALL {
-                let (mut x, mut y, mut z) = decompose(index, self.width, self.height);
+                let (mut x, mut y, mut z) = decompose(index as usize, self.width(), self.height());
                 match axis {
-                    Axis::X if x < self.width - 1 => x += 1,
-                    Axis::Y if y < self.height - 1 => y += 1,
+                    Axis::X if x < self.width() - 1 => x += 1,
+                    Axis::Y if y < self.height() - 1 => y += 1,
                     Axis::Z if z < self.depth() - 1 => z += 1,
                     Axis::NegX if x > 0 => x -= 1,
                     Axis::NegY if y > 0 => y -= 1,
@@ -341,7 +340,7 @@ impl Wfc {
                     _ => continue,
                 };
 
-                let index = compose(x, y, z, self.width, self.height);
+                let index = compose(x, y, z, self.width(), self.height()) as u32;
 
                 let mut valid = 0;
 
@@ -352,9 +351,11 @@ impl Wfc {
                 self.stack.push((index, valid));
             }
         }
+
+        any_contradictions
     }
 
-    pub fn all_collapsed(&self) -> bool {
+    fn all_collapsed(&self) -> bool {
         self.array.iter().all(|&value| value.count_ones() == 1)
     }
 
