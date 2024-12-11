@@ -171,6 +171,7 @@ dependencies = [
  "indexmap",
  "memchr",
  "ndshape",
+ "num-traits",
  "numpy",
  "ordered-float",
  "pyo3",

@@ -2,9 +2,7 @@ from markov import *
 
 dim = 8
 
-wfc = Wfc((dim, dim, dim))
-
-tileset = Tileset(wfc)
+tileset = TaggingTileset()
 
 empty = tileset.add(0.0, "empty", symmetry="X_3d")
 
@@ -20,7 +18,9 @@ l_x = tileset.add_mul(1.0 / 3.0, 4, l_tags)
 l_up = tileset.add_mul(1.0 / 3.0, 4, rot_y(l_tags))
 l_down = tileset.add_mul(1.0 / 3.0, 4, rot_y(rot_y(rot_y(l_tags))))
 
-tiles = np.zeros((wfc.num_tiles(), 3, 3, 3),dtype=np.uint8)
+tileset = tileset.tileset
+
+tiles = np.zeros((tileset.num_tiles(), 3, 3, 3), dtype=np.uint8)
 
 tiles[line_x][1, 1, :] = 1
 tiles[line_y][1, :, 1] = 1
@@ -67,12 +67,12 @@ tiles[l_down[2]][1, :2, 1] = 1
 
 output = np.zeros((dim * 3, dim * 3, dim * 3), dtype=np.uint8)
 
-wfc.setup_state()
+wfc = tileset.create_wfc((dim, dim, dim))
 
 writer = UsdWriter("pipes2.usdc")
 
-collapse_all_with_callback(
+any_contradictions = collapse_all_with_callback(
     wfc, lambda: writer.write(map_3d(wfc.values(), output, tiles)), skip=10
 )
 
-assert wfc.all_collapsed()
+assert not any_contradictions

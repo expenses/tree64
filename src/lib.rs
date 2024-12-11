@@ -392,6 +392,7 @@ fn markov(_py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<python::Sequence>()?;
     m.add_class::<python::Palette>()?;
     m.add_class::<python::Wfc>()?;
+    m.add_class::<python::Tileset>()?;
     m.add_class::<NodeSettings>()?;
     Ok(())
 }

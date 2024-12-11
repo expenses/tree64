@@ -360,7 +360,7 @@ fn srgb_to_linear(value: u8) -> f32 {
 }
 
 #[pyclass]
-pub struct Tileset(crate::wfc::Tileset);
+pub struct Tileset(crate::wfc::Tileset<u64, 64>);
 
 #[pymethods]
 impl Tileset {
@@ -403,12 +403,16 @@ impl Tileset {
 }
 
 #[pyclass]
-pub struct Wfc(crate::wfc::Wfc);
+pub struct Wfc(crate::wfc::Wfc<u64, 64>);
 
 #[pymethods]
 impl Wfc {
     fn num_tiles(&self) -> usize {
         self.0.num_tiles()
+    }
+
+    fn set_values(&self, mut output: numpy::borrow::PyReadwriteArray3<u8>) {
+        self.0.set_values(output.as_slice_mut().unwrap());
     }
 
     fn values<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, numpy::array::PyArray3<u8>>> {

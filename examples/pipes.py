@@ -2,9 +2,7 @@ from markov import *
 
 dim = 128
 
-wfc = Wfc((dim, dim, 1))
-
-tileset = Tileset(wfc)
+tileset = TaggingTileset()
 
 empty = tileset.add(0.0, {"x": "no", "negx": "no", "y": "no", "negy": "no"})
 
@@ -32,6 +30,7 @@ cross = tileset.add(
 
 # tileset.connect_all()
 
+wfc = tileset.tileset.create_wfc((dim, dim, 1))
 tiles = np.zeros((wfc.num_tiles(), 3, 3), dtype=np.uint8)
 
 tiles[straight_h][1] = 1
@@ -54,9 +53,6 @@ tiles[edge_dl][1:, 1] = 1
 
 arr = np.zeros((dim * 3, dim * 3), dtype=np.uint8)
 
-wfc.setup_state()
-
-
 for i in range(dim):
     wfc.collapse(i, empty)
     wfc.collapse(i * dim, empty)
@@ -67,16 +63,7 @@ for i in range(dim):
 
 writer = FfmpegWriter("out.avi", (dim * 3, dim * 3))
 
-i = 0
-while True:
-    value = wfc.find_lowest_entropy()
-    if value is None:
-        break
-    index, tile = value
-    wfc.collapse(index, tile)
-    if i % 8 == 0:
-        writer.write(map_2d(wfc.values()[0], arr, tiles))
-    i += 1
-print(i)
-# wfc.collapse_all()
-assert wfc.all_collapsed()
+any_contradictions = collapse_all_with_callback(
+    wfc, lambda: writer.write(map_2d(wfc.values()[0], arr, tiles)), skip=8
+)
+assert not any_contradictions

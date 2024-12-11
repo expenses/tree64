@@ -93,11 +93,13 @@ impl Axis {
     }
 }
 
-fn tile_list_from_wave(value: Wave) -> arrayvec::ArrayVec<u8, { Wave::BITS as _ }> {
+fn tile_list_from_wave<Wave: WaveNum, const BITS: usize>(
+    value: Wave,
+) -> arrayvec::ArrayVec<u8, { BITS }> {
     let mut tile_list = arrayvec::ArrayVec::new();
 
-    for i in 0..Wave::BITS {
-        if ((value >> i) & 1) == 0 {
+    for i in 0..BITS {
+        if ((value >> i) & Wave::one()) == Wave::zero() {
             continue;
         }
 
@@ -107,25 +109,35 @@ fn tile_list_from_wave(value: Wave) -> arrayvec::ArrayVec<u8, { Wave::BITS as _ 
     tile_list
 }
 
+pub trait WaveNum:
+    std::ops::BitOrAssign + std::ops::BitAndAssign + Default + num_traits::int::PrimInt
+{
+}
+
+impl<T: std::ops::BitOrAssign + std::ops::BitAndAssign + Default + num_traits::int::PrimInt> WaveNum
+    for T
+{
+}
+
 #[repr(transparent)]
 #[derive(Default, Debug, Clone)]
-struct Tile {
+struct Tile<Wave> {
     connections: [Wave; 6],
 }
 
-impl Tile {
+impl<Wave: WaveNum> Tile<Wave> {
     fn connect(&mut self, other: usize, axis: Axis) {
-        self.connections[axis as usize] |= 1 << other;
+        self.connections[axis as usize] |= Wave::one().shl(other);
     }
 }
 
 #[derive(Default, Clone)]
-pub struct Tileset {
-    tiles: arrayvec::ArrayVec<Tile, { Wave::BITS as _ }>,
-    probabilities: arrayvec::ArrayVec<f32, { Wave::BITS as _ }>,
+pub struct Tileset<Wave: WaveNum, const BITS: usize> {
+    tiles: arrayvec::ArrayVec<Tile<Wave>, { BITS }>,
+    probabilities: arrayvec::ArrayVec<f32, { BITS }>,
 }
 
-impl Tileset {
+impl<Wave: WaveNum, const BITS: usize> Tileset<Wave, BITS> {
     pub fn add(&mut self, probability: f32) -> usize {
         let index = self.tiles.len();
         self.tiles.push(Tile::default());
@@ -146,7 +158,7 @@ impl Tileset {
         }
     }
 
-    pub fn into_wfc(mut self, size: (u32, u32, u32)) -> Wfc {
+    pub fn into_wfc(mut self, size: (u32, u32, u32)) -> Wfc<Wave, BITS> {
         let mut sum = 0.0;
         for &prob in &self.probabilities {
             sum += prob;
@@ -155,7 +167,7 @@ impl Tileset {
             *prob /= sum;
         }
 
-        let wave = Wave::MAX >> (Wave::BITS as usize - self.tiles.len());
+        let wave = Wave::max_value() >> (BITS - self.tiles.len());
 
         let (width, height, depth) = size;
         let mut wfc = Wfc {
@@ -182,7 +194,7 @@ impl Tileset {
         wfc
     }
 
-    pub fn create_wfc(&self, size: (u32, u32, u32)) -> Wfc {
+    pub fn create_wfc(&self, size: (u32, u32, u32)) -> Wfc<Wave, BITS> {
         self.clone().into_wfc(size)
     }
 
@@ -191,9 +203,9 @@ impl Tileset {
     }
 }
 
-pub struct Wfc {
-    tiles: arrayvec::ArrayVec<Tile, { Wave::BITS as _ }>,
-    probabilities: arrayvec::ArrayVec<f32, { Wave::BITS as _ }>,
+pub struct Wfc<Wave: WaveNum, const BITS: usize> {
+    tiles: arrayvec::ArrayVec<Tile<Wave>, { BITS }>,
+    probabilities: arrayvec::ArrayVec<f32, { BITS }>,
     array: Vec<Wave>,
     width: u32,
     height: u32,
@@ -201,14 +213,14 @@ pub struct Wfc {
     entropy_to_indices: SetQueue<u32, Reverse<OrderedFloat<f32>>>,
 }
 
-impl Wfc {
+impl<Wave: WaveNum, const BITS: usize> Wfc<Wave, BITS> {
     pub fn num_tiles(&self) -> usize {
         self.tiles.len()
     }
 
     pub fn calculate_shannon_entropy(&self, wave: Wave) -> f32 {
         let mut sum = 0.0;
-        for i in tile_list_from_wave(wave) {
+        for i in tile_list_from_wave::<_, BITS>(wave) {
             let prob = self.probabilities[i as usize];
 
             if prob <= 0.0 {
@@ -248,10 +260,9 @@ impl Wfc {
 
         let value = self.array[index as usize];
 
-        let mut rolling_probability: arrayvec::ArrayVec<_, { Wave::BITS as _ }> =
-            Default::default();
+        let mut rolling_probability: arrayvec::ArrayVec<_, { BITS }> = Default::default();
 
-        let list = tile_list_from_wave(value);
+        let list = tile_list_from_wave::<_, BITS>(value);
 
         let mut sum = 0.0;
         for &tile in &list {
@@ -281,7 +292,7 @@ impl Wfc {
     }
 
     pub fn collapse(&mut self, index: u32, tile: u8) -> bool {
-        self.partial_collapse(index, 1 << tile)
+        self.partial_collapse(index, Wave::one().shl(tile as _))
     }
 
     pub fn partial_collapse(&mut self, index: u32, remaining_possible_states: Wave) -> bool {
@@ -306,7 +317,7 @@ impl Wfc {
                 debug_assert!(_val);
             }
 
-            if new == 0 {
+            if new == Wave::zero() {
                 any_contradictions = true;
                 continue;
             }
@@ -319,7 +330,7 @@ impl Wfc {
                 debug_assert!(_val);
             }
 
-            let new_tiles = tile_list_from_wave(new);
+            let new_tiles = tile_list_from_wave::<_, BITS>(new);
 
             for axis in Axis::ALL {
                 let (mut x, mut y, mut z) =
@@ -336,7 +347,7 @@ impl Wfc {
 
                 let index = compose(x, y, z, self.width() as _, self.height() as _) as u32;
 
-                let mut valid = 0;
+                let mut valid = Wave::zero();
 
                 for &tile in new_tiles.iter() {
                     valid |= self.tiles[tile as usize].connections[axis as usize];
@@ -350,10 +361,16 @@ impl Wfc {
     }
 
     pub fn values(&self) -> Vec<u8> {
+        let mut values = vec![0; self.array.len()];
+        self.set_values(&mut values);
+        values
+    }
+
+    pub fn set_values(&self, values: &mut [u8]) {
         self.array
             .iter()
-            .map(|&value| value.trailing_zeros() as u8)
-            .collect()
+            .zip(values)
+            .for_each(|(wave, value)| *value = wave.trailing_zeros() as u8);
     }
 
     #[cfg(test)]
@@ -369,7 +386,7 @@ use rand::SeedableRng;
 fn normal() {
     let mut rng = SmallRng::from_entropy();
 
-    let mut tileset = Tileset::default();
+    let mut tileset = Tileset::<u8, 8>::default();
     let sea = tileset.add(1.0);
     let beach = tileset.add(0.5);
     let grass = tileset.add(1.0);
@@ -396,7 +413,7 @@ fn normal() {
 fn verticals() {
     let mut rng = SmallRng::from_entropy();
 
-    let mut tileset = Tileset::default();
+    let mut tileset = Tileset::<u64, 64>::default();
     let air = tileset.add(1.0);
     let solid = tileset.add(1.0);
     tileset.connect(air, air, &Axis::ALL);
@@ -425,7 +442,7 @@ fn verticals() {
 fn stairs() {
     let mut rng = SmallRng::from_entropy();
 
-    let mut tileset = Tileset::default();
+    let mut tileset = Tileset::<u64, 64>::default();
     let empty = tileset.add(0.0);
     let ground = tileset.add(1.0);
     tileset.connect(ground, ground, &[Axis::X, Axis::Y]);
@@ -448,7 +465,7 @@ fn stairs() {
 fn broken() {
     let mut rng = SmallRng::from_entropy();
 
-    let mut tileset = Tileset::default();
+    let mut tileset = Tileset::<u64, 64>::default();
 
     let sea = tileset.add(1.0);
     let beach = tileset.add(1.0);

@@ -2,9 +2,7 @@ from markov import *
 
 dim = 350
 
-wfc = Wfc((dim, dim, 1))
-
-tileset = Tileset(wfc)
+tileset = TaggingTileset()
 
 riverside = Tags(incoming="riverside", outgoing=["ground", "wallside", "roadside"])
 roadside = Tags(incoming="roadside", outgoing=["wallside", "ground", "riverside"])
@@ -113,8 +111,8 @@ park = tileset.add_mul(
     symmetry="T",
 )
 
-wfc.setup_state()
-
+values = np.zeros((dim, dim, 1), dtype=np.uint8)
+wfc = tileset.tileset.create_wfc((dim, dim, 1))
 
 for x in range(dim):
     wave = wave_from_tiles(river + riverturn + [ground, tree])
@@ -125,8 +123,10 @@ for x in range(dim):
 
 
 def pretty():
+    wfc.set_values(values)
+
     return replace_values(
-        wfc.values()[0],
+        values[0],
         [
             (river + riverturn, "U"),
             (bridge + [courtyard], "D"),
@@ -141,18 +141,10 @@ def pretty():
 
 writer = FfmpegWriter("out.avi", (dim, dim))
 
+any_contradictions = collapse_all_with_callback(
+    wfc, lambda: writer.write(pretty()), skip=32
+)
 
-i = 0
-while True:
-    value = wfc.find_lowest_entropy()
-    if value is None:
-        break
-    index, tile = value
-    wfc.collapse(index, tile)
-    if i % 32 == 0:
-        writer.write(pretty())
-    i += 1
-
-print(wfc.all_collapsed())
+print(any_contradictions)
 
 save_image("castle.png", pretty())

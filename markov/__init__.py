@@ -260,15 +260,15 @@ def apply_symmetry(tags, symmetry):
     return tags
 
 
-class Tileset:
-    def __init__(self, wfc):
-        self.wfc = wfc
+class TaggingTileset:
+    def __init__(self):
+        self.tileset = Tileset()
         self.tiles = {}
         self.tag_dir_to_tiles = {}
         # self.blocklist = set()
 
     def add(self, prob, tags, symmetry=""):
-        tile = self.wfc.add(prob)
+        tile = self.tileset.add(prob)
 
         tile_tags = {}
         connect_to_tags = {}
@@ -320,7 +320,8 @@ class Tileset:
                             continue
                         """
                         # print(f"connecting {frm} to {to} along {dir}")
-                        self.wfc.connect(frm, to, [dir])
+                        self.tileset.connect(frm, to, [dir])
+
 
 def map_2d(values, output, tiles):
     markov.map_2d(values, output, tiles)
@@ -328,7 +329,7 @@ def map_2d(values, output, tiles):
 
 
 def map_3d(values, output, tiles):
-    markov.map_3d(values,output,tiles)
+    markov.map_3d(values, output, tiles)
     return output
 
 
@@ -407,19 +408,22 @@ def read_xml(filename, dims, symmetry_override={}):
 
 def collapse_all_with_callback(wfc, callback, skip=1):
     i = 0
+    any_contradictions = False
     while True:
         value = wfc.find_lowest_entropy()
         if value is None:
             break
         index, tile = value
-        wfc.collapse(index, tile)
+        any_contradictions |= wfc.collapse(index, tile)
         if i % skip == 0:
             callback()
         i += 1
+    return any_contradictions
 
 
-def replace_values(input, tiles):
-    output = np.copy(input)
+def replace_values(input, tiles, output=None):
+    if output is None:
+        output = np.copy(input)
 
     for tiles, value in tiles:
         if type(value) is str:
