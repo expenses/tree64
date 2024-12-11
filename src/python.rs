@@ -360,13 +360,13 @@ fn srgb_to_linear(value: u8) -> f32 {
 }
 
 #[pyclass]
-pub struct Wfc(crate::wfc::Wfc);
+pub struct Tileset(crate::wfc::Tileset);
 
 #[pymethods]
-impl Wfc {
+impl Tileset {
     #[new]
-    fn new(dims: (usize, usize, usize)) -> Self {
-        Self(crate::wfc::Wfc::new(dims))
+    fn new() -> Self {
+        Self(Default::default())
     }
 
     fn add(&mut self, prob: f32) -> usize {
@@ -397,37 +397,43 @@ impl Wfc {
         self.0.num_tiles()
     }
 
-    fn setup_state(&mut self) {
-        self.0.setup_state()
+    fn create_wfc(&self, size: (u32, u32, u32)) -> Wfc {
+        Wfc(self.0.create_wfc(size))
+    }
+}
+
+#[pyclass]
+pub struct Wfc(crate::wfc::Wfc);
+
+#[pymethods]
+impl Wfc {
+    fn num_tiles(&self) -> usize {
+        self.0.num_tiles()
     }
 
     fn values<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, numpy::array::PyArray3<u8>>> {
         numpy::array::PyArray1::from_vec(py, self.0.values()).reshape((
-            self.0.depth(),
-            self.0.height(),
-            self.0.width(),
+            self.0.depth() as _,
+            self.0.height() as _,
+            self.0.width() as _,
         ))
     }
 
-    fn collapse_all(&mut self) {
+    fn collapse_all(&mut self) -> bool {
         let mut rng = rand::rngs::SmallRng::from_entropy();
 
         self.0.collapse_all(&mut rng)
     }
 
-    fn all_collapsed(&self) -> bool {
-        self.0.all_collapsed()
-    }
-
-    fn collapse(&mut self, index: usize, tile: u8) {
+    fn collapse(&mut self, index: u32, tile: u8) -> bool {
         self.0.collapse(index, tile)
     }
 
-    fn partial_collapse(&mut self, index: usize, wave: wfc::Wave) {
+    fn partial_collapse(&mut self, index: u32, wave: wfc::Wave) -> bool {
         self.0.partial_collapse(index, wave)
     }
 
-    fn find_lowest_entropy(&mut self) -> Option<(usize, u8)> {
+    fn find_lowest_entropy(&mut self) -> Option<(u32, u8)> {
         let mut rng = rand::rngs::SmallRng::from_entropy();
         self.0.find_lowest_entropy(&mut rng)
     }
