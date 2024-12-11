@@ -1,0 +1,7 @@
+numpy
+pillow
+ffmpeg-python
+ipython
+usd-core
+voxypy
+xmltodict

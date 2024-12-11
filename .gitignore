@@ -1,6 +1,4 @@
 /target
-*.txt
-perf.data*
 __pycache__
 env
 _build
@@ -11,3 +9,4 @@ markov/*.so
 *.png
 *.usdc
 *.mp4
+perf.*
