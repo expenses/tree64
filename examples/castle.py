@@ -111,22 +111,22 @@ park = tileset.add_mul(
     symmetry="T",
 )
 
-values = np.zeros((dim, dim, 1), dtype=np.uint8)
+values = np.zeros((dim, dim), dtype=np.uint8)
 wfc = tileset.tileset.create_wfc((dim, dim, 1))
 
 for x in range(dim):
     wave = wave_from_tiles(river + riverturn + [ground, tree])
-    wfc.partial_collapse(x, wave)
-    wfc.partial_collapse(x * dim, wave)
-    wfc.partial_collapse(dim * dim - 1 - x, wave)
-    wfc.partial_collapse(dim * dim - 1 - (x * dim), wave)
+    wfc.partial_collapse((x, 0, 0), wave)
+    wfc.partial_collapse((0, x, 0), wave)
+    wfc.partial_collapse((x, dim - 1, 0), wave)
+    wfc.partial_collapse((dim - 1, x, 0), wave)
 
 
 def pretty():
     wfc.set_values(values)
 
     return replace_values(
-        values[0],
+        values,
         [
             (river + riverturn, "U"),
             (bridge + [courtyard], "D"),

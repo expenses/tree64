@@ -19,20 +19,19 @@ impl<T: Hash + Eq, P: Copy + Ord + Hash> SetQueue<T, P> {
         self.sets.insert(p, set);
     }
 
-    // Peek only once. Needs the new polonius borrow checker to be enabled
-    // for a looping version (-Zpolonius)
-    fn try_peek(&mut self) -> Option<Option<&IndexSet<T>>> {
-        if let Some(p) = self.queue.peek_mut() {
+    // I'd prefer to return an Option<Set> here but that needs the
+    // polonius borrow checker to be enabled (-Zpolonius)
+    fn peek<O, F: FnOnce(&IndexSet<T>) -> O>(&mut self, func: F) -> Option<O> {
+        while let Some(p) = self.queue.peek_mut() {
             if let hash_map::Entry::Occupied(set) = self.sets.entry(*p) {
                 if !set.get().is_empty() {
-                    return Some(Some(set.into_mut()));
+                    return Some(func(set.into_mut()));
                 } else {
                     set.remove();
                 }
             }
 
             binary_heap::PeekMut::pop(p);
-            return Some(None);
         }
 
         None
@@ -244,40 +243,31 @@ impl<Wave: WaveNum, const BITS: usize> Wfc<Wave, BITS> {
     }
 
     pub fn find_lowest_entropy(&mut self, rng: &mut SmallRng) -> Option<(u32, u8)> {
-        let lowest_entropy_set = loop {
-            if let Some(v) = self.entropy_to_indices.try_peek() {
-                match v {
-                    None => {}
-                    Some(set) => break set,
-                }
-            } else {
-                return None;
+        self.entropy_to_indices.peek(|set| {
+            let index = rng.gen_range(0..set.len());
+            let index = *set.get_index(index).unwrap();
+
+            let value = self.array[index as usize];
+
+            let mut rolling_probability: arrayvec::ArrayVec<_, { BITS }> = Default::default();
+
+            let list = tile_list_from_wave::<_, BITS>(value);
+
+            let mut sum = 0.0;
+            for &tile in &list {
+                sum += self.probabilities[tile as usize];
+                rolling_probability.push(OrderedFloat(sum));
             }
-        };
+            let num = rng.gen_range(0.0..=rolling_probability.last().unwrap().0);
+            let list_index = match rolling_probability.binary_search(&OrderedFloat(num)) {
+                Ok(index) => index,
+                Err(index) => index,
+            };
 
-        let index = rng.gen_range(0..lowest_entropy_set.len());
-        let index = *lowest_entropy_set.get_index(index).unwrap();
+            let tile = list[list_index];
 
-        let value = self.array[index as usize];
-
-        let mut rolling_probability: arrayvec::ArrayVec<_, { BITS }> = Default::default();
-
-        let list = tile_list_from_wave::<_, BITS>(value);
-
-        let mut sum = 0.0;
-        for &tile in &list {
-            sum += self.probabilities[tile as usize];
-            rolling_probability.push(OrderedFloat(sum));
-        }
-        let num = rng.gen_range(0.0..=rolling_probability.last().unwrap().0);
-        let list_index = match rolling_probability.binary_search(&OrderedFloat(num)) {
-            Ok(index) => index,
-            Err(index) => index,
-        };
-
-        let tile = list[list_index];
-
-        Some((index, tile))
+            (index, tile)
+        })
     }
 
     pub fn collapse_all(&mut self, rng: &mut SmallRng) -> bool {

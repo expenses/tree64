@@ -293,6 +293,12 @@ impl<'a> PythonNode<'a> {
 }
 
 #[derive(FromPyObject)]
+pub enum RWArray<'a> {
+    D2(numpy::borrow::PyReadwriteArray2<'a, u8>),
+    D3(numpy::borrow::PyReadwriteArray3<'a, u8>),
+}
+
+#[derive(FromPyObject)]
 pub enum Array<'a> {
     D2(numpy::borrow::PyReadonlyArray2<'a, u8>),
     D3(numpy::borrow::PyReadonlyArray3<'a, u8>),
@@ -402,6 +408,12 @@ impl Tileset {
     }
 }
 
+#[derive(FromPyObject)]
+enum ArrayIndex {
+    Index(u32),
+    Coord((u32, u32, u32)),
+}
+
 #[pyclass]
 pub struct Wfc(crate::wfc::Wfc<u64, 64>);
 
@@ -411,8 +423,13 @@ impl Wfc {
         self.0.num_tiles()
     }
 
-    fn set_values(&self, mut output: numpy::borrow::PyReadwriteArray3<u8>) {
-        self.0.set_values(output.as_slice_mut().unwrap());
+    fn set_values(&self, mut output: RWArray) {
+        let slice = match &mut output {
+            RWArray::D2(ref mut array) => array.as_slice_mut().unwrap(),
+            RWArray::D3(ref mut array) => array.as_slice_mut().unwrap(),
+        };
+
+        self.0.set_values(slice);
     }
 
     fn values<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, numpy::array::PyArray3<u8>>> {
@@ -429,11 +446,25 @@ impl Wfc {
         self.0.collapse_all(&mut rng)
     }
 
-    fn collapse(&mut self, index: u32, tile: u8) -> bool {
+    fn collapse(&mut self, index: ArrayIndex, tile: u8) -> bool {
+        let index = match index {
+            ArrayIndex::Index(index) => index,
+            ArrayIndex::Coord((x, y, z)) => {
+                self.0.width() * self.0.height() * z + self.0.width() * y + x
+            }
+        };
+
         self.0.collapse(index, tile)
     }
 
-    fn partial_collapse(&mut self, index: u32, wave: wfc::Wave) -> bool {
+    fn partial_collapse(&mut self, index: ArrayIndex, wave: wfc::Wave) -> bool {
+        let index = match index {
+            ArrayIndex::Index(index) => index,
+            ArrayIndex::Coord((x, y, z)) => {
+                self.0.width() * self.0.height() * z + self.0.width() * y + x
+            }
+        };
+
         self.0.partial_collapse(index, wave)
     }
 
