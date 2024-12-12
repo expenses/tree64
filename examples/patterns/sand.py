@@ -1,9 +1,4 @@
-# coding: utf-8
-from util import *
-
-dim = 128
-arr = np.zeros((dim, dim), dtype=np.uint8)
-ffmpeg = FfmpegWriter("out.avi", (dim, dim), skip=300)
+from markov import *
 
 
 def sand(c):
@@ -29,18 +24,22 @@ def sand(c):
     )
 
 
-rep(
-    arr,
-    Sequence(
-        *(
-            sand("R")
-            + sand("O")
-            + sand("Y")
-            + sand("G")
-            + sand("U")
-            + sand("I")
-            + sand("P")
-        )
-    ),
-    writer=ffmpeg,
-)
+def run(arr, writer):
+    rep(
+        arr,
+        Sequence(
+            *(
+                sand("R")
+                + sand("O")
+                + sand("Y")
+                + sand("G")
+                + sand("U")
+                + sand("I")
+                + sand("P")
+            )
+        ),
+        writer=writer,
+    )
+
+
+run_example("sand", 128, run)
