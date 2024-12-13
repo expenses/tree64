@@ -46,7 +46,6 @@ TOGGLE_XY = [
 ROT_AROUND_Z = [[0, 1, 2], [1, 0, 2]]
 
 
-
 class FfmpegWriter:
     def __init__(self, filename, dims, skip=1, framerate=60):
         import ffmpeg
@@ -164,6 +163,7 @@ def rot_z(d):
     if d == "negy":
         return "x"
     return d
+
 
 def rot_y(d):
     if type(d) is dict:
@@ -508,3 +508,41 @@ def run_example(name, default_size, callback, is_default_3d=False, disable_3d=Fa
 
 def put_middle(array, value):
     array[*(np.array(array.shape) // 2)] = value
+
+
+# https://stackoverflow.com/a/29643643
+def hex2rgb(h):
+    return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
+
+
+def load_vox(filename):
+    from voxypy.models import Entity
+
+    vox = Entity().from_file(filename=filename)
+
+    # MarkovJunior voxel models often have the palette ordered differently
+    # to the internal palette so we have to fix that.
+    replacements = []
+    for i, (r, g, b, a) in enumerate(vox.get_palette()):
+        if bytes([r, g, b]) in PICO8_PALETTE.srgb:
+            new_index = PICO8_PALETTE.srgb.index(bytes([r, g, b]))
+            # Make sure we're not changing opaque voxels to transparent.
+            if a == 255 and new_index == 0:
+                new_index = index_for_colour("@")
+            if i == new_index:
+                continue
+            replacements.append(([i], new_index))
+
+    return replace_values(vox.get_dense(), replacements), Palette(
+        [(r, g, b) for (r, g, b, a) in vox.get_palette()]
+    )
+
+
+class MutableTile:
+    def __init__(self, weight=1.0, symmetry=""):
+        self.weight = weight
+        self.symmetry = symmetry
+        self.conns = {"x": Tags(), "y": Tags(), "negx": Tags(), "negy": Tags()}
+
+    def apply_symmetry(self):
+        self.conns = apply_symmetry(self.conns, self.symmetry)
