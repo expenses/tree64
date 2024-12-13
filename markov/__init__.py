@@ -1,6 +1,8 @@
 from markov.markov import *
 import numpy as np
 import argparse
+import os
+import xmltodict
 
 ONCE = NodeSettings(count=1)
 
@@ -346,10 +348,13 @@ def map_3d(values, output, tiles):
 FLIPPED = {"x": "negx", "y": "negy", "negx": "x", "negy": "y", "z": "negz", "negz": "z"}
 
 
-def split_xml_tile(string, tiles):
+def split_xml_tile(string, tiles, top_to_bottom=False):
     split = string.split(" ")
+
+    default_dir = "negz" if top_to_bottom else "x"
+
     if len(split) == 1:
-        return split[0], "x"
+        return split[0], default_dir
     axis = ["x", "negy", "negx", "y"]
 
     if split[0] in tiles:
@@ -358,59 +363,131 @@ def split_xml_tile(string, tiles):
         zs = split[0].count("z")
         xs = split[0].count("x")
         ys = split[0].count("y")
+
+        if top_to_bottom:
+            assert xs == 0 and ys == 0
+            return split[1], default_dir
+
         return split[1], axis[zs]
 
 
-def read_xml(filename, symmetry_override={}):
-    import xmltodict
+def rot_z_symmetrical(voxels, rots):
+    return (voxels == np.rot90(voxels, axes=(1, 2), k=rots)).all()
 
-    tiles = {}
-    d = xmltodict.parse(open(filename).read())
 
-    if "set" in d:
-        d = d["set"]
-    elif "tileset" in d:
-        d = d["tileset"]
+class XmlTileset:
+    def __init__(self, filename, old=False):
+        self.tiles = {}
+        self.tile_ids = {}
+        self.tileset = TaggingTileset()
+        self.filename = filename
 
-    for tile in d["tiles"]["tile"]:
-        name = tile["@name"]
-        tiles[name] = {
-            "symmetry": (
-                tile["@symmetry"]
-                if "@symmetry" in tile
-                else (symmetry_override[name] if name in symmetry_override else "")
-            ),
-            "weight": float(tile["@weight"]) if "@weight" in tile else 1.0,
-            "conns": {"x": Tags(), "y": Tags(), "negx": Tags(), "negy": Tags()},
-        }
+        parsed = xmltodict.parse(open(filename).read())
 
-    for neighbor in d["neighbors"]["neighbor"]:
-        left, left_axis = split_xml_tile(neighbor["@left"], tiles)
-        right, right_axis = split_xml_tile(neighbor["@right"], tiles)
-        right_axis = FLIPPED[right_axis]
+        if "set" in parsed:
+            self.parsed = parsed["set"]
+        elif "tileset" in parsed:
+            self.parsed = parsed["tileset"]
 
-        incoming = f"{left}_{left_axis}"
-        outgoing = f"{right}_{right_axis}"
-        tiles[left]["conns"][left_axis].incoming.add(incoming)
-        tiles[right]["conns"][right_axis].outgoing.add(incoming)
+        if not old:
+            self.read_xml()
 
-        tiles[left]["conns"][left_axis].outgoing.add(outgoing)
-        tiles[right]["conns"][right_axis].incoming.add(outgoing)
+    def create_wfc(self, dims):
+        return self.tileset.tileset.create_wfc(dims)
 
-    tileset = TaggingTileset()
+    def setup_connections(self):
+        for neighbor in self.parsed["neighbors"]["neighbor"]:
+            if "@top" in neighbor and "@bottom" in neighbor:
+                left, left_axis = split_xml_tile(
+                    neighbor["@top"], self.tiles, top_to_bottom=True
+                )
+                right, right_axis = split_xml_tile(
+                    neighbor["@bottom"], self.tiles, top_to_bottom=True
+                )
+            else:
+                left, left_axis = split_xml_tile(neighbor["@left"], self.tiles)
+                right, right_axis = split_xml_tile(neighbor["@right"], self.tiles)
+            right_axis = FLIPPED[right_axis]
 
-    for name, tile in tiles.items():
-        times = 4
-        if tile["symmetry"] == "X":
-            times = 1
-        elif tile["symmetry"] == "I":
-            times = 2
+            incoming = f"{left}_{left_axis}"
+            outgoing = f"{right}_{right_axis}"
+            self.tiles[left].conns[left_axis].incoming.add(incoming)
+            self.tiles[right].conns[right_axis].outgoing.add(incoming)
 
-        tiles[name] = tileset.add_mul(
-            tile["weight"], times, tile["conns"], symmetry=tile["symmetry"]
+            self.tiles[left].conns[left_axis].outgoing.add(outgoing)
+            self.tiles[right].conns[right_axis].incoming.add(outgoing)
+
+        for name, tile in self.tiles.items():
+            times = 4
+            if tile.symmetry == "X":
+                times = 1
+            elif tile.symmetry == "I":
+                times = 2
+
+            self.tile_ids[name] = self.tileset.add_mul(
+                tile.weight, times, tile.conns, symmetry=tile.symmetry
+            )
+
+    def create_array_from_models(self, tile_dims):
+        array = np.zeros((self.tileset.tileset.num_tiles(),) + tile_dims, dtype=np.uint8)
+        for name, ids in self.tile_ids.items():
+            model = self.tiles[name].model
+            for rot, id in enumerate(ids):
+                array[id, : model.shape[0], : model.shape[1], : model.shape[2]] = (
+                    np.rot90(model, axes=(1, 2), k=-rot)
+                )
+        return array
+
+    def run_wfc_and_map(self, dims, model_padding=(0,0,0)):
+        model_shape = next(iter(self.tiles.values())).model.shape
+        model_shape = tuple((model_shape[i] + model_padding[i] for i in range(3)))
+        # dimensions in numpy order for consistency.
+        z, y, x = dims
+        wfc = self.tileset.tileset.create_wfc((x, y, z))
+        model_array = self.create_array_from_models(model_shape)
+        wfc.collapse_all_reset_on_contradiction()
+        output = np.zeros(
+            (dims[0] * model_shape[0], dims[1] * model_shape[1], dims[2] * model_shape[2]),
+            dtype=np.uint8,
         )
+        return map_3d(wfc.values(), output, model_array)
 
-    return tiles, tileset
+    def read_xml_old(self, symmetry_override={}):
+        for tile in self.parsed["tiles"]["tile"]:
+            name = tile["@name"]
+            self.tiles[name] = MutableTile(
+                symmetry=(
+                    tile["@symmetry"]
+                    if "@symmetry" in tile
+                    else (symmetry_override[name] if name in symmetry_override else "")
+                ),
+                weight=float(tile["@weight"]) if "@weight" in tile else 1.0,
+            )
+
+        self.setup_connections()
+
+    def read_xml(self):
+        for tile in self.parsed["tiles"]["tile"]:
+            name = tile["@name"]
+
+            model = np.rot90(
+                load_vox(f"{os.path.splitext(self.filename)[0]}/{name}.vox"),
+                axes=(0, 2),
+            )
+
+            symmetry = ""
+            if rot_z_symmetrical(model, 1):
+                symmetry = "X"
+            elif rot_z_symmetrical(model, 2):
+                symmetry = "I"
+
+            self.tiles[name] = MutableTile(
+                symmetry=symmetry,
+                weight=float(tile["@weight"]) if "@weight" in tile else 1.0,
+                model=model,
+            )
+
+        self.setup_connections()
 
 
 def collapse_all_with_callback(wfc, callback, skip=1):
@@ -533,16 +610,24 @@ def load_vox(filename):
                 continue
             replacements.append(([i], new_index))
 
-    return replace_values(vox.get_dense(), replacements), Palette(
-        [(r, g, b) for (r, g, b, a) in vox.get_palette()]
-    )
+    palette = Palette([(r, g, b) for (r, g, b, a) in vox.get_palette()])
+
+    return replace_values(vox.get_dense(), replacements)
 
 
 class MutableTile:
-    def __init__(self, weight=1.0, symmetry=""):
+    def __init__(self, weight=1.0, symmetry="", model=None):
         self.weight = weight
         self.symmetry = symmetry
-        self.conns = {"x": Tags(), "y": Tags(), "negx": Tags(), "negy": Tags()}
+        self.conns = {
+            "x": Tags(),
+            "y": Tags(),
+            "negx": Tags(),
+            "negy": Tags(),
+            "z": Tags(),
+            "negz": Tags(),
+        }
+        self.model = model
 
     def apply_symmetry(self):
         self.conns = apply_symmetry(self.conns, self.symmetry)

@@ -80,8 +80,8 @@ fn main() {
     // slightly hacky, but as we're using 'B'/0 as both transparent and black
     // we need a way to have opaque black
     palette_chars.push('@');
-    palette_values.push([0;3]);
-    
+    palette_values.push([0; 3]);
+
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("palette.rs");
 

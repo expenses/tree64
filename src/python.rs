@@ -404,7 +404,10 @@ impl Tileset {
     }
 
     fn create_wfc(&self, size: (u32, u32, u32)) -> Wfc {
-        Wfc(self.0.create_wfc(size))
+        Wfc {
+            inner: self.0.create_wfc(size),
+            rng: rand::rngs::SmallRng::from_entropy(),
+        }
     }
 }
 
@@ -415,12 +418,15 @@ enum ArrayIndex {
 }
 
 #[pyclass]
-pub struct Wfc(crate::wfc::Wfc<u64, 64>);
+pub struct Wfc {
+    inner: crate::wfc::Wfc<u64, 64>,
+    rng: rand::rngs::SmallRng,
+}
 
 #[pymethods]
 impl Wfc {
     fn num_tiles(&self) -> usize {
-        self.0.num_tiles()
+        self.inner.num_tiles()
     }
 
     fn set_values(&self, mut output: RWArray) {
@@ -429,48 +435,50 @@ impl Wfc {
             RWArray::D3(ref mut array) => array.as_slice_mut().unwrap(),
         };
 
-        self.0.set_values(slice);
+        self.inner.set_values(slice);
     }
 
     fn values<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, numpy::array::PyArray3<u8>>> {
-        numpy::array::PyArray1::from_vec(py, self.0.values()).reshape((
-            self.0.depth() as _,
-            self.0.height() as _,
-            self.0.width() as _,
+        numpy::array::PyArray1::from_vec(py, self.inner.values()).reshape((
+            self.inner.depth() as _,
+            self.inner.height() as _,
+            self.inner.width() as _,
         ))
     }
 
     fn collapse_all(&mut self) -> bool {
-        let mut rng = rand::rngs::SmallRng::from_entropy();
+        self.inner.collapse_all(&mut self.rng)
+    }
 
-        self.0.collapse_all(&mut rng)
+    fn collapse_all_reset_on_contradiction(&mut self) -> u32 {
+        self.inner
+            .collapse_all_reset_on_contradiction(&mut self.rng)
     }
 
     fn collapse(&mut self, index: ArrayIndex, tile: u8) -> bool {
         let index = match index {
             ArrayIndex::Index(index) => index,
             ArrayIndex::Coord((x, y, z)) => {
-                self.0.width() * self.0.height() * z + self.0.width() * y + x
+                self.inner.width() * self.inner.height() * z + self.inner.width() * y + x
             }
         };
 
-        self.0.collapse(index, tile)
+        self.inner.collapse(index, tile)
     }
 
     fn partial_collapse(&mut self, index: ArrayIndex, wave: wfc::Wave) -> bool {
         let index = match index {
             ArrayIndex::Index(index) => index,
             ArrayIndex::Coord((x, y, z)) => {
-                self.0.width() * self.0.height() * z + self.0.width() * y + x
+                self.inner.width() * self.inner.height() * z + self.inner.width() * y + x
             }
         };
 
-        self.0.partial_collapse(index, wave)
+        self.inner.partial_collapse(index, wave)
     }
 
     fn find_lowest_entropy(&mut self) -> Option<(u32, u8)> {
-        let mut rng = rand::rngs::SmallRng::from_entropy();
-        self.0.find_lowest_entropy(&mut rng)
+        self.inner.find_lowest_entropy(&mut self.rng)
     }
 }
 

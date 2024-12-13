@@ -14,6 +14,11 @@ struct SetQueue<T, P: Ord> {
 }
 
 impl<T: Hash + Eq, P: Copy + Ord + Hash> SetQueue<T, P> {
+    fn clear(&mut self) {
+        self.queue.clear();
+        self.sets.clear();
+    }
+
     fn insert_set(&mut self, p: P, set: IndexSet<T>) {
         self.queue.push(p);
         self.sets.insert(p, set);
@@ -166,29 +171,18 @@ impl<Wave: WaveNum, const BITS: usize> Tileset<Wave, BITS> {
             *prob /= sum;
         }
 
-        let wave = Wave::max_value() >> (BITS - self.tiles.len());
-
         let (width, height, depth) = size;
         let mut wfc = Wfc {
             tiles: self.tiles,
             probabilities: self.probabilities,
-            array: vec![wave; (width * height * depth) as usize],
+            array: vec![Wave::zero(); (width * height * depth) as usize],
             width,
             height,
             stack: Vec::new(),
             entropy_to_indices: Default::default(),
         };
 
-        let mut set = IndexSet::new();
-
-        for i in 0..wfc.array.len() {
-            set.insert(i as u32);
-        }
-
-        wfc.entropy_to_indices.insert_set(
-            Reverse(OrderedFloat(wfc.calculate_shannon_entropy(wave))),
-            set,
-        );
+        wfc.reset();
 
         wfc
     }
@@ -213,6 +207,23 @@ pub struct Wfc<Wave: WaveNum, const BITS: usize> {
 }
 
 impl<Wave: WaveNum, const BITS: usize> Wfc<Wave, BITS> {
+    pub fn reset(&mut self) {
+        self.stack.clear();
+        let wave = Wave::max_value() >> (BITS - self.tiles.len());
+        for value in self.array.iter_mut() {
+            *value = wave;
+        }
+        self.entropy_to_indices.clear();
+        let mut set = IndexSet::new();
+        for i in 0..self.array.len() {
+            set.insert(i as u32);
+        }
+        self.entropy_to_indices.insert_set(
+            Reverse(OrderedFloat(self.calculate_shannon_entropy(wave))),
+            set,
+        );
+    }
+
     pub fn num_tiles(&self) -> usize {
         self.tiles.len()
     }
@@ -268,6 +279,18 @@ impl<Wave: WaveNum, const BITS: usize> Wfc<Wave, BITS> {
 
             (index, tile)
         })
+    }
+
+    pub fn collapse_all_reset_on_contradiction(&mut self, rng: &mut SmallRng) -> u32 {
+        let mut attempts = 1;
+        while let Some((index, tile)) = self.find_lowest_entropy(rng) {
+            if self.collapse(index, tile) {
+                self.reset();
+                attempts += 1
+            }
+        }
+
+        attempts
     }
 
     pub fn collapse_all(&mut self, rng: &mut SmallRng) -> bool {
@@ -481,4 +504,28 @@ fn broken() {
             break;
         }
     }
+}
+
+#[test]
+fn pipes() {
+    let mut rng = SmallRng::from_entropy();
+
+    let mut tileset = Tileset::<u16, 16>::default();
+
+    let empty = tileset.add(1.0);
+    let pipe_x = tileset.add(1.0);
+    let pipe_y = tileset.add(1.0);
+    let t = tileset.add(1.0);
+    tileset.connect(empty, empty, &Axis::ALL);
+    tileset.connect(pipe_x, pipe_x, &Axis::ALL);
+    tileset.connect(pipe_y, pipe_y, &Axis::ALL);
+    tileset.connect(empty, pipe_x, &[Axis::X, Axis::NegX]);
+    tileset.connect(empty, pipe_y, &[Axis::Y, Axis::NegY]);
+    tileset.connect(empty, t, &[Axis::Z, Axis::NegZ, Axis::NegY]);
+    tileset.connect(t, pipe_y, &[Axis::Y]);
+    tileset.connect(t, pipe_y, &[Axis::X, Axis::NegX]);
+
+    tileset
+        .into_wfc((10, 10, 10))
+        .collapse_all_reset_on_contradiction(&mut rng);
 }
