@@ -14,6 +14,10 @@ mod pattern_matching;
 mod python;
 mod wfc;
 
+mod palette {
+    include!(concat!(env!("OUT_DIR"), "/palette.rs"));
+}
+
 #[derive(Clone, Debug)]
 struct Node<T> {
     ty: NodeTy<T>,
@@ -310,30 +314,12 @@ fn execute_node<'a>(
     }
 }
 
-// From https://github.com/mxgmn/MarkovJunior#rewrite-rules,
-// but swapped around to have B then W then R.
-pub const PALETTE: [char; 16] = [
-    'B', // Black
-    'W', // White
-    'R', // Red
-    'I', // Dark blue
-    'P', // Dark purple
-    'E', // Dark green
-    'N', // Brown
-    'D', // Dark grey (Dead)
-    'A', // Light grey (Alive)
-    'O', // Orange
-    'Y', // Yellow
-    'G', // Green
-    'U', // Blue
-    'S', // Lavender
-    'K', // Pink
-    'F', // Light peach
-];
-
 #[pyfunction]
 fn index_for_colour(colour: char) -> Option<u8> {
-    PALETTE.iter().position(|&c| c == colour).map(|v| v as u8)
+    palette::CHARS
+        .iter()
+        .position(|&c| c == colour)
+        .map(|v| v as u8)
 }
 
 pub fn send_image(
@@ -394,6 +380,11 @@ fn markov(_py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<python::Wfc>()?;
     m.add_class::<python::Tileset>()?;
     m.add_class::<NodeSettings>()?;
+
+    m.add(
+        "PICO8_PALETTE",
+        python::Palette::new(palette::COLOURS.to_vec()),
+    )?;
     Ok(())
 }
 

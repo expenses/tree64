@@ -243,7 +243,7 @@ fn string_to_array(string: &str) -> Array3D {
             '*' => WILDCARD,
             _ => match c.to_digit(10) {
                 Some(digit) => digit as u8,
-                None => PALETTE.iter().position(|&v| v == c).unwrap() as _,
+                None => palette::CHARS.iter().position(|&v| v == c).unwrap() as _,
             },
         });
     }
@@ -485,7 +485,7 @@ pub struct Palette {
 #[pymethods]
 impl Palette {
     #[new]
-    fn new(srgb: Vec<[u8; 3]>) -> Self {
+    pub fn new(srgb: Vec<[u8; 3]>) -> Self {
         Self {
             linear: srgb.iter().map(|col| col.map(srgb_to_linear)).collect(),
             srgb,
@@ -686,8 +686,10 @@ pub fn map_3d(
             let tile_row = y % height;
             let tile = value as usize;
             let tile_offset = tile * width * height * depth + tile_layer * width * height;
-            let tile_slice =
-                &tiles[tile_offset + tile_row * width..tile_offset + (tile_row + 1) * width];
-            chunk.copy_from_slice(tile_slice);
+            if let Some(tile_slice) =
+                tiles.get(tile_offset + tile_row * width..tile_offset + (tile_row + 1) * width)
+            {
+                chunk.copy_from_slice(tile_slice);
+            }
         })
 }

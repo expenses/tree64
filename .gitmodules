@@ -1,0 +1,3 @@
+[submodule "MarkovJunior"]
+	path = MarkovJunior
+	url = https://github.com/mxgmn/MarkovJunior

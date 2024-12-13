@@ -18,6 +18,14 @@
         python-deps = ps: [ps.ipython ps.numpy ps.pillow ps.scikit-image ps.ffmpeg-python ps.zstandard ps.openusd];
       in rec {
         packages = rec {
+          MarkovJunior = with pkgs;
+            buildDotnetModule {
+              src = ./MarkovJunior;
+              name = "MarkovJunior";
+              dotnet-sdk = dotnetCorePackages.sdk_7_0;
+              dotnet-runtime = dotnetCorePackages.runtime_7_0;
+              nugetDeps = ./nix/MarkovJunior-deps.nix;
+            };
           wheel = craneLib.buildPackage rec {
             src = pkgs.lib.cleanSource ./.;
             cargoArtifacts = craneLib.buildDepsOnly {inherit src nativeBuildInputs;};

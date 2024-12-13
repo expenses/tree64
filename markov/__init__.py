@@ -46,29 +46,6 @@ TOGGLE_XY = [
 ROT_AROUND_Z = [[0, 1, 2], [1, 0, 2]]
 
 
-# https://pico-8.fandom.com/wiki/Palette
-PICO8_PALETTE = Palette(
-    [
-        [0, 0, 0],
-        [255, 241, 232],
-        [255, 0, 7],
-        [29, 43, 83],
-        [126, 37, 83],
-        [0, 135, 81],
-        [171, 82, 54],
-        [95, 87, 79],
-        [194, 195, 199],
-        [255, 163, 0],
-        [255, 236, 39],
-        [0, 228, 54],
-        [41, 173, 255],
-        [131, 118, 156],
-        [255, 119, 168],
-        [255, 204, 170],
-    ]
-    + [[128, 128, 128]] * 100
-)
-
 
 class FfmpegWriter:
     def __init__(self, filename, dims, skip=1, framerate=60):
@@ -158,14 +135,14 @@ class UsdWriter:
         self.index = 0
         self.skip = skip
 
-    def write(self, arr):
+    def write(self, arr, palette=PICO8_PALETTE):
         index = self.index
         self.index += 1
         if index % self.skip != 0:
             return
         self.frameindex += 1
         print(self.frameindex)
-        add_to_usd_stage("/arr", self.stage, arr, time=self.frameindex)
+        add_to_usd_stage("/arr", self.stage, arr, time=self.frameindex, palette=palette)
         self.stage.SetEndTimeCode(self.frameindex)
         self.stage.Save()
 
@@ -188,7 +165,6 @@ def rot_z(d):
         return "x"
     return d
 
-
 def rot_y(d):
     if type(d) is dict:
         m = d
@@ -205,6 +181,25 @@ def rot_y(d):
         return "negz"
     if d == "negz":
         return "x"
+    return d
+
+
+def rot_x(d):
+    if type(d) is dict:
+        m = d
+        n = {}
+        for d, v in m.items():
+            n[rot_x(d)] = v
+        return n
+
+    if d == "y":
+        return "z"
+    if d == "z":
+        return "negy"
+    if d == "negy":
+        return "negz"
+    if d == "negz":
+        return "y"
     return d
 
 
@@ -225,7 +220,7 @@ class Tags:
         other.outgoing = self.outgoing
 
     def __repr__(self):
-        return f"in: {self.incoming} out: {self.outgoing}"
+        return f"(in: {self.incoming} out: {self.outgoing})"
 
 
 def wave_from_tiles(tiles):
@@ -268,6 +263,9 @@ def apply_symmetry(tags, symmetry):
     if symmetry == "L_3d":
         tags["x"].merge(tags["y"])
         tags["negx"].merge(tags["negy"])
+        tags["z"].merge(tags["negz"])
+    if symmetry == "T_3d":
+        tags["x"].merge(tags["negx"])
         tags["z"].merge(tags["negz"])
     return tags
 
