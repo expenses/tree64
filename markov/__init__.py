@@ -430,28 +430,32 @@ class XmlTileset:
             )
 
     def create_array_from_models(self, tile_dims):
-        array = np.zeros((self.tileset.tileset.num_tiles(),) + tile_dims, dtype=np.uint8)
+        array = np.zeros(
+            (self.tileset.tileset.num_tiles(),) + tile_dims, dtype=np.uint8
+        )
         for name, ids in self.tile_ids.items():
             model = self.tiles[name].model
-            for rot, id in enumerate(ids):
-                array[id, : model.shape[0], : model.shape[1], : model.shape[2]] = (
-                    np.rot90(model, axes=(1, 2), k=-rot)
-                )
+            add_model_variants_to_model_array(self.tiles[name].model, array, ids)
         return array
 
-    def run_wfc_and_map(self, dims, model_padding=(0,0,0)):
+    def run_wfc_and_map(self, dims, model_padding=(0, 0, 0)):
         model_shape = next(iter(self.tiles.values())).model.shape
-        model_shape = tuple((model_shape[i] + model_padding[i] for i in range(3)))
+        model_shape = tuple(model_shape[i] + model_padding[i] for i in range(3))
         # dimensions in numpy order for consistency.
         z, y, x = dims
         wfc = self.tileset.tileset.create_wfc((x, y, z))
         model_array = self.create_array_from_models(model_shape)
         wfc.collapse_all_reset_on_contradiction()
         output = np.zeros(
-            (dims[0] * model_shape[0], dims[1] * model_shape[1], dims[2] * model_shape[2]),
+            tuple(dims[i] * model_shape[i] for i in range(3)),
             dtype=np.uint8,
         )
-        return map_3d(wfc.values(), output, model_array)
+        map_3d(wfc.values(), output, model_array)
+        if model_padding != (0, 0, 0):
+            output = output[
+                : -model_padding[0], : -model_padding[1], : -model_padding[2]
+            ]
+        return output
 
     def read_xml_old(self, symmetry_override={}):
         for tile in self.parsed["tiles"]["tile"]:

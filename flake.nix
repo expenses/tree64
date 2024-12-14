@@ -60,7 +60,9 @@
               checkInputs = [];
               nativeBuildInputs = [];
               propagatedBuildInputs = [
-                #self."Pillow"                                                                    self."imageio"                                                                   self."numpy"
+                #self."Pillow"
+                #self."imageio"
+                #self."numpy"
               ];
             };
           patched-python = pkgs.python3.override {
@@ -69,7 +71,10 @@
               inherit voxypy;
             };
           };
-          usd2gltf = with pkgs; writeShellScriptBin "usd2gltf" "${blender}/bin/blender --background -P ${./nix/convert.py} -- $@";
+          usd2gltf = with pkgs;
+            writeShellScriptBin
+            "usd2gltf"
+            "${blender}/bin/blender --background -P ${./nix/convert.py} -- $@";
         };
         devShells.default = with pkgs;
           mkShell {
