@@ -37,10 +37,10 @@ wfc = tileset.tileset.create_wfc((dim, dim, dim))
 
 tiles = np.zeros((wfc.num_tiles(), 3, 6, 6), dtype=np.uint8)
 
-line_vox, _ = load_vox(f"{d}/I.vox")
+line_vox = load_vox(f"{d}/I.vox")
 
-t_vox = load_vox(f"{d}/T.vox")[0]
-empty_vox = load_vox(f"{d}/Nothing.vox")[0]
+t_vox = load_vox(f"{d}/T.vox")
+empty_vox = load_vox(f"{d}/Nothing.vox")
 
 
 # tiles[line_z] = np.rot90(line_vox)

@@ -2,7 +2,6 @@ from markov.markov import *
 import numpy as np
 import argparse
 import os
-import xmltodict
 
 ONCE = NodeSettings(count=1)
 
@@ -377,6 +376,8 @@ def rot_z_symmetrical(voxels, rots):
 
 class XmlTileset:
     def __init__(self, filename, old=False):
+        import xmltodict
+
         self.tiles = {}
         self.tile_ids = {}
         self.tileset = TaggingTileset()
@@ -470,10 +471,7 @@ class XmlTileset:
         for tile in self.parsed["tiles"]["tile"]:
             name = tile["@name"]
 
-            model = np.rot90(
-                load_vox(f"{os.path.splitext(self.filename)[0]}/{name}.vox"),
-                axes=(0, 2),
-            )
+            model = load_mkjr_vox(f"{os.path.splitext(self.filename)[0]}/{name}.vox")
 
             symmetry = ""
             if rot_z_symmetrical(model, 1):
@@ -613,6 +611,24 @@ def load_vox(filename):
     palette = Palette([(r, g, b) for (r, g, b, a) in vox.get_palette()])
 
     return replace_values(vox.get_dense(), replacements)
+
+
+def load_mkjr_vox(filename):
+    return np.rot90(
+        load_vox(filename),
+        axes=(0, 2),
+    )
+
+
+def add_model_variants_to_model_array(model, array, ids):
+    for rot, id in enumerate(ids):
+        rotated_model = np.rot90(model, axes=(1, 2), k=-rot)
+        array[
+            id,
+            : rotated_model.shape[0],
+            : rotated_model.shape[1],
+            : rotated_model.shape[2],
+        ] = rotated_model
 
 
 class MutableTile:

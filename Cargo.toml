@@ -24,3 +24,7 @@ num-traits = "0.2.19"
 
 [build-dependencies]
 xml = "0.8.20"
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
