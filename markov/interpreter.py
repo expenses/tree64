@@ -51,7 +51,6 @@ def parse_pattern(string, unions):
         else:
             array.append(index_for_colour(char))
 
-
     if width == None:
         return np.reshape(array, (1, -1)).astype(np.uint8)
     elif height == None:

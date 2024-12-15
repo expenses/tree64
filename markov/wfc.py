@@ -79,7 +79,23 @@ class Tags:
         other.outgoing = self.outgoing
 
     def __repr__(self):
-        return f"(in: {self.incoming} out: {self.outgoing})"
+        return "{}" if len(self.outgoing) == 0 else str(self.outgoing)
+        bidirectional = self.incoming & self.outgoing
+        string = "("
+        if bidirectional != set():
+            string += f"{bidirectional}"
+        incoming = self.incoming - self.outgoing
+        if incoming != set():
+            if string != "(":
+                string += " "
+            string += f"in: {incoming}"
+        outgoing = self.outgoing - self.incoming
+        if outgoing != set():
+            if string != "(":
+                string += " "
+            string += f"out: {outgoing}"
+        string += ")"
+        return string
 
 
 def wave_from_tiles(tiles):
@@ -110,7 +126,7 @@ def apply_symmetry(tags, symmetry):
         tags["x"].merge(tags["y"])
         tags["negx"].merge(tags["negy"])
     if symmetry == "T":
-        tags["x"].merge(tags["negx"])
+        tags["y"].merge(tags["negy"])
     if symmetry == "X_3d":
         for dir in ["x", "y", "negx", "negy", "z", "negz"]:
             for other in tags.values():
@@ -124,7 +140,7 @@ def apply_symmetry(tags, symmetry):
         tags["negx"].merge(tags["negy"])
         tags["z"].merge(tags["negz"])
     if symmetry == "T_3d":
-        tags["x"].merge(tags["negx"])
+        tags["y"].merge(tags["negy"])
         tags["z"].merge(tags["negz"])
     return tags
 
@@ -228,7 +244,7 @@ class XmlTileset:
         self.tileset = TaggingTileset()
         self.filename = filename
 
-        parsed = xmltodict.parse(open(filename).read())
+        parsed = xmltodict.parse(open(filename).read(), force_list=["tile", "neighbor"])
 
         if "set" in parsed:
             self.parsed = parsed["set"]
@@ -363,6 +379,13 @@ def add_model_variants_to_model_array(model, array, ids):
         ] = rotated_model
 
 
+def connect_2(left_tile, right_tile, left_edge, right_edge):
+    left_tile.incoming.add(left_edge)
+    left_tile.outgoing.add(right_edge)
+    right_tile.incoming.add(right_edge)
+    right_tile.outgoing.add(left_edge)
+
+
 class MutableTile:
     def __init__(self, weight=1.0, symmetry="", model=None):
         self.weight = weight
@@ -379,3 +402,39 @@ class MutableTile:
 
     def apply_symmetry(self):
         self.conns = apply_symmetry(self.conns, self.symmetry)
+
+
+VARIANTS_FOR_SYMMETRY = {"T_3d": 4, "T": 4, "X_3d": 1, "X": 1, "I_3d": 2, "I": 2}
+
+
+class MkJrConnector:
+    def __init__(self):
+        self.tiles = {}
+
+    def add(self, name, symmetry):
+        self.tiles[name] = [
+            MutableTile(symmetry=symmetry)
+            for _ in range(VARIANTS_FOR_SYMMETRY[symmetry])
+        ]
+
+    def connect(self, left, left_v, right, right_v, on_z=False):
+        axes = ["negz"] if on_z else ["x", "negy", "negx", "y"]
+
+        if len(self.tiles[right]) > len(self.tiles[left]):
+            left, right = right, left
+            left_v, right_v = right_v, left_v
+            left_v += 2
+
+        for variant in range(len(self.tiles[left])):
+            left_v_mod = (variant + left_v) % len(self.tiles[left])
+            right_v_mod = (variant + right_v) % len(self.tiles[right])
+            left_axis = axes[left_v_mod % len(axes)]
+            # print(f"{left} {left_v_mod} {left_axis} -> {right} {right_v_mod}")
+
+            right_axis = FLIPPED[left_axis]
+            connect_2(
+                self.tiles[left][left_v_mod].conns[left_axis],
+                self.tiles[right][right_v_mod].conns[right_axis],
+                f"{left}_{left_axis}_{left_v_mod}",
+                f"{right}_{right_axis}_{right_v_mod}",
+            )
