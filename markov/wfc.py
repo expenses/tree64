@@ -5,6 +5,12 @@ import numpy as np
 FLIPPED = {"x": "negx", "y": "negy", "negx": "x", "negy": "y", "z": "negz", "negz": "z"}
 
 
+def rot_z_times(d, times):
+    for _ in range(times):
+        d = rot_z(d)
+    return d
+
+
 def rot_z(d):
     if type(d) is dict:
         m = d
@@ -14,12 +20,12 @@ def rot_z(d):
         return n
 
     if d == "x":
-        return "y"
-    if d == "y":
-        return "negx"
-    if d == "negx":
         return "negy"
     if d == "negy":
+        return "negx"
+    if d == "negx":
+        return "y"
+    if d == "y":
         return "x"
     return d
 
@@ -96,6 +102,9 @@ class Tags:
             string += f"out: {outgoing}"
         string += ")"
         return string
+
+    def __eq__(self, other):
+        return self.incoming == other.incoming and self.outgoing == other.outgoing
 
 
 def wave_from_tiles(tiles):
@@ -211,24 +220,16 @@ class TaggingTileset:
 def split_xml_tile(string, tiles, top_to_bottom=False):
     split = string.split(" ")
 
-    default_dir = "negz" if top_to_bottom else "x"
-
     if len(split) == 1:
-        return split[0], default_dir
-    axis = ["x", "negy", "negx", "y"]
+        return split[0], 0
 
     if split[0] in tiles:
-        return split[0], axis[int(split[1])]
+        return split[0], int(split[1])
     else:
         zs = split[0].count("z")
         xs = split[0].count("x")
         ys = split[0].count("y")
-
-        if top_to_bottom:
-            assert xs == 0 and ys == 0
-            return split[1], default_dir
-
-        return split[1], axis[zs]
+        return split[1], zs
 
 
 def rot_z_symmetrical(voxels, rots):
@@ -236,71 +237,88 @@ def rot_z_symmetrical(voxels, rots):
 
 
 class XmlTileset:
-    def __init__(self, filename, old=False):
+    def __init__(self, filename):
         import xmltodict
 
-        self.tiles = {}
         self.tile_ids = {}
         self.tileset = TaggingTileset()
-        self.filename = filename
+
+        connector = MkJrConnector()
 
         parsed = xmltodict.parse(open(filename).read(), force_list=["tile", "neighbor"])
 
         if "set" in parsed:
-            self.parsed = parsed["set"]
+            parsed = parsed["set"]
         elif "tileset" in parsed:
-            self.parsed = parsed["tileset"]
+            parsed = parsed["tileset"]
 
-        if not old:
-            self.read_xml()
+        for tile in parsed["tiles"]["tile"]:
+            name = tile["@name"]
+
+            model = load_mkjr_vox(f"{os.path.splitext(filename)[0]}/{name}.vox")
+
+            symmetry = ""
+            if rot_z_symmetrical(model, 1):
+                symmetry = "X_3d"
+            elif rot_z_symmetrical(model, 2):
+                symmetry = "I_3d"
+            elif (model == np.flip(model, axis=(0, 1))).all():
+                symmetry = "T_3d"
+
+            connector.add(
+                name,
+                symmetry,
+                weight=float(tile["@weight"]) if "@weight" in tile else 1.0,
+                model=model,
+            )
+
+        for neighbor in parsed["neighbors"]["neighbor"]:
+            if "@top" in neighbor and "@bottom" in neighbor:
+                left, left_v = split_xml_tile(
+                    neighbor["@top"], connector.tiles, top_to_bottom=True
+                )
+                right, right_v = split_xml_tile(
+                    neighbor["@bottom"], connector.tiles, top_to_bottom=True
+                )
+                connector.connect(left, left_v, right, right_v, on_z=True)
+            else:
+                left, left_v = split_xml_tile(neighbor["@left"], connector.tiles)
+                right, right_v = split_xml_tile(neighbor["@right"], connector.tiles)
+                connector.connect(left, left_v, right, right_v)
+
+        for name, variants in connector.tiles.items():
+            for i, variant in enumerate(variants):
+                variant.apply_symmetry_to_variant(i)
+
+            """
+            print(name, len(variants))
+            for variant in variants:
+                for dir in sorted(list(variant.conns.keys()))[::-1]:
+                    print("    ", dir, variant.conns[dir])
+                print()
+            """
+
+            self.tile_ids[name] = [
+                self.tileset.add(variant.weight, variant.conns, symmetry="")
+                for variant in variants
+            ]
+
+        self.tiles = connector.tiles
 
     def create_wfc(self, dims):
         return self.tileset.tileset.create_wfc(dims)
-
-    def setup_connections(self):
-        for neighbor in self.parsed["neighbors"]["neighbor"]:
-            if "@top" in neighbor and "@bottom" in neighbor:
-                left, left_axis = split_xml_tile(
-                    neighbor["@top"], self.tiles, top_to_bottom=True
-                )
-                right, right_axis = split_xml_tile(
-                    neighbor["@bottom"], self.tiles, top_to_bottom=True
-                )
-            else:
-                left, left_axis = split_xml_tile(neighbor["@left"], self.tiles)
-                right, right_axis = split_xml_tile(neighbor["@right"], self.tiles)
-            right_axis = FLIPPED[right_axis]
-
-            incoming = f"{left}_{left_axis}"
-            outgoing = f"{right}_{right_axis}"
-            self.tiles[left].conns[left_axis].incoming.add(incoming)
-            self.tiles[right].conns[right_axis].outgoing.add(incoming)
-
-            self.tiles[left].conns[left_axis].outgoing.add(outgoing)
-            self.tiles[right].conns[right_axis].incoming.add(outgoing)
-
-        for name, tile in self.tiles.items():
-            times = 4
-            if tile.symmetry == "X":
-                times = 1
-            elif tile.symmetry == "I":
-                times = 2
-
-            self.tile_ids[name] = self.tileset.add_mul(
-                tile.weight, times, tile.conns, symmetry=tile.symmetry
-            )
 
     def create_array_from_models(self, tile_dims):
         array = np.zeros(
             (self.tileset.tileset.num_tiles(),) + tile_dims, dtype=np.uint8
         )
         for name, ids in self.tile_ids.items():
-            model = self.tiles[name].model
-            add_model_variants_to_model_array(self.tiles[name].model, array, ids)
+            model = self.tiles[name][0].model
+            add_model_variants_to_model_array(model, array, ids)
         return array
 
     def run_wfc_and_map(self, dims, model_padding=(0, 0, 0)):
-        model_shape = next(iter(self.tiles.values())).model.shape
+        model_shape = next(iter(self.tiles.values()))[0].model.shape
         model_shape = tuple(model_shape[i] + model_padding[i] for i in range(3))
         # dimensions in numpy order for consistency.
         z, y, x = dims
@@ -317,40 +335,6 @@ class XmlTileset:
                 : -model_padding[0], : -model_padding[1], : -model_padding[2]
             ]
         return output
-
-    def read_xml_old(self, symmetry_override={}):
-        for tile in self.parsed["tiles"]["tile"]:
-            name = tile["@name"]
-            self.tiles[name] = MutableTile(
-                symmetry=(
-                    tile["@symmetry"]
-                    if "@symmetry" in tile
-                    else (symmetry_override[name] if name in symmetry_override else "")
-                ),
-                weight=float(tile["@weight"]) if "@weight" in tile else 1.0,
-            )
-
-        self.setup_connections()
-
-    def read_xml(self):
-        for tile in self.parsed["tiles"]["tile"]:
-            name = tile["@name"]
-
-            model = load_mkjr_vox(f"{os.path.splitext(self.filename)[0]}/{name}.vox")
-
-            symmetry = ""
-            if rot_z_symmetrical(model, 1):
-                symmetry = "X"
-            elif rot_z_symmetrical(model, 2):
-                symmetry = "I"
-
-            self.tiles[name] = MutableTile(
-                symmetry=symmetry,
-                weight=float(tile["@weight"]) if "@weight" in tile else 1.0,
-                model=model,
-            )
-
-        self.setup_connections()
 
 
 def collapse_all_with_callback(wfc, callback, skip=1):
@@ -370,7 +354,7 @@ def collapse_all_with_callback(wfc, callback, skip=1):
 
 def add_model_variants_to_model_array(model, array, ids):
     for rot, id in enumerate(ids):
-        rotated_model = np.rot90(model, axes=(1, 2), k=-rot)
+        rotated_model = np.rot90(model, axes=(1, 2), k=rot)
         array[
             id,
             : rotated_model.shape[0],
@@ -403,17 +387,26 @@ class MutableTile:
     def apply_symmetry(self):
         self.conns = apply_symmetry(self.conns, self.symmetry)
 
+    def apply_symmetry_to_variant(self, variant_num):
+        self.conns = rot_z_times(self.conns, 4 - variant_num)
+        self.apply_symmetry()
+        self.conns = rot_z_times(self.conns, variant_num)
 
-VARIANTS_FOR_SYMMETRY = {"T_3d": 4, "T": 4, "X_3d": 1, "X": 1, "I_3d": 2, "I": 2}
+
+VARIANTS_FOR_SYMMETRY = {"T_3d": 4, "T": 4, "X_3d": 1, "X": 1, "I_3d": 2, "I": 2, "": 4}
 
 
 class MkJrConnector:
     def __init__(self):
         self.tiles = {}
 
-    def add(self, name, symmetry):
+    def add(self, name, symmetry, model=None, weight=1.0):
         self.tiles[name] = [
-            MutableTile(symmetry=symmetry)
+            MutableTile(
+                symmetry=symmetry,
+                weight=weight / VARIANTS_FOR_SYMMETRY[symmetry],
+                model=model,
+            )
             for _ in range(VARIANTS_FOR_SYMMETRY[symmetry])
         ]
 
@@ -423,18 +416,24 @@ class MkJrConnector:
         if len(self.tiles[right]) > len(self.tiles[left]):
             left, right = right, left
             left_v, right_v = right_v, left_v
-            left_v += 2
+            axes = ["negz"] if on_z else ["negx", "y", "x", "negy"]
 
-        for variant in range(len(self.tiles[left])):
-            left_v_mod = (variant + left_v) % len(self.tiles[left])
-            right_v_mod = (variant + right_v) % len(self.tiles[right])
-            left_axis = axes[left_v_mod % len(axes)]
-            # print(f"{left} {left_v_mod} {left_axis} -> {right} {right_v_mod}")
+        diff = left_v - right_v
 
+        conns = [
+            (
+                axes[(left_v + i) % len(axes)],
+                (i) % len(self.tiles[left]),
+                (i + diff) % len(self.tiles[right]),
+            )
+            for i in range(len(self.tiles[left]))
+        ]
+
+        for left_axis, left_v, right_v in conns:
             right_axis = FLIPPED[left_axis]
             connect_2(
-                self.tiles[left][left_v_mod].conns[left_axis],
-                self.tiles[right][right_v_mod].conns[right_axis],
-                f"{left}_{left_axis}_{left_v_mod}",
-                f"{right}_{right_axis}_{right_v_mod}",
+                self.tiles[left][left_v].conns[left_axis],
+                self.tiles[right][right_v].conns[right_axis],
+                f"{left}_{left_axis}_{left_v}",
+                f"{right}_{right_axis}_{right_v}",
             )
