@@ -240,9 +240,6 @@ class XmlTileset:
     def __init__(self, filename):
         import xmltodict
 
-        self.tile_ids = {}
-        self.tileset = TaggingTileset()
-
         connector = MkJrConnector()
 
         parsed = xmltodict.parse(open(filename).read(), force_list=["tile", "neighbor"])
@@ -273,36 +270,24 @@ class XmlTileset:
             )
 
         for neighbor in parsed["neighbors"]["neighbor"]:
+            top_to_bottom = False
+
             if "@top" in neighbor and "@bottom" in neighbor:
+                top_to_bottom = True
                 left, left_v = split_xml_tile(
-                    neighbor["@top"], connector.tiles, top_to_bottom=True
+                    neighbor["@top"], connector.tiles, top_to_bottom=top_to_bottom
                 )
                 right, right_v = split_xml_tile(
-                    neighbor["@bottom"], connector.tiles, top_to_bottom=True
+                    neighbor["@bottom"], connector.tiles, top_to_bottom=top_to_bottom
                 )
-                connector.connect(left, left_v, right, right_v, on_z=True)
             else:
                 left, left_v = split_xml_tile(neighbor["@left"], connector.tiles)
                 right, right_v = split_xml_tile(neighbor["@right"], connector.tiles)
-                connector.connect(left, left_v, right, right_v)
 
-        for name, variants in connector.tiles.items():
-            for i, variant in enumerate(variants):
-                variant.apply_symmetry_to_variant(i)
+            connector.connect(left, left_v, right, right_v, on_z=top_to_bottom)
 
-            """
-            print(name, len(variants))
-            for variant in variants:
-                for dir in sorted(list(variant.conns.keys()))[::-1]:
-                    print("    ", dir, variant.conns[dir])
-                print()
-            """
-
-            self.tile_ids[name] = [
-                self.tileset.add(variant.weight, variant.conns, symmetry="")
-                for variant in variants
-            ]
-
+        self.tileset = TaggingTileset()
+        self.tile_ids = connector.add_and_get_tile_ids(self.tileset)
         self.tiles = connector.tiles
 
     def create_wfc(self, dims):
@@ -437,3 +422,24 @@ class MkJrConnector:
                 f"{left}_{left_axis}_{left_v}",
                 f"{right}_{right_axis}_{right_v}",
             )
+
+    def add_and_get_tile_ids(self, tileset):
+        tile_ids = {}
+
+        for name, variants in self.tiles.items():
+            for i, variant in enumerate(variants):
+                variant.apply_symmetry_to_variant(i)
+
+            if True:
+                print(name, len(variants))
+                for variant in variants:
+                    for dir in sorted(list(variant.conns.keys()))[::-1]:
+                        print("    ", dir, variant.conns[dir])
+                    print()
+
+
+            tile_ids[name] = [
+                tileset.add(variant.weight, variant.conns, symmetry="")
+                for variant in variants
+            ]
+        return tile_ids
