@@ -24,7 +24,7 @@ fn main() {
     let mut palette_values = Vec::new();
     let mut offset = reorderings.len();
 
-    let mut char_to_index = [0_u8; 255];
+    let mut char_to_index = [255; 255];
 
     for (i, x) in reorderings.iter().enumerate() {
         char_to_index[(*x) as usize] = i as u8;
@@ -88,6 +88,10 @@ fn main() {
     // we need a way to have opaque black
     char_to_index['@' as usize] = palette_values.len() as u8;
     palette_values.push([0; 3]);
+
+    for digit in 0..=9 {
+        char_to_index[char::from_digit(digit, 10).unwrap() as usize] = digit as u8;
+    }
 
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("palette.rs");

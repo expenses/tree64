@@ -319,7 +319,10 @@ fn execute_node<'a>(
 
 #[pyfunction]
 fn index_for_colour(colour: char) -> Option<u8> {
-    palette::CHARS_TO_INDEX.get(colour as usize).copied()
+    palette::CHARS_TO_INDEX
+        .get(colour as usize)
+        .filter(|&&value| value != 255)
+        .copied()
 }
 
 pub fn send_image(

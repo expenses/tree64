@@ -49,10 +49,8 @@ def parse_pattern(string, unions):
         elif char == "*":
             array.append(255)
         else:
-            try:
-                array.append(int(char))
-            except ValueError:
-                array.append(index_for_colour(char))
+            array.append(index_for_colour(char))
+
 
     if width == None:
         return np.reshape(array, (1, -1)).astype(np.uint8)

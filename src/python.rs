@@ -271,10 +271,7 @@ fn string_to_array(string: &str) -> Array3D {
 
         list.push(match c {
             '*' => WILDCARD,
-            _ => match c.to_digit(10) {
-                Some(digit) => digit as u8,
-                None => index_for_colour(c).unwrap(),
-            },
+            _ => index_for_colour(c).unwrap(),
         });
     }
 
