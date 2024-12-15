@@ -273,7 +273,7 @@ fn string_to_array(string: &str) -> Array3D {
             '*' => WILDCARD,
             _ => match c.to_digit(10) {
                 Some(digit) => digit as u8,
-                None => palette::CHARS.iter().position(|&v| v == c).unwrap() as _,
+                None => index_for_colour(c).unwrap(),
             },
         });
     }

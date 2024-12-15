@@ -52,7 +52,7 @@ def parse_pattern(string, unions):
             try:
                 array.append(int(char))
             except ValueError:
-                array.append(PALETTE_CHARS.index(char))
+                array.append(index_for_colour(char))
 
     if width == None:
         return np.reshape(array, (1, -1)).astype(np.uint8)

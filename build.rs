@@ -21,8 +21,14 @@ fn main() {
     // it go B then W then R though so I've reordered those.
     let reorderings = ['B', 'W', 'R'];
 
-    let mut palette_chars = reorderings.to_vec();
     let mut palette_values = Vec::new();
+    let mut offset = reorderings.len();
+
+    let mut char_to_index = [0_u8; 255];
+
+    for (i, x) in reorderings.iter().enumerate() {
+        char_to_index[(*x) as usize] = i as u8;
+    }
 
     let file = File::open("MarkovJunior/resources/palette.xml").unwrap();
 
@@ -57,20 +63,21 @@ fn main() {
                     let palette_char = palette_char.unwrap();
                     let hex_colour = hex_colour.unwrap();
 
-                    if !palette_chars.contains(&palette_char) {
-                        palette_chars.push(palette_char);
-                    }
-
-                    let index = palette_chars
-                        .iter()
-                        .position(|&c| c == palette_char)
-                        .unwrap();
+                    let index = if !reorderings.contains(&palette_char) {
+                        let index = offset;
+                        offset += 1;
+                        index
+                    } else {
+                        reorderings.iter().position(|&c| c == palette_char).unwrap()
+                    };
 
                     while index >= palette_values.len() {
                         palette_values.push([0; 3]);
                     }
 
                     palette_values[index] = hex_colour;
+
+                    char_to_index[palette_char as usize] = index as u8;
                 }
             }
             _ => {}
@@ -79,14 +86,19 @@ fn main() {
 
     // slightly hacky, but as we're using 'B'/0 as both transparent and black
     // we need a way to have opaque black
-    palette_chars.push('@');
+    char_to_index['@' as usize] = palette_values.len() as u8;
     palette_values.push([0; 3]);
 
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("palette.rs");
 
     let mut output = File::create(dest_path).unwrap();
-    writeln!(output, "pub const CHARS: &[char] = &{:?};", palette_chars).unwrap();
+    writeln!(
+        output,
+        "pub const CHARS_TO_INDEX: &[u8] = &{:?};",
+        char_to_index
+    )
+    .unwrap();
     writeln!(
         output,
         "pub const COLOURS: &[[u8;3]] = &{:?};",

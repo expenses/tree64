@@ -1,4 +1,5 @@
 from markov import *
+from markov.wfc import TaggingTileset, Tags, wave_from_tiles, collapse_all_with_callback
 
 dim = 350
 

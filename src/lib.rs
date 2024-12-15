@@ -319,10 +319,7 @@ fn execute_node<'a>(
 
 #[pyfunction]
 fn index_for_colour(colour: char) -> Option<u8> {
-    palette::CHARS
-        .iter()
-        .position(|&c| c == colour)
-        .map(|v| v as u8)
+    palette::CHARS_TO_INDEX.get(colour as usize).copied()
 }
 
 pub fn send_image(
@@ -390,7 +387,7 @@ fn markov(_py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
         "PICO8_PALETTE",
         python::Palette::new(palette::COLOURS.to_vec()),
     )?;
-    m.add("PALETTE_CHARS", palette::CHARS.to_vec())?;
+    m.add("PALETTE_CHARS_TO_INDEX", palette::CHARS_TO_INDEX.to_vec())?;
     Ok(())
 }
 
