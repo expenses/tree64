@@ -89,6 +89,13 @@ impl Permutation {
     pub fn depth(&self) -> usize {
         self.to.depth()
     }
+
+    #[inline]
+    pub fn coords(&self) -> impl Iterator<Item = (usize, usize, usize)> + '_ {
+        (0..self.depth()).flat_map(move |z| {
+            (0..self.height()).flat_map(move |y| (0..self.width()).map(move |x| (x, y, z)))
+        })
+    }
 }
 
 pub fn match_pattern(regex: &Permutation, state: &Array3D<&mut [u8]>, index: u32) -> bool {

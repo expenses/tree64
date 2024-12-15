@@ -47,7 +47,7 @@ class FfmpegWriter:
     def __init__(self, filename, dims, skip=1, framerate=60):
         import ffmpeg
 
-        width, height = dims
+        height, width = dims
 
         self.process = (
             ffmpeg.input(
@@ -537,6 +537,7 @@ def run_example(name, default_size, callback, is_default_3d=False, disable_3d=Fa
         args.dims = args.dims * (3 if is_3d else 2)
     if is_3d and len(args.dims) == 2:
         args.dims.append(default_size)
+    args.dims = list(reversed(args.dims))
 
     if args.image and is_3d:
         raise "can't write 3d image"
