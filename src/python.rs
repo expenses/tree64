@@ -1,8 +1,7 @@
 use super::*;
 use numpy::{PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::exceptions::PyTypeError;
-use pyo3::prelude::PyTupleMethods;
-use pyo3::types::{PyFunction, PyTuple};
+use pyo3::types::PyFunction;
 
 #[pyclass]
 pub struct TevClient {
@@ -95,10 +94,7 @@ impl Pattern {
                 shuffles: ALL_SHUFFLES.to_vec(),
                 flips: ALL_FLIPS.to_vec(),
 
-                settings: ReplaceSettings {
-                    apply_all: false,
-                    chance: 10.0,
-                },
+                settings: ReplaceSettings { chance: 10.0 },
                 node_settings: Default::default(),
             },
         })
@@ -108,82 +104,116 @@ impl Pattern {
 #[pymethods]
 impl Pattern {
     #[new]
-    #[pyo3(signature = (pattern, shuffles = None, flips = None, apply_all = None, chance = None, node_settings = None))]
+    #[pyo3(signature = (pattern, shuffles = None, flips = None, chance = None, node_settings = None))]
     fn new(
         pattern: PatternInput,
         shuffles: Option<Vec<[usize; 3]>>,
         flips: Option<Vec<[bool; 3]>>,
-        apply_all: Option<bool>,
         chance: Option<f32>,
         node_settings: Option<NodeSettings>,
     ) -> PyResult<Self> {
         let mut pattern = Self::new_from_pattern(pattern)?;
         pattern.options.flips = flips.unwrap_or(pattern.options.flips);
         pattern.options.shuffles = shuffles.unwrap_or(pattern.options.shuffles);
-        pattern.options.settings.apply_all =
-            apply_all.unwrap_or(pattern.options.settings.apply_all);
         pattern.options.settings.chance = chance.unwrap_or(pattern.options.settings.chance);
         pattern.options.node_settings = node_settings.unwrap_or(pattern.options.node_settings);
         Ok(pattern)
     }
 }
 
-type PatternList = Vec<Node<Pattern>>;
+type NodeList = Vec<Node<Pattern>>;
 
-fn parse_pattern_list(list: Bound<PyTuple>) -> PyResult<PatternList> {
-    list.iter()
-        .map(|item| {
-            item.extract::<PythonNode>()
-                .and_then(|python_node| python_node.convert())
-        })
-        .collect::<PyResult<Vec<Node<Pattern>>>>()
+fn parse_node_list(list: Vec<PythonNode>) -> PyResult<NodeList> {
+    list.into_iter().map(|node| node.convert()).collect()
 }
 
 #[derive(Clone)]
 #[pyclass]
-pub struct One(PatternList, NodeSettings);
+pub struct All(Vec<Pattern>, NodeSettings);
+
+#[pymethods]
+impl All {
+    #[new]
+    #[pyo3(signature = (*list, settings=None))]
+    fn new(list: Vec<PatternOrPatternInput>, settings: Option<NodeSettings>) -> PyResult<Self> {
+        Ok(Self(
+            list.into_iter()
+                .map(|input| input.convert())
+                .collect::<PyResult<Vec<_>>>()?,
+            settings.unwrap_or_default(),
+        ))
+    }
+}
+
+#[derive(Clone)]
+#[pyclass]
+pub struct Prl(Vec<Pattern>, NodeSettings);
+
+#[pymethods]
+impl Prl {
+    #[new]
+    #[pyo3(signature = (*list, settings=None))]
+    fn new(list: Vec<PatternOrPatternInput>, settings: Option<NodeSettings>) -> PyResult<Self> {
+        Ok(Self(
+            list.into_iter()
+                .map(|input| input.convert())
+                .collect::<PyResult<Vec<_>>>()?,
+            settings.unwrap_or_default(),
+        ))
+    }
+}
+
+#[derive(Clone)]
+#[pyclass]
+pub struct One(NodeList, NodeSettings);
 
 #[pymethods]
 impl One {
     #[new]
     #[pyo3(signature = (*list, settings=None))]
-    fn new(list: Bound<PyTuple>, settings: Option<NodeSettings>) -> PyResult<Self> {
-        Ok(Self(
-            parse_pattern_list(list)?,
-            settings.unwrap_or_default(),
-        ))
+    fn new(list: Vec<PythonNode>, settings: Option<NodeSettings>) -> PyResult<Self> {
+        Ok(Self(parse_node_list(list)?, settings.unwrap_or_default()))
     }
 }
 
 #[derive(Clone)]
 #[pyclass]
-pub struct Markov(PatternList, NodeSettings);
+pub struct Markov(NodeList, NodeSettings);
 
 #[pymethods]
 impl Markov {
     #[new]
     #[pyo3(signature = (*list, settings=None))]
-    fn new(list: Bound<PyTuple>, settings: Option<NodeSettings>) -> PyResult<Self> {
-        Ok(Self(
-            parse_pattern_list(list)?,
-            settings.unwrap_or_default(),
-        ))
+    fn new(list: Vec<PythonNode>, settings: Option<NodeSettings>) -> PyResult<Self> {
+        Ok(Self(parse_node_list(list)?, settings.unwrap_or_default()))
     }
 }
 
 #[derive(Clone)]
 #[pyclass]
-pub struct Sequence(PatternList, NodeSettings);
+pub struct Sequence(NodeList, NodeSettings);
 
 #[pymethods]
 impl Sequence {
     #[new]
     #[pyo3(signature = (*list, settings=None))]
-    fn new(list: Bound<PyTuple>, settings: Option<NodeSettings>) -> PyResult<Self> {
-        Ok(Self(
-            parse_pattern_list(list)?,
-            settings.unwrap_or_default(),
-        ))
+    fn new(list: Vec<PythonNode>, settings: Option<NodeSettings>) -> PyResult<Self> {
+        Ok(Self(parse_node_list(list)?, settings.unwrap_or_default()))
+    }
+}
+
+#[derive(FromPyObject)]
+pub enum PatternOrPatternInput<'a> {
+    Pattern(Pattern),
+    PatternInput(PatternInput<'a>),
+}
+
+impl<'a> PatternOrPatternInput<'a> {
+    fn convert(self) -> PyResult<Pattern> {
+        match self {
+            PatternOrPatternInput::Pattern(pattern) => Ok(pattern),
+            PatternOrPatternInput::PatternInput(input) => Pattern::new_from_pattern(input),
+        }
     }
 }
 
@@ -262,32 +292,44 @@ pub enum PythonNode<'a> {
     One(One),
     Markov(Markov),
     Sequence(Sequence),
-    Pattern(PatternInput<'a>),
-    PatternWithOptions(Pattern),
+    Pattern(PatternOrPatternInput<'a>),
+    All(All),
+    Prl(Prl),
 }
 
 impl<'a> PythonNode<'a> {
     fn convert(self) -> PyResult<Node<Pattern>> {
         Ok(match self {
-            Self::One(list) => Node {
-                settings: list.1,
-                ty: NodeTy::One(list.0),
+            Self::One(One(children, settings)) => Node {
+                settings,
+                ty: NodeTy::One {
+                    children,
+                    node_index_storage: Default::default(),
+                },
             },
-            Self::Markov(list) => Node {
-                settings: list.1,
-                ty: NodeTy::Markov(list.0),
+            Self::All(All(rules, settings)) => Node {
+                settings,
+                ty: NodeTy::All(rules),
             },
-            Self::Sequence(list) => Node {
-                settings: list.1,
-                ty: NodeTy::Sequence(list.0),
+            Self::Prl(Prl(rules, settings)) => Node {
+                settings,
+                ty: NodeTy::Prl(rules),
+            },
+            Self::Markov(Markov(list, settings)) => Node {
+                settings,
+                ty: NodeTy::Markov(list),
+            },
+            Self::Sequence(Sequence(list, settings)) => Node {
+                settings,
+                ty: NodeTy::Sequence(list),
             },
             Self::Pattern(pattern) => {
-                Self::PatternWithOptions(Pattern::new_from_pattern(pattern)?).convert()?
+                let pattern = pattern.convert()?;
+                Node {
+                    settings: pattern.options.node_settings.clone(),
+                    ty: NodeTy::Rule(pattern),
+                }
             }
-            Self::PatternWithOptions(pattern) => Node {
-                settings: pattern.options.node_settings.clone(),
-                ty: NodeTy::Rule(pattern),
-            },
         })
     }
 }
@@ -332,7 +374,7 @@ pub fn rep(array: Array, node: PythonNode, callback: Option<&Bound<PyFunction>>)
 
     let node = node.convert()?;
 
-    let node = map_node(node, &|pattern| {
+    let node = map_node(node, &mut |pattern| {
         Replace::new(
             pattern.from,
             pattern.to,

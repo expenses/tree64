@@ -31,26 +31,37 @@ enum NodeTy<T> {
     // Try to apply a child node in sequential order
     Markov(Vec<Node<T>>),
     // Try to apply a child node in random order
-    One(Vec<Node<T>>),
+    One {
+        children: Vec<Node<T>>,
+        node_index_storage: Vec<usize>,
+    },
     Sequence(Vec<Node<T>>),
+    All(Vec<T>),
+    Prl(Vec<T>),
 }
 
-fn map_node<T, U, F: Fn(T) -> U>(node: Node<T>, map: &F) -> Node<U> {
+fn map_node<T, U, F: FnMut(T) -> U>(node: Node<T>, mut map: &mut F) -> Node<U> {
     Node {
         ty: match node.ty {
             NodeTy::Rule(rule) => NodeTy::Rule(map(rule)),
+            NodeTy::All(rules) => NodeTy::All(rules.into_iter().map(&mut map).collect::<Vec<_>>()),
+            NodeTy::Prl(rules) => NodeTy::Prl(rules.into_iter().map(&mut map).collect::<Vec<_>>()),
             NodeTy::Markov(children) => NodeTy::Markov(
                 children
                     .into_iter()
                     .map(|node| map_node(node, map))
                     .collect(),
             ),
-            NodeTy::One(children) => NodeTy::One(
-                children
+            NodeTy::One {
+                children,
+                node_index_storage,
+            } => NodeTy::One {
+                children: children
                     .into_iter()
                     .map(|node| map_node(node, map))
                     .collect(),
-            ),
+                node_index_storage,
+            },
             NodeTy::Sequence(children) => NodeTy::Sequence(
                 children
                     .into_iter()
@@ -59,39 +70,6 @@ fn map_node<T, U, F: Fn(T) -> U>(node: Node<T>, map: &F) -> Node<U> {
             ),
         },
         settings: node.settings.clone(),
-    }
-}
-
-fn index_node(node: Node<Replace>, replaces: &mut Vec<Replace>) -> IndexNode {
-    IndexNode {
-        ty: match node.ty {
-            NodeTy::Rule(rep) => {
-                let index = replaces.len();
-                replaces.push(rep);
-                IndexNodeTy::Rule(index)
-            }
-            NodeTy::Markov(nodes) => IndexNodeTy::Markov(
-                nodes
-                    .into_iter()
-                    .map(|node| index_node(node, replaces))
-                    .collect(),
-            ),
-            NodeTy::Sequence(nodes) => IndexNodeTy::Sequence(
-                nodes
-                    .into_iter()
-                    .map(|node| index_node(node, replaces))
-                    .collect(),
-            ),
-
-            NodeTy::One(nodes) => IndexNodeTy::One {
-                children: nodes
-                    .into_iter()
-                    .map(|node| index_node(node, replaces))
-                    .collect(),
-                node_index_storage: Vec::new(),
-            },
-        },
-        settings: node.settings,
     }
 }
 
@@ -107,21 +85,6 @@ impl NodeSettings {
     fn new(count: Option<u32>) -> Self {
         Self { count }
     }
-}
-
-struct IndexNode {
-    ty: IndexNodeTy,
-    settings: NodeSettings,
-}
-
-enum IndexNodeTy {
-    Rule(usize),
-    Markov(Vec<IndexNode>),
-    Sequence(Vec<IndexNode>),
-    One {
-        children: Vec<IndexNode>,
-        node_index_storage: Vec<usize>,
-    },
 }
 
 fn get_unique_values(slice: &[u8]) -> HashSet<u8> {
@@ -145,9 +108,13 @@ fn execute_root_node<'a>(
     callback: Option<Box<dyn Fn(u32) + 'a>>,
 ) {
     let mut replaces = Vec::new();
-    let mut root = IndexNode {
+    let mut root = Node {
         settings: Default::default(),
-        ty: IndexNodeTy::Sequence(vec![index_node(root, &mut replaces)]),
+        ty: NodeTy::Sequence(vec![map_node(root, &mut |replace| {
+            let index = replaces.len();
+            replaces.push(replace);
+            index
+        })]),
     };
 
     // Record which pattern outputs effect which pattern inputs.
@@ -190,7 +157,7 @@ fn execute_root_node<'a>(
 }
 
 fn execute_node<'a>(
-    node: &mut IndexNode,
+    node: &mut Node<usize>,
     state: &mut Array3D<&mut [u8]>,
     replaces: &mut [Replace],
     interactions: &[Vec<bool>],
@@ -199,45 +166,84 @@ fn execute_node<'a>(
     callback: Option<&(dyn Fn(u32) + 'a)>,
 ) -> bool {
     match &mut node.ty {
-        IndexNodeTy::Rule(index) => {
-            let applied = if replaces[*index].settings.apply_all {
-                let mut any_applied = false;
+        NodeTy::All(indices) => {
+            let mut any_applied = false;
 
-                {
-                    let replace = &mut replaces[*index];
+            for index in indices.iter() {
+                let replace = &mut replaces[*index];
+                replace.store_initial_matches(state);
 
-                    replace.store_initial_matches(state);
+                for &m in &replace.potential_matches {
+                    let permutation = &replace.permutations[m.permutation as usize];
 
-                    for &m in &replace.potential_matches {
-                        let permutation = &replace.permutations[m.permutation as usize];
-
-                        if !match_pattern(permutation, state, m.index) {
-                            continue;
-                        }
-
-                        if rng.gen_range(0.0..1.0) > replace.settings.chance {
-                            continue;
-                        }
-
-                        for (i, v) in permutation
-                            .to
-                            .non_wildcard_values_in_state(state.width(), state.height())
-                        {
-                            any_applied = true;
-                            state.put(m.index as usize + i, v);
-                        }
-                    }
-                }
-
-                for (i, replace) in replaces.iter_mut().enumerate() {
-                    if !interactions[*index][i] {
+                    if !match_pattern(permutation, state, m.index) {
                         continue;
                     }
-                    replace.store_initial_matches(state);
-                }
 
-                any_applied
-            } else {
+                    if rng.gen_range(0.0..1.0) > replace.settings.chance {
+                        continue;
+                    }
+
+                    for (i, v) in permutation
+                        .to
+                        .non_wildcard_values_in_state(state.width(), state.height())
+                    {
+                        any_applied = true;
+                        state.put(m.index as usize + i, v);
+                    }
+                }
+            }
+
+            for (i, replace) in replaces.iter_mut().enumerate() {
+                // Skip if there is not any interactions between the patterns.
+                if !indices.iter().any(|index| interactions[*index][i]) {
+                    continue;
+                }
+                replace.store_initial_matches(state);
+            }
+
+            any_applied
+        }
+        NodeTy::Prl(indices) => {
+            let mut any_applied = false;
+
+            for index in indices.iter() {
+                replaces[*index].store_initial_matches(state);
+            }
+
+            for index in indices.iter() {
+                let replace = &mut replaces[*index];
+
+                for &m in &replace.potential_matches {
+                    let permutation = &replace.permutations[m.permutation as usize];
+
+                    if rng.gen_range(0.0..1.0) > replace.settings.chance {
+                        continue;
+                    }
+
+                    for (i, v) in permutation
+                        .to
+                        .non_wildcard_values_in_state(state.width(), state.height())
+                    {
+                        any_applied = true;
+                        state.put(m.index as usize + i, v);
+                    }
+                }
+            }
+
+            for (i, replace) in replaces.iter_mut().enumerate() {
+                // Skip if there is not any interactions between the patterns.
+                if !indices.iter().any(|index| interactions[*index][i]) {
+                    continue;
+                }
+                replace.store_initial_matches(state);
+            }
+
+            any_applied
+        }
+
+        NodeTy::Rule(index) => {
+            let applied = {
                 updated.clear();
 
                 if replaces[*index].get_match_and_update_state(state, rng, updated) {
@@ -262,7 +268,7 @@ fn execute_node<'a>(
 
             applied
         }
-        IndexNodeTy::Markov(nodes) => {
+        NodeTy::Markov(nodes) => {
             for node in nodes {
                 if execute_node(node, state, replaces, interactions, rng, updated, callback) {
                     return true;
@@ -271,7 +277,7 @@ fn execute_node<'a>(
 
             false
         }
-        IndexNodeTy::Sequence(nodes) => {
+        NodeTy::Sequence(nodes) => {
             let mut applied = false;
             for node in nodes {
                 for rule_iter in 1.. {
@@ -291,7 +297,7 @@ fn execute_node<'a>(
 
             applied
         }
-        IndexNodeTy::One {
+        NodeTy::One {
             children,
             node_index_storage,
         } => {
@@ -379,12 +385,15 @@ fn markov(_py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<python::Palette>()?;
     m.add_class::<python::Wfc>()?;
     m.add_class::<python::Tileset>()?;
+    m.add_class::<python::Prl>()?;
+    m.add_class::<python::All>()?;
     m.add_class::<NodeSettings>()?;
 
     m.add(
         "PICO8_PALETTE",
         python::Palette::new(palette::COLOURS.to_vec()),
     )?;
+    m.add("PALETTE_CHARS", palette::CHARS.to_vec())?;
     Ok(())
 }
 
@@ -420,7 +429,6 @@ const WILDCARD: u8 = 255;
 
 #[derive(Default, Clone)]
 struct ReplaceSettings {
-    apply_all: bool,
     chance: f32,
 }
 

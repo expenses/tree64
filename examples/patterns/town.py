@@ -6,9 +6,9 @@ def run(arr, writer):
     rep(arr_2d, do_times("B=W", 1))
     rep(arr_2d, do_times("B=R", 1))
     rep(arr_2d, One("BW=WW", "BR=RR"))
-    rep(arr_2d, all("WR=UU"))
-    rep(arr_2d, all("W=B"))
-    rep(arr_2d, all("R=B"))
+    rep(arr_2d, All("WR=UU"))
+    rep(arr_2d, All("W=B"))
+    rep(arr_2d, All("R=B"))
 
     rep(arr_2d, all_once("UB=UU"))
     rep(arr_2d, all_once("UB=UG"))
@@ -19,11 +19,11 @@ def run(arr, writer):
 
     rep(
         arr,
-        Pattern(
-            f"0=G",
-            apply_all=True,
-            chance=0.1,
-            node_settings=NodeSettings(count=1),
+        all_once(
+            Pattern(
+                f"0=G",
+                chance=0.1,
+            )
         ),
         writer=writer,
     )

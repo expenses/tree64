@@ -2,7 +2,7 @@ from markov import *
 
 
 def run(arr, writer):
-    rep(arr, all("B=W", chance=0.015, node_settings=ONCE), writer=writer)
+    rep(arr, all_once(Pattern("B=W", chance=0.015)), writer=writer)
     rep(arr, do_times("W=R", 1), writer=writer)
     rep(
         arr,

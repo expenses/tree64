@@ -10,12 +10,8 @@ def do_times(pattern, count, **kwargs):
     return Pattern(pattern, node_settings=NodeSettings(count=count), **kwargs)
 
 
-def all(pattern, **kwargs):
-    return Pattern(pattern, apply_all=True, **kwargs)
-
-
 def all_once(pattern, **kwargs):
-    return Pattern(pattern, apply_all=True, node_settings=ONCE, **kwargs)
+    return All(pattern, settings=ONCE, **kwargs)
 
 
 def rep(array, node, callback=None, writer=None, inplace=True):

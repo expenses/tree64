@@ -3,11 +3,12 @@ from markov import *
 
 def sand(c):
     return (
-        Pattern(
-            f"0={c}",
-            apply_all=True,
-            chance=0.1,
-            node_settings=NodeSettings(count=1),
+        All(
+            Pattern(
+                f"0={c}",
+                chance=0.1,
+            ),
+            settings=NodeSettings(count=1),
         ),
         Markov(
             Pattern(

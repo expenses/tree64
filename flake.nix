@@ -122,6 +122,7 @@
               black
               linuxPackages_latest.perf
               flamegraph
+              openusd
             ]);
             runScript = "bash";
           })

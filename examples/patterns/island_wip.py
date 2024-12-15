@@ -72,7 +72,7 @@ def run(arr, writer):
     )
     rep(arr, "R=W", writer=writer)
     # tev_client.send_image("grown offshoots", arr)
-    rep(arr, all("W=U", chance=lake_chance), writer=writer)
+    rep(arr, All(Pattern("W=U", chance=lake_chance)), writer=writer)
     # tev_client.send_image("sea points", arr)
     rep(arr, One("WB=WW", "UB=UU"), writer=writer)
     # tev_client.send_image("island", arr)
@@ -83,16 +83,16 @@ def run(arr, writer):
     rep(arr, all_once("WU=WR"), writer=writer)
     rep(
         arr,
-        all("RU=RR", chance=0.5, node_settings=NodeSettings(count=30)),
+        All(Pattern("RU=RR", chance=0.5), settings=NodeSettings(count=30)),
         writer=writer,
     )
     rep(arr, all_once("U=I"))
     rep(arr, all_once("R=U"))
 
-    rep(arr, all("UW=UG"))
-    rep(arr, all("GW=GG", chance=0.5, node_settings=NodeSettings(count=80)))
-    rep(arr, all_once("WW=WI", chance=0.000015))
-    rep(arr, all("G=W"))
+    rep(arr, All("UW=UG"))
+    rep(arr, All(Pattern("GW=GG", chance=0.5), settings=NodeSettings(count=80)))
+    rep(arr, all_once(Pattern("WW=WI", chance=0.000015)))
+    rep(arr, All("G=W"))
 
 
 run_example("island", 800, run, disable_3d=True)
