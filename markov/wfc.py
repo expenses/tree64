@@ -1,6 +1,7 @@
 from markov import Tileset, load_mkjr_vox, map_3d
 import os
 import numpy as np
+import types
 
 FLIPPED = {"x": "negx", "y": "negy", "negx": "x", "negy": "y", "z": "negz", "negz": "z"}
 
@@ -85,7 +86,7 @@ class Tags:
         other.outgoing = self.outgoing
 
     def __repr__(self):
-        return "{}" if len(self.outgoing) == 0 else str(self.outgoing)
+        # return "{}" if len(self.outgoing) == 0 else str(self.outgoing)
         bidirectional = self.incoming & self.outgoing
         string = "("
         if bidirectional != set():
@@ -116,7 +117,7 @@ def wave_from_tiles(tiles):
 
 def apply_symmetry(tags, symmetry):
     if type(tags) is not dict:
-        tags = {"x": tags}
+        tags = {"x": tags, "y": tags, "z": tags}
 
     for dir in ["x", "y", "negx", "negy", "z", "negz"]:
         if not dir in tags:
@@ -124,32 +125,20 @@ def apply_symmetry(tags, symmetry):
         if type(tags[dir]) is str:
             tags[dir] = Tags(tags[dir])
 
-    if symmetry == "X":
+    if symmetry.startswith("X"):
         for dir in ["x", "y", "negx", "negy"]:
-            for other in tags.values():
-                tags[dir].merge(other)
-    if symmetry == "I":
+            for other in ["x", "y", "negx", "negy"]:
+                tags[dir].merge(tags[other])
+    if symmetry.startswith("I"):
         tags["x"].merge(tags["negx"])
         tags["y"].merge(tags["negy"])
-    if symmetry == "L":
+    if symmetry.startswith("L"):
         tags["x"].merge(tags["y"])
         tags["negx"].merge(tags["negy"])
-    if symmetry == "T":
+    if symmetry.startswith("T"):
         tags["y"].merge(tags["negy"])
-    if symmetry == "X_3d":
-        for dir in ["x", "y", "negx", "negy", "z", "negz"]:
-            for other in tags.values():
-                tags[dir].merge(other)
-    if symmetry == "I_3d":
-        tags["x"].merge(tags["negx"])
-        tags["y"].merge(tags["negy"])
-        tags["z"].merge(tags["negz"])
-    if symmetry == "L_3d":
-        tags["x"].merge(tags["y"])
-        tags["negx"].merge(tags["negy"])
-        tags["z"].merge(tags["negz"])
-    if symmetry == "T_3d":
-        tags["y"].merge(tags["negy"])
+
+    if symmetry.endswith("_3d"):
         tags["z"].merge(tags["negz"])
     return tags
 
@@ -195,7 +184,14 @@ class TaggingTileset:
         prob /= rots
         tags = apply_symmetry(tags, symmetry)
         for i in range(rots):
-            res.append(self.add(prob, tags))
+            resolved_tags = {}
+            for dir, tag in tags.items():
+                if isinstance(tag, types.FunctionType):
+                    resolved_tags[dir] = tag(i)
+                else:
+                    resolved_tags[dir] = tag
+
+            res.append(self.add(prob, resolved_tags))
             tags = rot_z(tags)
         return res
 
@@ -436,7 +432,6 @@ class MkJrConnector:
                     for dir in sorted(list(variant.conns.keys()))[::-1]:
                         print("    ", dir, variant.conns[dir])
                     print()
-
 
             tile_ids[name] = [
                 tileset.add(variant.weight, variant.conns, symmetry="")

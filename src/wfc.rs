@@ -380,10 +380,13 @@ impl<Wave: WaveNum, const BITS: usize> Wfc<Wave, BITS> {
     }
 
     pub fn set_values(&self, values: &mut [u8]) {
-        self.array
-            .iter()
-            .zip(values)
-            .for_each(|(wave, value)| *value = wave.trailing_zeros() as u8);
+        self.array.iter().zip(values).for_each(|(wave, value)| {
+            *value = if wave.count_ones() == 1 {
+                wave.trailing_zeros() as u8
+            } else {
+                u8::max_value()
+            }
+        });
     }
 
     #[cfg(test)]
