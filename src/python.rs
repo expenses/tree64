@@ -540,6 +540,26 @@ impl Palette {
     }
 }
 
+// TODO: probably use some perceptuality metric or idk.
+#[pyfunction]
+pub fn find_closest_pairs(a: Vec<[u8; 3]>, b: Vec<[u8; 3]>) -> Vec<u8> {
+    a.iter()
+        .copied()
+        .map(|a| {
+            b.iter()
+                .copied()
+                .enumerate()
+                .min_by_key(|(_, b)| {
+                    (a[0] as i16 - b[0] as i16).abs()
+                        + (a[1] as i16 - b[1] as i16).abs()
+                        + (a[2] as i16 - b[2] as i16).abs()
+                })
+                .unwrap()
+                .0 as u8
+        })
+        .collect()
+}
+
 #[pyfunction]
 pub fn colour_image(
     mut output: numpy::borrow::PyReadwriteArray3<u8>,

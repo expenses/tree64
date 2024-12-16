@@ -239,12 +239,28 @@ def put_middle(array, value):
 def hex2rgb(h):
     return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
 
-
 def load_vox(filename):
     from voxypy.models import Entity
 
     vox = Entity().from_file(filename=filename)
 
+    array = vox.get_dense()
+
+    limited_palette = {"B", "Y", "D", "A", "W", "P", "R", "F", "U", "E", "N", "C"}
+    limited_palette = [PICO8_PALETTE.srgb[index_for_colour(c)] for c in limited_palette]
+    rgb_palette = [(r,g,b) for r,g,b,a in vox.get_palette()]
+    print(list(find_closest_pairs(rgb_palette, limited_palette)))
+
+    replacements = []
+    for i, c in enumerate(find_closest_pairs(rgb_palette, limited_palette)):
+        if not (array == i).any():
+            continue
+        if rgb_palette[i] == tuple(limited_palette[c]):
+            continue
+        print(rgb_palette[i], c, limited_palette[c])
+        replacements.append(([i], PICO8_PALETTE.srgb.index(limited_palette[c])))
+
+    '''
     # MarkovJunior voxel models often have the palette ordered differently
     # to the internal palette so we have to fix that.
     replacements = []
@@ -257,10 +273,10 @@ def load_vox(filename):
             if i == new_index:
                 continue
             replacements.append(([i], new_index))
-
+    '''
     palette = Palette([(r, g, b) for (r, g, b, a) in vox.get_palette()])
 
-    return replace_values(vox.get_dense(), replacements)
+    return replace_values(array, replacements)
 
 
 def load_mkjr_vox(filename):

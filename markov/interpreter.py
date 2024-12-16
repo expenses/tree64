@@ -28,7 +28,7 @@ def parse_xml_to_dict(xml_string):
     return (root.tag, xml_to_dict(root))
 
 
-def parse_pattern(string, unions):
+def parse_pattern(string, unions={}):
     width = None
     height = None
     array = []

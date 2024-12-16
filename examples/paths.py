@@ -1,13 +1,14 @@
 
 from markov import *
+from markov.interpreter import parse_pattern
 from markov.wfc import TaggingTileset, Tags, wave_from_tiles, collapse_all_with_callback
 from pprint import pprint
 
-dim = 16
+dims = (24,12,12)
 
 tileset = TaggingTileset()
 
-empty = tileset.add(2.0, "empty", symmetry="X_3d")
+empty = tileset.add(0.1, "empty", symmetry="X_3d")
 line = tileset.add_mul(
     1.0, 2, {"x": "line", "y": Tags(outgoing="empty"), "z": "empty"}, symmetry="I_3d"
 )
@@ -65,25 +66,26 @@ for i, slot in enumerate(down):
 for i, slot in enumerate(up):
     tiles[slot] = np.rot90(up_vox, axes=(1, 2), k=i + 2)
 
-output = np.zeros((dim * 5, dim * 5, dim * 5), dtype=np.uint8)
+output = np.zeros((dims[0] * 5, dims[1] * 5, dims[2] * 5), dtype=np.uint8)
 
 
 iters = 0
 while True:
     iters += 1
-    wfc = tileset.tileset.create_wfc((dim, dim, dim))
-    for j in range(dim):
-        for i in range(dim):
-            #wfc.collapse((j, i, 0), empty)
-            wfc.collapse((i, j, dim - 1), empty)
-            wfc.collapse((i, 0, j), empty)
-            wfc.collapse((i, dim - 1, j), empty)
-            wfc.collapse((0, i, j), empty)
-            wfc.collapse((dim - 1, i, j), empty)
-
-            wfc.partial_collapse(
-                (i, j, 0), wave_from_tiles([empty, x] + line + down + turn)
-            )
+    wfc = tileset.tileset.create_wfc(dims[::-1])
+    for z in range(dims[0]):
+        for y in range(dims[1]):
+            for x in range(dims[2]):
+                #wfc.collapse((j, i, 0), empty)
+                wfc.collapse((x, y, dims[0] - 1), empty)
+                wfc.collapse((x, 0, z), empty)
+                wfc.collapse((x, dims[1] - 1, z), empty)
+                wfc.collapse((0, y, z), empty)
+                wfc.collapse((dims[2] - 1, y, z), empty)
+    
+                wfc.partial_collapse(
+                    (x, y, 0), wave_from_tiles([empty, x] + line + down + turn)
+                )
     found_contradiction = wfc.collapse_all()
     if not found_contradiction:
         print(iters)
@@ -93,51 +95,74 @@ while True:
 output = map_3d(wfc.values(), output, tiles)
 output[0, :, :] = index_for_colour("N")
 output[1, :, :] = index_for_colour("E")
-write_usd("pipes.usdc", output)
-'''
+
+writer = UsdWriter("pipes.usdc")
+
+writer.write(output)
+
+def vertical(pattern):
+    return Pattern(pattern, shuffles=Y_IS_Z, flips=Y_IS_Z_TOGGLE_X)
 
 rep(output, Prl(Pattern("Y=C", chance=0.25), settings=ONCE))
 rep(output, "Y=B")
-print(line_vox, index_for_colour("D"))
-print(list(PICO8_PALETTE.srgb[index_for_colour("D")]))
-#print(list(PICO8_PALETTE.srgb[80]))
-
-print(chr(PALETTE_CHARS_TO_INDEX.index(40)))
-
+# Extend down
 rep(output, Pattern('DB=*F', shuffles=[[2,1,0]], flips=[[True, False, False]]))
 rep(output, Pattern('FB=FF', shuffles=[[2,1,0]], flips=[[True, False, False]]))
-#writer.write(output)
-
-def chr_for_val(val):
-    return chr(PALETTE_CHARS_TO_INDEX.index(val))
-
-rep(output, One(
-    "FF,EE=BB,EE",
-    "pF=*B",
-    Pattern('FB=BB', shuffles=[[2,1,0]], flips=TOGGLE_X)
-))
-
-print(up_vox, chr_for_val(18))
-
-#rep(output, Pattern('FF,EE=BB,EE'))
-#writer.write(output)
-#rep(output, Pattern('FF,FD,EE=FF,BD,EE'))
-#writer.write(output)
-#rep(output, Pattern('FB=BB', shuffles=[[2,1,0]], flips=[[True, False, False]]))
-#writer.write(output)
-#rep(output, Pattern('BF=BB', shuffles=[[2,1,0]], flips=[[True, False, False]]))
 writer.write(output)
+rep(output, All(
+    vertical("FF,EE=BB,EE"),
+    vertical("FF,FD,EE=FF,BD,EE"),
+    vertical("F,B=B,B"),
+    vertical("B,F=B,B"),
+    vertical("F,P=B,P"),
+    vertical("P*,*F=**,*B")
 
-
-rep(output, Pattern((
-    np.array([0, 42], dtype=np.uint8).reshape((2, 1, 1)),
-    np.array([index_for_colour("F"), 42], dtype=np.uint8).reshape((2, 1, 1))
-), shuffles=NO_SHUFFLES, flips = NO_FLIPS))
-
-rep(output, Pattern((
-    np.array([0, index_for_colour("F")], dtype=np.uint8).reshape((2, 1, 1)),
-    np.array([index_for_colour("F"), index_for_colour("F")], dtype=np.uint8).reshape((2, 1, 1))
-), shuffles=NO_SHUFFLES, flips = NO_FLIPS))
-'''
-
-#write_usd("pipes.usdc", output)
+    #"FF,EE=BB,EE",
+    #"PF=*B",
+    #Pattern('FB=BB', shuffles=[[2,1,0]], flips=TOGGLE_X)
+))
+writer.write(output)
+rep(output, All(
+   Pattern((
+       parse_pattern("*A*/ADB/*B* ***/*B*/***"),
+       parse_pattern("***/***/*** ***/*F*/***"),
+   ), shuffles=ROT_AROUND_Z, flips=[[False, False, True], [True, False, True]]),
+   vertical("F,B=F,F")
+))
+writer.write(output)
+rep(output, All(
+    vertical("FBBBF,*AAA*=*RRR*,*****"),
+    vertical("FBBBF,*RRR*=*RRR*,*****")
+))
+writer.write(output)
+rep(output, All(
+    vertical("RFFR,RFDA=U**U,U***"),
+    vertical("RFDA,RFFR=U***,U**U")
+))
+rep(output, All(
+    vertical("R,U=U,*"),
+    vertical("U,R=*,U")
+))
+writer.write(output)
+rep(output, All("RFFR,BBBB=*RR*,****"))
+writer.write(output)
+rep(output, All("U=R"))
+writer.write(output)
+rep(output, All("RR,DA,FR=UU,**,*U"))
+rep(output, All(
+    vertical("RU=U*"),
+    vertical("UR=*U")
+))
+rep(output, All(
+    vertical("RB,AB,RB=RB,RB,RB"),
+    vertical("RB,DB,RB=RB,RB,RB"),
+))
+rep(output, Prl("F=A", "D=A", "P=A", "U=R"))
+writer.write(output)
+rep(output, Prl(
+    Pattern((
+        parse_pattern("AAAAA ARRRA ARRRA ARRRA ARRRA AAAAA"),
+        parse_pattern("AAAAA AAAAA AAAAA AAAAA AAAAA AAAAA"),
+    ), shuffles=ROT_AROUND_Z, flips=[[False, False, True], [True, False, True]]),
+))
+writer.write(output)
