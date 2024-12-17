@@ -12,7 +12,7 @@ mod arrays;
 mod bespoke_regex;
 mod pattern_matching;
 mod python;
-mod wfc;
+pub mod wfc;
 
 mod palette {
     include!(concat!(env!("OUT_DIR"), "/palette.rs"));
