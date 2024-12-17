@@ -65,8 +65,6 @@ impl<T: Hash + Eq, P: Copy + Ord + Hash> SetQueue<T, P> {
     }
 }
 
-pub type Wave = u64;
-
 #[repr(u8)]
 #[derive(Clone, Copy, Debug)]
 pub enum Axis {
@@ -188,7 +186,7 @@ impl<Wave: WaveNum, const BITS: usize> Tileset<Wave, BITS> {
         }
     }
 
-    pub fn into_wfc(mut self, size: (u32, u32, u32)) -> Wfc<Wave, BITS> {
+    pub fn into_wfc<E: Entropy>(mut self, size: (u32, u32, u32)) -> Wfc<Wave, E, BITS> {
         self.normalize_probabilities();
 
         let (width, height, depth) = size;
@@ -210,11 +208,11 @@ impl<Wave: WaveNum, const BITS: usize> Tileset<Wave, BITS> {
         wfc
     }
 
-    pub fn into_wfc_with_initial_state(
+    pub fn into_wfc_with_initial_state<E: Entropy>(
         mut self,
         size: (u32, u32, u32),
         array: Vec<Wave>,
-    ) -> Wfc<Wave, BITS> {
+    ) -> Wfc<Wave, E, BITS> {
         self.normalize_probabilities();
 
         let (width, height, depth) = size;
@@ -239,15 +237,15 @@ impl<Wave: WaveNum, const BITS: usize> Tileset<Wave, BITS> {
         wfc
     }
 
-    pub fn create_wfc(&self, size: (u32, u32, u32)) -> Wfc<Wave, BITS> {
+    pub fn create_wfc<E: Entropy>(&self, size: (u32, u32, u32)) -> Wfc<Wave, E, BITS> {
         self.clone().into_wfc(size)
     }
 
-    pub fn create_wfc_with_initial_state(
+    pub fn create_wfc_with_initial_state<E: Entropy>(
         &self,
         size: (u32, u32, u32),
         array: Vec<Wave>,
-    ) -> Wfc<Wave, BITS> {
+    ) -> Wfc<Wave, E, BITS> {
         self.clone().into_wfc_with_initial_state(size, array)
     }
 
@@ -260,24 +258,68 @@ impl<Wave: WaveNum, const BITS: usize> Tileset<Wave, BITS> {
     }
 }
 
+pub trait Entropy: Default + Send + Clone {
+    type Type: Ord + Clone + Copy + Default + Hash + Send;
+    fn calculate<Wave: WaveNum, const BITS: usize>(probabilities: &[f32], wave: Wave)
+        -> Self::Type;
+}
+
 #[derive(Clone, Default)]
-struct State<Wave: WaveNum> {
+pub struct ShannonEntropy;
+
+impl Entropy for ShannonEntropy {
+    type Type = OrderedFloat<f32>;
+
+    fn calculate<Wave: WaveNum, const BITS: usize>(
+        probabilities: &[f32],
+        wave: Wave,
+    ) -> Self::Type {
+        let mut sum = 0.0;
+        for i in tile_list_from_wave::<_, BITS>(wave) {
+            let prob = probabilities[i as usize];
+
+            if prob <= 0.0 {
+                continue;
+            }
+
+            sum -= prob * prob.log2();
+        }
+        OrderedFloat(sum)
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct LinearEntropy;
+
+impl Entropy for LinearEntropy {
+    type Type = u8;
+
+    fn calculate<Wave: WaveNum, const BITS: usize>(
+        _probabilities: &[f32],
+        wave: Wave,
+    ) -> Self::Type {
+        wave.count_ones() as _
+    }
+}
+
+#[derive(Clone, Default)]
+struct State<Wave: WaveNum, E: Entropy> {
     array: Vec<Wave>,
-    entropy_to_indices: SetQueue<u32, Reverse<OrderedFloat<f32>>>,
+    entropy_to_indices: SetQueue<u32, Reverse<<E as Entropy>::Type>>,
 }
 
 #[derive(Clone)]
-pub struct Wfc<Wave: WaveNum, const BITS: usize> {
+pub struct Wfc<Wave: WaveNum, E: Entropy, const BITS: usize> {
     tiles: arrayvec::ArrayVec<Tile<Wave>, { BITS }>,
     probabilities: arrayvec::ArrayVec<f32, { BITS }>,
-    state: State<Wave>,
-    initial_state: State<Wave>,
+    state: State<Wave, E>,
+    initial_state: State<Wave, E>,
     width: u32,
     height: u32,
     stack: Vec<(u32, Wave)>,
 }
 
-impl<Wave: WaveNum, const BITS: usize> Wfc<Wave, BITS> {
+impl<Wave: WaveNum, E: Entropy, const BITS: usize> Wfc<Wave, E, BITS> {
     pub fn initial_wave(&self) -> Wave {
         Wave::max_value() >> (BITS - self.tiles.len())
     }
@@ -316,8 +358,9 @@ impl<Wave: WaveNum, const BITS: usize> Wfc<Wave, BITS> {
             set.insert(i as u32);
         }
         self.state.entropy_to_indices.insert_set(
-            Reverse(OrderedFloat(
-                self.calculate_shannon_entropy(self.initial_wave()),
+            Reverse(E::calculate::<Wave, BITS>(
+                &self.probabilities,
+                self.initial_wave(),
             )),
             set,
         );
@@ -335,20 +378,6 @@ impl<Wave: WaveNum, const BITS: usize> Wfc<Wave, BITS> {
 
     pub fn num_tiles(&self) -> usize {
         self.tiles.len()
-    }
-
-    pub fn calculate_shannon_entropy(&self, wave: Wave) -> f32 {
-        let mut sum = 0.0;
-        for i in tile_list_from_wave::<_, BITS>(wave) {
-            let prob = self.probabilities[i as usize];
-
-            if prob <= 0.0 {
-                continue;
-            }
-
-            sum -= prob * prob.log2();
-        }
-        sum
     }
 
     pub fn width(&self) -> u32 {
@@ -475,7 +504,7 @@ impl<Wave: WaveNum, const BITS: usize> Wfc<Wave, BITS> {
 
             if old.count_ones() > 1 {
                 let _val = self.state.entropy_to_indices.remove(
-                    Reverse(OrderedFloat(self.calculate_shannon_entropy(old))),
+                    Reverse(E::calculate::<_, BITS>(&self.probabilities, old)),
                     &index,
                 );
                 debug_assert!(_val);
@@ -488,7 +517,7 @@ impl<Wave: WaveNum, const BITS: usize> Wfc<Wave, BITS> {
 
             if new.count_ones() > 1 {
                 let _val = self.state.entropy_to_indices.insert(
-                    Reverse(OrderedFloat(self.calculate_shannon_entropy(new))),
+                    Reverse(E::calculate::<_, BITS>(&self.probabilities, new)),
                     index,
                 );
                 debug_assert!(_val);
@@ -569,7 +598,7 @@ fn normal() {
 
     assert_eq!(tileset.tiles[sea].connections, [3; 6]);
 
-    let mut wfc = tileset.into_wfc((100, 1000, 1));
+    let mut wfc = tileset.into_wfc::<ShannonEntropy>((100, 1000, 1));
 
     assert!(!wfc.all_collapsed());
     assert!(!wfc.collapse_all(&mut rng));
@@ -600,7 +629,7 @@ fn initial_state() {
     let mut state = vec![1 << sea | 1 << beach | 1 << grass; 9];
     assert_eq!(
         tileset
-            .create_wfc_with_initial_state((3, 3, 1), state.clone())
+            .create_wfc_with_initial_state::<LinearEntropy>((3, 3, 1), state.clone())
             .state
             .array,
         state
@@ -612,7 +641,7 @@ fn initial_state() {
         3,1,3,
         7,3,7
     ];
-    let mut wfc = tileset.into_wfc_with_initial_state((3, 3, 1), state);
+    let mut wfc = tileset.into_wfc_with_initial_state::<ShannonEntropy>((3, 3, 1), state);
     assert_eq!(wfc.state.array, expected);
     wfc.collapse_all(&mut rng);
     assert_ne!(wfc.state.array, expected);
@@ -636,7 +665,7 @@ fn verticals() {
         &[Axis::X, Axis::Y, Axis::Z, Axis::NegX, Axis::NegY],
     );
 
-    let mut wfc = tileset.into_wfc((50, 50, 50));
+    let mut wfc = tileset.into_wfc::<ShannonEntropy>((50, 50, 50));
 
     assert!(!wfc.all_collapsed());
     assert!(!wfc.collapse_all(&mut rng));
@@ -670,7 +699,7 @@ fn stairs() {
 
     tileset.connect_to_all(empty);
 
-    let mut wfc = tileset.into_wfc((5, 5, 5));
+    let mut wfc = tileset.into_wfc::<ShannonEntropy>((5, 5, 5));
 
     assert!(!wfc.collapse_all(&mut rng));
     assert!(wfc.all_collapsed(),);
@@ -695,7 +724,7 @@ fn broken() {
 
     // Wait until there's a collapse failure due to beaches not being able to connect to beaches.
     loop {
-        let mut wfc = tileset.create_wfc((10, 10, 1));
+        let mut wfc = tileset.create_wfc::<ShannonEntropy>((10, 10, 1));
 
         assert!(!wfc.all_collapsed());
 
@@ -728,7 +757,7 @@ fn pipes() {
     tileset.connect(t, pipe_y, &[Axis::X, Axis::NegX]);
 
     tileset
-        .into_wfc((10, 10, 10))
+        .into_wfc::<ShannonEntropy>((10, 10, 10))
         .collapse_all_reset_on_contradiction(&mut rng);
 }
 

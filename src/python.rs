@@ -404,8 +404,11 @@ fn srgb_to_linear(value: u8) -> f32 {
     }
 }
 
+type Wave = u64;
+const BITS: usize = Wave::BITS as usize;
+
 #[pyclass]
-pub struct Tileset(crate::wfc::Tileset<u64, 64>);
+pub struct Tileset(crate::wfc::Tileset<Wave, BITS>);
 
 #[pymethods]
 impl Tileset {
@@ -442,30 +445,44 @@ impl Tileset {
         self.0.num_tiles()
     }
 
-    fn create_wfc(&self, size: (u32, u32, u32)) -> Wfc {
+    #[pyo3(signature = (size, entropy = "shannon"))]
+    fn create_wfc(&self, size: (u32, u32, u32), entropy: &str) -> Wfc {
         Wfc {
-            inner: self.0.create_wfc(size),
+            inner: match entropy {
+                "linear" => WfcInner::UsesLinearEntropy(self.0.create_wfc(size)),
+                "shannon" => WfcInner::UsesShannonEntropy(self.0.create_wfc(size)),
+                _ => panic!("Unknown entropy type {}", entropy),
+            },
             rng: rand::rngs::SmallRng::from_entropy(),
         }
     }
 
+    #[pyo3(signature = (state, entropy = "shannon"))]
     fn create_wfc_with_initial_state(
         &self,
-        state: numpy::borrow::PyReadonlyArray3<'_, u64>,
+        state: numpy::borrow::PyReadonlyArray3<'_, Wave>,
+        entropy: &str,
     ) -> Wfc {
         let slice = state.as_slice().unwrap();
         let dims = state.dims();
 
         Wfc {
-            inner: self.0.create_wfc_with_initial_state(
-                (dims[2] as _, dims[1] as _, dims[0] as _),
-                slice.to_vec(),
-            ),
+            inner: match entropy {
+                "linear" => WfcInner::UsesLinearEntropy(self.0.create_wfc_with_initial_state(
+                    (dims[2] as _, dims[1] as _, dims[0] as _),
+                    slice.to_vec(),
+                )),
+                "shannon" => WfcInner::UsesShannonEntropy(self.0.create_wfc_with_initial_state(
+                    (dims[2] as _, dims[1] as _, dims[0] as _),
+                    slice.to_vec(),
+                )),
+                _ => panic!("Unknown entropy type {}", entropy),
+            },
             rng: rand::rngs::SmallRng::from_entropy(),
         }
     }
 
-    pub fn initial_wave(&self) -> u64 {
+    pub fn initial_wave(&self) -> Wave {
         self.0.initial_wave()
     }
 }
@@ -476,20 +493,31 @@ enum ArrayIndex {
     Coord((u32, u32, u32)),
 }
 
+enum WfcInner {
+    UsesShannonEntropy(crate::wfc::Wfc<Wave, wfc::ShannonEntropy, BITS>),
+    UsesLinearEntropy(crate::wfc::Wfc<Wave, wfc::LinearEntropy, BITS>),
+}
+
 #[pyclass]
 pub struct Wfc {
-    inner: crate::wfc::Wfc<u64, 64>,
+    inner: WfcInner,
     rng: rand::rngs::SmallRng,
 }
 
 #[pymethods]
 impl Wfc {
-    pub fn initial_wave(&self) -> u64 {
-        self.inner.initial_wave()
+    pub fn initial_wave(&self) -> Wave {
+        match &self.inner {
+            WfcInner::UsesLinearEntropy(inner) => inner.initial_wave(),
+            WfcInner::UsesShannonEntropy(inner) => inner.initial_wave(),
+        }
     }
 
     fn num_tiles(&self) -> usize {
-        self.inner.num_tiles()
+        match &self.inner {
+            WfcInner::UsesLinearEntropy(inner) => inner.num_tiles(),
+            WfcInner::UsesShannonEntropy(inner) => inner.num_tiles(),
+        }
     }
 
     fn set_values(&self, mut output: RWArray) {
@@ -498,55 +526,111 @@ impl Wfc {
             RWArray::D3(ref mut array) => array.as_slice_mut().unwrap(),
         };
 
-        self.inner.set_values(slice);
+        match &self.inner {
+            WfcInner::UsesLinearEntropy(inner) => inner.set_values(slice),
+            WfcInner::UsesShannonEntropy(inner) => inner.set_values(slice),
+        }
     }
 
     fn values<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, numpy::array::PyArray3<u8>>> {
-        numpy::array::PyArray1::from_vec(py, self.inner.values()).reshape((
-            self.inner.depth() as _,
-            self.inner.height() as _,
-            self.inner.width() as _,
-        ))
+        match &self.inner {
+            WfcInner::UsesLinearEntropy(inner) => numpy::array::PyArray1::from_vec(
+                py,
+                inner.values(),
+            )
+            .reshape((inner.depth() as _, inner.height() as _, inner.width() as _)),
+            WfcInner::UsesShannonEntropy(inner) => numpy::array::PyArray1::from_vec(
+                py,
+                inner.values(),
+            )
+            .reshape((inner.depth() as _, inner.height() as _, inner.width() as _)),
+        }
     }
 
     fn collapse_all(&mut self) -> bool {
-        self.inner.collapse_all(&mut self.rng)
+        match &mut self.inner {
+            WfcInner::UsesLinearEntropy(inner) => inner.collapse_all(&mut self.rng),
+            WfcInner::UsesShannonEntropy(inner) => inner.collapse_all(&mut self.rng),
+        }
     }
 
     fn collapse_all_reset_on_contradiction(&mut self) -> u32 {
-        self.inner
-            .collapse_all_reset_on_contradiction(&mut self.rng)
+        match &mut self.inner {
+            WfcInner::UsesLinearEntropy(inner) => {
+                inner.collapse_all_reset_on_contradiction(&mut self.rng)
+            }
+            WfcInner::UsesShannonEntropy(inner) => {
+                inner.collapse_all_reset_on_contradiction(&mut self.rng)
+            }
+        }
     }
 
     fn collapse_all_reset_on_contradiction_par(&mut self) -> u32 {
-        self.inner
-            .collapse_all_reset_on_contradiction_par(&mut self.rng)
+        match &mut self.inner {
+            WfcInner::UsesLinearEntropy(inner) => {
+                inner.collapse_all_reset_on_contradiction_par(&mut self.rng)
+            }
+            WfcInner::UsesShannonEntropy(inner) => {
+                inner.collapse_all_reset_on_contradiction_par(&mut self.rng)
+            }
+        }
     }
 
     fn collapse(&mut self, index: ArrayIndex, tile: u8) -> bool {
-        let index = match index {
-            ArrayIndex::Index(index) => index,
-            ArrayIndex::Coord((x, y, z)) => {
-                self.inner.width() * self.inner.height() * z + self.inner.width() * y + x
-            }
-        };
+        match &mut self.inner {
+            WfcInner::UsesLinearEntropy(inner) => {
+                let index = match index {
+                    ArrayIndex::Index(index) => index,
+                    ArrayIndex::Coord((x, y, z)) => {
+                        inner.width() * inner.height() * z + inner.width() * y + x
+                    }
+                };
 
-        self.inner.collapse(index, tile)
+                inner.collapse(index, tile)
+            }
+            WfcInner::UsesShannonEntropy(inner) => {
+                let index = match index {
+                    ArrayIndex::Index(index) => index,
+                    ArrayIndex::Coord((x, y, z)) => {
+                        inner.width() * inner.height() * z + inner.width() * y + x
+                    }
+                };
+
+                inner.collapse(index, tile)
+            }
+        }
     }
 
-    fn partial_collapse(&mut self, index: ArrayIndex, wave: wfc::Wave) -> bool {
-        let index = match index {
-            ArrayIndex::Index(index) => index,
-            ArrayIndex::Coord((x, y, z)) => {
-                self.inner.width() * self.inner.height() * z + self.inner.width() * y + x
-            }
-        };
+    fn partial_collapse(&mut self, index: ArrayIndex, wave: Wave) -> bool {
+        match &mut self.inner {
+            WfcInner::UsesLinearEntropy(inner) => {
+                let index = match index {
+                    ArrayIndex::Index(index) => index,
+                    ArrayIndex::Coord((x, y, z)) => {
+                        inner.width() * inner.height() * z + inner.width() * y + x
+                    }
+                };
 
-        self.inner.partial_collapse(index, wave)
+                inner.partial_collapse(index, wave)
+            }
+            WfcInner::UsesShannonEntropy(inner) => {
+                let index = match index {
+                    ArrayIndex::Index(index) => index,
+                    ArrayIndex::Coord((x, y, z)) => {
+                        inner.width() * inner.height() * z + inner.width() * y + x
+                    }
+                };
+
+                inner.partial_collapse(index, wave)
+            }
+        }
     }
 
     fn find_lowest_entropy(&mut self) -> Option<(u32, u8)> {
-        self.inner.find_lowest_entropy(&mut self.rng)
+        match &mut self.inner {
+            WfcInner::UsesLinearEntropy(inner) => inner.find_lowest_entropy(&mut self.rng),
+            WfcInner::UsesShannonEntropy(inner) => inner.find_lowest_entropy(&mut self.rng),
+        }
     }
 }
 
