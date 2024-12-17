@@ -1,13 +1,16 @@
 use crate::arrays::{compose, decompose};
 use indexmap::IndexSet;
 use ordered_float::OrderedFloat;
-use rand::{rngs::SmallRng, Rng};
+use rand::{rngs::SmallRng, Rng, SeedableRng};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::cmp::Ord;
 use std::cmp::Reverse;
 use std::collections::{binary_heap, hash_map, BinaryHeap, HashMap};
+use std::fmt::Debug;
 use std::hash::Hash;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct SetQueue<T, P: Ord> {
     queue: BinaryHeap<P>,
     sets: HashMap<P, IndexSet<T>>,
@@ -114,12 +117,25 @@ fn tile_list_from_wave<Wave: WaveNum, const BITS: usize>(
 }
 
 pub trait WaveNum:
-    std::ops::BitOrAssign + std::ops::BitAndAssign + Default + num_traits::int::PrimInt
+    std::ops::BitOrAssign
+    + std::ops::BitAndAssign
+    + Default
+    + num_traits::int::PrimInt
+    + Debug
+    + Send
+    + Sync
 {
 }
 
-impl<T: std::ops::BitOrAssign + std::ops::BitAndAssign + Default + num_traits::int::PrimInt> WaveNum
-    for T
+impl<
+        T: std::ops::BitOrAssign
+            + std::ops::BitAndAssign
+            + Default
+            + num_traits::int::PrimInt
+            + Debug
+            + Send
+            + Sync,
+    > WaveNum for T
 {
 }
 
@@ -162,7 +178,7 @@ impl<Wave: WaveNum, const BITS: usize> Tileset<Wave, BITS> {
         }
     }
 
-    pub fn into_wfc(mut self, size: (u32, u32, u32)) -> Wfc<Wave, BITS> {
+    fn normalize_probabilities(&mut self) {
         let mut sum = 0.0;
         for &prob in &self.probabilities {
             sum += prob;
@@ -170,19 +186,55 @@ impl<Wave: WaveNum, const BITS: usize> Tileset<Wave, BITS> {
         for prob in &mut self.probabilities {
             *prob /= sum;
         }
+    }
+
+    pub fn into_wfc(mut self, size: (u32, u32, u32)) -> Wfc<Wave, BITS> {
+        self.normalize_probabilities();
 
         let (width, height, depth) = size;
         let mut wfc = Wfc {
             tiles: self.tiles,
             probabilities: self.probabilities,
-            array: vec![Wave::zero(); (width * height * depth) as usize],
+            state: State {
+                array: vec![Wave::zero(); (width * height * depth) as usize],
+                entropy_to_indices: Default::default(),
+            },
+            initial_state: State::default(),
             width,
             height,
             stack: Vec::new(),
-            entropy_to_indices: Default::default(),
         };
 
         wfc.reset();
+
+        wfc
+    }
+
+    pub fn into_wfc_with_initial_state(
+        mut self,
+        size: (u32, u32, u32),
+        array: Vec<Wave>,
+    ) -> Wfc<Wave, BITS> {
+        self.normalize_probabilities();
+
+        let (width, height, depth) = size;
+        let mut wfc = Wfc {
+            tiles: self.tiles,
+            probabilities: self.probabilities,
+            state: State {
+                array: vec![Wave::zero(); (width * height * depth) as usize],
+                entropy_to_indices: Default::default(),
+            },
+            initial_state: State {
+                array,
+                entropy_to_indices: Default::default(),
+            },
+            width,
+            height,
+            stack: Vec::new(),
+        };
+
+        wfc.collapse_initial_state();
 
         wfc
     }
@@ -191,37 +243,94 @@ impl<Wave: WaveNum, const BITS: usize> Tileset<Wave, BITS> {
         self.clone().into_wfc(size)
     }
 
+    pub fn create_wfc_with_initial_state(
+        &self,
+        size: (u32, u32, u32),
+        array: Vec<Wave>,
+    ) -> Wfc<Wave, BITS> {
+        self.clone().into_wfc_with_initial_state(size, array)
+    }
+
     pub fn num_tiles(&self) -> usize {
         self.tiles.len()
     }
+
+    pub fn initial_wave(&self) -> Wave {
+        Wave::max_value() >> (BITS - self.tiles.len())
+    }
 }
 
-pub struct Wfc<Wave: WaveNum, const BITS: usize> {
-    tiles: arrayvec::ArrayVec<Tile<Wave>, { BITS }>,
-    probabilities: arrayvec::ArrayVec<f32, { BITS }>,
+#[derive(Clone, Default)]
+struct State<Wave: WaveNum> {
     array: Vec<Wave>,
-    width: u32,
-    height: u32,
-    stack: Vec<(u32, Wave)>,
     entropy_to_indices: SetQueue<u32, Reverse<OrderedFloat<f32>>>,
 }
 
+#[derive(Clone)]
+pub struct Wfc<Wave: WaveNum, const BITS: usize> {
+    tiles: arrayvec::ArrayVec<Tile<Wave>, { BITS }>,
+    probabilities: arrayvec::ArrayVec<f32, { BITS }>,
+    state: State<Wave>,
+    initial_state: State<Wave>,
+    width: u32,
+    height: u32,
+    stack: Vec<(u32, Wave)>,
+}
+
 impl<Wave: WaveNum, const BITS: usize> Wfc<Wave, BITS> {
-    pub fn reset(&mut self) {
-        self.stack.clear();
-        let wave = Wave::max_value() >> (BITS - self.tiles.len());
-        for value in self.array.iter_mut() {
+    pub fn initial_wave(&self) -> Wave {
+        Wave::max_value() >> (BITS - self.tiles.len())
+    }
+
+    pub fn collapse_initial_state(&mut self) {
+        self.reset_initial();
+
+        let initial_wave = self.initial_wave();
+
+        let mut any_contradictions = false;
+
+        for (i, wave) in std::mem::take(&mut self.initial_state)
+            .array
+            .iter()
+            .copied()
+            .enumerate()
+        {
+            if initial_wave != wave && wave != Wave::zero() {
+                any_contradictions |= self.partial_collapse(i as u32, wave);
+            }
+        }
+
+        assert!(!any_contradictions);
+
+        self.initial_state.clone_from(&self.state);
+    }
+
+    pub fn reset_initial(&mut self) {
+        let wave = self.initial_wave();
+        for value in self.state.array.iter_mut() {
             *value = wave;
         }
-        self.entropy_to_indices.clear();
+        self.state.entropy_to_indices.clear();
         let mut set = IndexSet::new();
-        for i in 0..self.array.len() {
+        for i in 0..self.state.array.len() {
             set.insert(i as u32);
         }
-        self.entropy_to_indices.insert_set(
-            Reverse(OrderedFloat(self.calculate_shannon_entropy(wave))),
+        self.state.entropy_to_indices.insert_set(
+            Reverse(OrderedFloat(
+                self.calculate_shannon_entropy(self.initial_wave()),
+            )),
             set,
         );
+    }
+
+    pub fn reset(&mut self) {
+        self.stack.clear();
+
+        if !self.initial_state.array.is_empty() {
+            self.state.clone_from(&self.initial_state);
+        } else {
+            self.reset_initial();
+        }
     }
 
     pub fn num_tiles(&self) -> usize {
@@ -250,15 +359,15 @@ impl<Wave: WaveNum, const BITS: usize> Wfc<Wave, BITS> {
     }
 
     pub fn depth(&self) -> u32 {
-        self.array.len() as u32 / self.width() / self.height()
+        self.state.array.len() as u32 / self.width() / self.height()
     }
 
     pub fn find_lowest_entropy(&mut self, rng: &mut SmallRng) -> Option<(u32, u8)> {
-        self.entropy_to_indices.peek(|set| {
+        self.state.entropy_to_indices.peek(|set| {
             let index = rng.gen_range(0..set.len());
             let index = *set.get_index(index).unwrap();
 
-            let value = self.array[index as usize];
+            let value = self.state.array[index as usize];
 
             let mut rolling_probability: arrayvec::ArrayVec<_, { BITS }> = Default::default();
 
@@ -281,10 +390,51 @@ impl<Wave: WaveNum, const BITS: usize> Wfc<Wave, BITS> {
         })
     }
 
+    pub fn collapse_all_reset_on_contradiction_par(&mut self, mut rng: &mut SmallRng) -> u32 {
+        let states: Vec<_> = (0..rayon::current_num_threads())
+            .map(|_| (self.clone(), SmallRng::from_rng(&mut rng).unwrap()))
+            .collect();
+
+        let other_attempts = AtomicU32::new(0);
+
+        let (wfc, local_attempts) =
+            find_any_with_early_stop(states, |(mut wfc, mut rng), stop_flag| {
+                let mut attempts = 1;
+                while let Some((index, tile)) = wfc.find_lowest_entropy(&mut rng) {
+                    if stop_flag.load(Ordering::Relaxed) {
+                        other_attempts.fetch_add(attempts, Ordering::Relaxed);
+                        return None;
+                    }
+                    if wfc.collapse(index, tile) {
+                        if attempts % 1000 == 0 {
+                            println!("{}", attempts);
+                        }
+                        wfc.reset();
+                        attempts += 1
+                    }
+                }
+                Some((wfc, attempts))
+            })
+            .unwrap();
+
+        let total_attempts = local_attempts + other_attempts.load(Ordering::Relaxed);
+
+        println!(
+            "Found after {} attempts, ({} thread local)",
+            total_attempts, local_attempts,
+        );
+
+        *self = wfc;
+        total_attempts
+    }
+
     pub fn collapse_all_reset_on_contradiction(&mut self, rng: &mut SmallRng) -> u32 {
         let mut attempts = 1;
         while let Some((index, tile)) = self.find_lowest_entropy(rng) {
             if self.collapse(index, tile) {
+                if attempts % 1000 == 0 {
+                    println!("{}", attempts);
+                }
                 self.reset();
                 attempts += 1
             }
@@ -311,19 +461,20 @@ impl<Wave: WaveNum, const BITS: usize> Wfc<Wave, BITS> {
     pub fn partial_collapse(&mut self, index: u32, remaining_possible_states: Wave) -> bool {
         self.stack.clear();
         self.stack.push((index, remaining_possible_states));
+
         let mut any_contradictions = false;
 
         while let Some((index, remaining_possible_states)) = self.stack.pop() {
-            let old = self.array[index as usize];
-            self.array[index as usize] &= remaining_possible_states;
-            let new = self.array[index as usize];
+            let old = self.state.array[index as usize];
+            self.state.array[index as usize] &= remaining_possible_states;
+            let new = self.state.array[index as usize];
 
             if old == new {
                 continue;
             }
 
             if old.count_ones() > 1 {
-                let _val = self.entropy_to_indices.remove(
+                let _val = self.state.entropy_to_indices.remove(
                     Reverse(OrderedFloat(self.calculate_shannon_entropy(old))),
                     &index,
                 );
@@ -336,7 +487,7 @@ impl<Wave: WaveNum, const BITS: usize> Wfc<Wave, BITS> {
             }
 
             if new.count_ones() > 1 {
-                let _val = self.entropy_to_indices.insert(
+                let _val = self.state.entropy_to_indices.insert(
                     Reverse(OrderedFloat(self.calculate_shannon_entropy(new))),
                     index,
                 );
@@ -374,29 +525,33 @@ impl<Wave: WaveNum, const BITS: usize> Wfc<Wave, BITS> {
     }
 
     pub fn values(&self) -> Vec<u8> {
-        let mut values = vec![0; self.array.len()];
+        let mut values = vec![0; self.state.array.len()];
         self.set_values(&mut values);
         values
     }
 
     pub fn set_values(&self, values: &mut [u8]) {
-        self.array.iter().zip(values).for_each(|(wave, value)| {
-            *value = if wave.count_ones() == 1 {
-                wave.trailing_zeros() as u8
-            } else {
-                u8::max_value()
-            }
-        });
+        self.state
+            .array
+            .iter()
+            .zip(values)
+            .for_each(|(wave, value)| {
+                *value = if wave.count_ones() == 1 {
+                    wave.trailing_zeros() as u8
+                } else {
+                    u8::MAX
+                }
+            });
     }
 
     #[cfg(test)]
     fn all_collapsed(&self) -> bool {
-        self.array.iter().all(|&value| value.count_ones() == 1)
+        self.state
+            .array
+            .iter()
+            .all(|&value| value.count_ones() == 1)
     }
 }
-
-#[cfg(test)]
-use rand::SeedableRng;
 
 #[test]
 fn normal() {
@@ -421,8 +576,48 @@ fn normal() {
     assert!(
         wfc.all_collapsed(),
         "failed to collapse: {:?}",
-        &wfc.array.iter().map(|v| v.count_ones()).collect::<Vec<_>>()
+        &wfc.state
+            .array
+            .iter()
+            .map(|v| v.count_ones())
+            .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn initial_state() {
+    let mut rng = SmallRng::from_entropy();
+
+    let mut tileset = Tileset::<u8, 8>::default();
+    let sea = tileset.add(1.0);
+    let beach = tileset.add(1.0);
+    let grass = tileset.add(1.0);
+    tileset.connect(sea, sea, &Axis::ALL);
+    tileset.connect(sea, beach, &Axis::ALL);
+    tileset.connect(beach, grass, &Axis::ALL);
+    tileset.connect(grass, grass, &Axis::ALL);
+
+    let mut state = vec![1 << sea | 1 << beach | 1 << grass; 9];
+    assert_eq!(
+        tileset
+            .create_wfc_with_initial_state((3, 3, 1), state.clone())
+            .state
+            .array,
+        state
+    );
+    state[4] = 1 << sea;
+    #[rustfmt::skip]
+    let expected = [
+        7,3,7,
+        3,1,3,
+        7,3,7
+    ];
+    let mut wfc = tileset.into_wfc_with_initial_state((3, 3, 1), state);
+    assert_eq!(wfc.state.array, expected);
+    wfc.collapse_all(&mut rng);
+    assert_ne!(wfc.state.array, expected);
+    wfc.reset();
+    assert_eq!(wfc.state.array, expected);
 }
 
 #[test]
@@ -448,7 +643,11 @@ fn verticals() {
     assert!(
         wfc.all_collapsed(),
         "{:?}",
-        &wfc.array.iter().map(|v| v.count_ones()).collect::<Vec<_>>()
+        &wfc.state
+            .array
+            .iter()
+            .map(|v| v.count_ones())
+            .collect::<Vec<_>>()
     );
     let _v = wfc.values();
     //panic!("{:?}",v);
@@ -503,7 +702,7 @@ fn broken() {
         if wfc.collapse_all(&mut rng) {
             assert!(!wfc.all_collapsed());
             // Make sure that at least one state has collapsed properly (aka that the error hasn't spread).
-            assert!(wfc.array.iter().any(|&v| v.count_ones() == 1));
+            assert!(wfc.state.array.iter().any(|&v| v.count_ones() == 1));
             break;
         }
     }
@@ -531,4 +730,19 @@ fn pipes() {
     tileset
         .into_wfc((10, 10, 10))
         .collapse_all_reset_on_contradiction(&mut rng);
+}
+
+fn find_any_with_early_stop<
+    T,
+    O: Send,
+    I: IntoParallelIterator<Item = T>,
+    F: Sync + Fn(T, &AtomicBool) -> Option<O>,
+>(
+    iterator: I,
+    func: F,
+) -> Option<O> {
+    let stop_flag = AtomicBool::new(false);
+    iterator.into_par_iter().find_map_any(|item| {
+        func(item, &stop_flag).inspect(|_| stop_flag.store(true, Ordering::Relaxed))
+    })
 }

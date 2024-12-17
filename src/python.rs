@@ -448,6 +448,26 @@ impl Tileset {
             rng: rand::rngs::SmallRng::from_entropy(),
         }
     }
+
+    fn create_wfc_with_initial_state(
+        &self,
+        state: numpy::borrow::PyReadonlyArray3<'_, u64>,
+    ) -> Wfc {
+        let slice = state.as_slice().unwrap();
+        let dims = state.dims();
+
+        Wfc {
+            inner: self.0.create_wfc_with_initial_state(
+                (dims[2] as _, dims[1] as _, dims[0] as _),
+                slice.to_vec(),
+            ),
+            rng: rand::rngs::SmallRng::from_entropy(),
+        }
+    }
+
+    pub fn initial_wave(&self) -> u64 {
+        self.0.initial_wave()
+    }
 }
 
 #[derive(FromPyObject)]
@@ -464,6 +484,10 @@ pub struct Wfc {
 
 #[pymethods]
 impl Wfc {
+    pub fn initial_wave(&self) -> u64 {
+        self.inner.initial_wave()
+    }
+
     fn num_tiles(&self) -> usize {
         self.inner.num_tiles()
     }
@@ -492,6 +516,11 @@ impl Wfc {
     fn collapse_all_reset_on_contradiction(&mut self) -> u32 {
         self.inner
             .collapse_all_reset_on_contradiction(&mut self.rng)
+    }
+
+    fn collapse_all_reset_on_contradiction_par(&mut self) -> u32 {
+        self.inner
+            .collapse_all_reset_on_contradiction_par(&mut self.rng)
     }
 
     fn collapse(&mut self, index: ArrayIndex, tile: u8) -> bool {
