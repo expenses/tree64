@@ -83,30 +83,29 @@ def save_image(filename, arr, palette=PICO8_PALETTE):
 
 
 def add_to_usd_stage(prim_path, stage, arr, time=1, palette=PICO8_PALETTE):
-    from pxr import Sdf, UsdGeom
+    from pxr import Sdf, UsdGeom, Vt
 
     if len(arr.shape) == 2:
         arr = arr.reshape((1, arr.shape[0], arr.shape[1]))
 
-    positions, colours, indices = mesh_voxels(np.pad(arr, 1))
-    colours = [palette.linear[x] for x in colours]
+    positions, colours, indices = mesh_voxels(np.pad(arr, 1), palette)
     prim = stage.DefinePrim(prim_path, "Mesh")
-    prim.CreateAttribute("points", Sdf.ValueTypeNames.Float3Array).Set(positions, time)
+    prim.CreateAttribute("points", Sdf.ValueTypeNames.Float3Array).Set(
+        Vt.Vec3fArray.FromNumpy(positions), time
+    )
 
     colours_attr = prim.CreateAttribute(
         "primvars:displayColor", Sdf.ValueTypeNames.Color3fArray
     )
-    colours_attr.Set(colours, time)
+    colours_attr.Set(Vt.Vec3fArray.FromNumpy(colours), time)
     UsdGeom.Primvar(colours_attr).SetInterpolation("uniform")
 
-    num_faces = len(positions) // 4
-
     prim.CreateAttribute("faceVertexCounts", Sdf.ValueTypeNames.IntArray).Set(
-        [4] * num_faces, time
+        Vt.IntArray.FromNumpy(np.full(len(indices) // 4, 4, dtype=np.int32)), time
     )
 
     prim.CreateAttribute("faceVertexIndices", Sdf.ValueTypeNames.IntArray).Set(
-        indices, time
+        Vt.IntArray.FromNumpy(indices), time
     )
 
 
@@ -239,6 +238,7 @@ def put_middle(array, value):
 def hex2rgb(h):
     return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
 
+
 def load_vox(filename):
     from voxypy.models import Entity
 
@@ -248,7 +248,7 @@ def load_vox(filename):
 
     limited_palette = {"B", "Y", "D", "A", "W", "P", "R", "F", "U", "E", "N", "C"}
     limited_palette = [PICO8_PALETTE.srgb[index_for_colour(c)] for c in limited_palette]
-    rgb_palette = [(r,g,b) for r,g,b,a in vox.get_palette()]
+    rgb_palette = [(r, g, b) for r, g, b, a in vox.get_palette()]
     print(list(find_closest_pairs(rgb_palette, limited_palette)))
 
     replacements = []
@@ -260,7 +260,7 @@ def load_vox(filename):
         print(rgb_palette[i], c, limited_palette[c])
         replacements.append(([i], PICO8_PALETTE.srgb.index(limited_palette[c])))
 
-    '''
+    """
     # MarkovJunior voxel models often have the palette ordered differently
     # to the internal palette so we have to fix that.
     replacements = []
@@ -273,7 +273,7 @@ def load_vox(filename):
             if i == new_index:
                 continue
             replacements.append(([i], new_index))
-    '''
+    """
     palette = Palette([(r, g, b) for (r, g, b, a) in vox.get_palette()])
 
     return replace_values(array, replacements)

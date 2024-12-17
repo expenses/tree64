@@ -115,6 +115,11 @@ def wave_from_tiles(tiles):
     return wave
 
 
+# By default python does a bitwise not on signed values which is not what we want.
+def bitwise_not(value):
+    return ~np.uint64(value)
+
+
 def apply_symmetry(tags, symmetry):
     if type(tags) is not dict:
         tags = {"x": tags, "y": tags, "z": tags}
@@ -212,8 +217,10 @@ class TaggingTileset:
                         # print(f"connecting {frm} to {to} along {dir}")
                         self.tileset.connect(frm, to, [dir])
 
+
 def rot_z_symmetrical(voxels, rots):
     return (voxels == np.rot90(voxels, axes=(1, 2), k=rots)).all()
+
 
 def collapse_all_with_callback(wfc, callback, skip=1):
     i = 0

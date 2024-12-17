@@ -632,7 +632,15 @@ impl block_mesh::MergeVoxel for ByteVoxel {
 }
 
 #[pyfunction]
-pub fn mesh_voxels(array: Array) -> (Vec<[f32; 3]>, Vec<u8>, Vec<u32>) {
+pub fn mesh_voxels<'a>(
+    py: Python<'a>,
+    array: Array,
+    palette: &Palette,
+) -> (
+    Bound<'a, numpy::array::PyArray2<f32>>,
+    Bound<'a, numpy::array::PyArray2<f32>>,
+    Bound<'a, numpy::array::PyArray1<u32>>,
+) {
     let (slice, dims) = match &array {
         Array::D2(array) => (
             array.as_slice().unwrap(),
@@ -659,8 +667,8 @@ pub fn mesh_voxels(array: Array) -> (Vec<[f32; 3]>, Vec<u8>, Vec<u32>) {
         &mut buffer,
     );
 
-    let mut positions = Vec::new();
-    let mut colours = Vec::new();
+    let mut positions: Vec<f32> = Vec::new();
+    let mut colours: Vec<f32> = Vec::new();
     let mut indices = Vec::new();
 
     for (i, group) in buffer.quads.groups.into_iter().enumerate() {
@@ -675,9 +683,9 @@ pub fn mesh_voxels(array: Array) -> (Vec<[f32; 3]>, Vec<u8>, Vec<u32>) {
 
             let face_positions = face.quad_mesh_positions(&quad, 1.0);
 
-            colours.push(value);
+            colours.extend_from_slice(&palette.linear[value as usize]);
 
-            let index = positions.len() as u32;
+            let index = positions.len() as u32 / 3;
             if flip_winding {
                 indices.extend_from_slice(&[index, index + 2, index + 3, index + 1]);
             } else {
@@ -685,12 +693,23 @@ pub fn mesh_voxels(array: Array) -> (Vec<[f32; 3]>, Vec<u8>, Vec<u32>) {
             }
 
             for position in face_positions {
-                positions.push(position);
+                positions.extend_from_slice(&position);
             }
         }
     }
 
-    (positions, colours, indices)
+    let num_positions = positions.len() / 3;
+    let num_colours = colours.len() / 3;
+
+    (
+        numpy::array::PyArray1::from_vec(py, positions)
+            .reshape((3, num_positions))
+            .unwrap(),
+        numpy::array::PyArray1::from_vec(py, colours)
+            .reshape((3, num_colours))
+            .unwrap(),
+        numpy::array::PyArray1::from_vec(py, indices),
+    )
 }
 
 #[pyfunction]

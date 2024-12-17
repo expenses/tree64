@@ -1,4 +1,3 @@
-
 class MkJrConnector:
     def __init__(self):
         self.tiles = {}
@@ -146,6 +145,7 @@ class XmlTileset:
                 : -model_padding[0], : -model_padding[1], : -model_padding[2]
             ]
         return output
+
 
 def split_xml_tile(string, tiles, top_to_bottom=False):
     split = string.split(" ")
