@@ -17,7 +17,7 @@ fn benchmark_wave_size<Wave: WaveNum, const BITS: usize>(
 
     let mut rng = SmallRng::from_entropy();
 
-    for i in [5, 10, 25, 50, 100, 250, 500].iter() {
+    for i in [5, 10, 25, 50, 100, 250, 500, 1000, 2000].iter() {
         group.bench_with_input(
             BenchmarkId::new(format!("{}_shannon", BITS), i),
             i,

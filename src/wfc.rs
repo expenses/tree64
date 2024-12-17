@@ -1,6 +1,5 @@
 use crate::arrays::{compose, decompose};
 use fnv::FnvBuildHasher;
-use indexmap::IndexSet;
 use ordered_float::OrderedFloat;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -11,28 +10,120 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-type FnvIndexSet<T> = IndexSet<T, FnvBuildHasher>;
+#[derive(Clone)]
+struct IndexSet<T> {
+    vec: Vec<T>,
+    map: hashbrown::HashTable<u32>,
+}
+
+impl<T> Default for IndexSet<T> {
+    fn default() -> Self {
+        Self {
+            vec: Default::default(),
+            map: Default::default(),
+        }
+    }
+}
+
+impl<T: Hash + Eq + Clone + Debug> IndexSet<T> {
+    fn new_from_vec(vec: Vec<T>) -> Self {
+        let mut map = hashbrown::HashTable::with_capacity(vec.len());
+
+        for (index, value) in vec.iter().cloned().enumerate() {
+            use std::hash::BuildHasher;
+            let hasher = FnvBuildHasher::default();
+            // Only used when resizing
+            let hasher_fn = |_: &u32| unreachable!();
+            map.insert_unique(hasher.hash_one(&value), index as u32, hasher_fn);
+        }
+
+        Self { map, vec }
+    }
+
+    fn len(&self) -> usize {
+        self.vec.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.vec.is_empty()
+    }
+
+    fn insert(&mut self, value: T) -> bool {
+        use std::hash::BuildHasher;
+        let hasher = FnvBuildHasher::default();
+
+        let index = self.vec.len() as u32;
+
+        let hasher_fn =
+            |&val: &u32| unsafe { hasher.hash_one(self.vec.get_unchecked(val as usize)) };
+
+        match self
+            .map
+            .entry(hasher.hash_one(&value), |other| *other == index, hasher_fn)
+        {
+            hashbrown::hash_table::Entry::Vacant(slot) => {
+                slot.insert(index);
+                self.vec.push(value);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn get_index(&self, index: usize) -> Option<&T> {
+        self.vec.get(index)
+    }
+
+    fn swap_remove(&mut self, value: &T) -> bool {
+        use std::hash::BuildHasher;
+        let hasher = FnvBuildHasher::default();
+        // Search in the table for the value
+        let index = if let Ok(entry) = self
+            .map
+            .find_entry(hasher.hash_one(value), |&other| unsafe {
+                self.vec.get_unchecked(other as usize) == value
+            }) {
+            let (index, _) = entry.remove();
+            index
+        } else {
+            return false;
+        };
+        // Swap remove it.
+        self.vec.swap_remove(index as _);
+        // If the vec still has items, we need to change it's value.
+        if let Some(value) = self.vec.get(index as usize) {
+            use std::hash::BuildHasher;
+            let hasher = FnvBuildHasher::default();
+            if let Ok(entry) = self.map.find_entry(hasher.hash_one(value), |&other| {
+                other == self.vec.len() as u32
+            }) {
+                *entry.into_mut() = index;
+            }
+        }
+        true
+    }
+}
 
 #[derive(Default, Clone)]
 struct SetQueue<T, P: Ord> {
     queue: BinaryHeap<P>,
-    sets: HashMap<P, FnvIndexSet<T>, FnvBuildHasher>,
+    sets: HashMap<P, IndexSet<T>, FnvBuildHasher>,
 }
 
-impl<T: Hash + Eq, P: Copy + Ord + Hash> SetQueue<T, P> {
+impl<T: Hash + Eq + Clone + Debug, P: Copy + Ord + Hash> SetQueue<T, P> {
     fn clear(&mut self) {
         self.queue.clear();
         self.sets.clear();
     }
 
-    fn insert_set(&mut self, p: P, set: FnvIndexSet<T>) {
+    fn insert_set(&mut self, p: P, set: IndexSet<T>) {
         self.queue.push(p);
         self.sets.insert(p, set);
     }
 
     // I'd prefer to return an Option<Set> here but that needs the
     // polonius borrow checker to be enabled (-Zpolonius)
-    fn peek<O, F: FnOnce(&FnvIndexSet<T>) -> O>(&mut self, func: F) -> Option<O> {
+    fn peek<O, F: FnOnce(&IndexSet<T>) -> O>(&mut self, func: F) -> Option<O> {
         while let Some(p) = self.queue.peek_mut() {
             if let hash_map::Entry::Occupied(set) = self.sets.entry(*p) {
                 if !set.get().is_empty() {
@@ -51,9 +142,9 @@ impl<T: Hash + Eq, P: Copy + Ord + Hash> SetQueue<T, P> {
     fn insert(&mut self, p: P, value: T) -> bool {
         let set = match self.sets.entry(p) {
             hash_map::Entry::Occupied(set) => set.into_mut(),
-            hash_map::Entry::Vacant(set) => {
+            hash_map::Entry::Vacant(slot) => {
                 self.queue.push(p);
-                set.insert(Default::default())
+                slot.insert(Default::default())
             }
         };
         set.insert(value)
@@ -356,7 +447,7 @@ impl<Wave: WaveNum, E: Entropy, const BITS: usize> Wfc<Wave, E, BITS> {
             *value = wave;
         }
         self.state.entropy_to_indices.clear();
-        let mut set = (0..self.state.array.len() as u32).collect();
+        let set = IndexSet::new_from_vec((0..self.state.array.len() as u32).collect());
         self.state.entropy_to_indices.insert_set(
             Reverse(E::calculate::<Wave, BITS>(
                 &self.probabilities,

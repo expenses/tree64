@@ -18,10 +18,10 @@ block-mesh = "0.2.0"
 bytemuck = { version = "1.20.0", features = ["derive"] }
 ndshape = "0.3.0"
 arrayvec = "0.7.6"
-indexmap = "2.7.0"
 ordered-float = "4.5.0"
 num-traits = "0.2.19"
 fnv = "1.0.7"
+hashbrown = "0.15.2"
 
 [build-dependencies]
 xml = "0.8.20"
