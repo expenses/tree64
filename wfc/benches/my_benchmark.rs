@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use markov::wfc::*;
 use rand::{rngs::SmallRng, SeedableRng};
+use wfc::*;
 
 fn benchmark_wave_size<Wave: WaveNum, const BITS: usize>(
     group: &mut criterion::BenchmarkGroup<criterion::measurement::WallTime>,

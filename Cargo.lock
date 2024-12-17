@@ -366,7 +366,6 @@ dependencies = [
  "arrayvec",
  "block-mesh",
  "bytemuck",
- "criterion",
  "fnv",
  "hashbrown",
  "memchr",
@@ -378,6 +377,7 @@ dependencies = [
  "rand",
  "rayon",
  "tev_client",
+ "wfc",
  "xml",
 ]
 
@@ -902,6 +902,20 @@ checksum = "04dd7223427d52553d3702c004d3b2fe07c148165faa56313cb00211e31c12bc"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "wfc"
+version = "0.1.0"
+dependencies = [
+ "arrayvec",
+ "criterion",
+ "fnv",
+ "hashbrown",
+ "num-traits",
+ "ordered-float",
+ "rand",
+ "rayon",
 ]
 
 [[package]]

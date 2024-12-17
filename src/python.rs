@@ -408,7 +408,7 @@ type Wave = u64;
 const BITS: usize = Wave::BITS as usize;
 
 #[pyclass]
-pub struct Tileset(crate::wfc::Tileset<Wave, BITS>);
+pub struct Tileset(wfc::Tileset<Wave, BITS>);
 
 #[pymethods]
 impl Tileset {
@@ -429,12 +429,12 @@ impl Tileset {
         let axises = axises
             .into_iter()
             .map(|string| match &(string.to_lowercase())[..] {
-                "x" => crate::wfc::Axis::X,
-                "y" => crate::wfc::Axis::Y,
-                "z" => crate::wfc::Axis::Z,
-                "negx" => crate::wfc::Axis::NegX,
-                "negy" => crate::wfc::Axis::NegY,
-                "negz" => crate::wfc::Axis::NegZ,
+                "x" => wfc::Axis::X,
+                "y" => wfc::Axis::Y,
+                "z" => wfc::Axis::Z,
+                "negx" => wfc::Axis::NegX,
+                "negy" => wfc::Axis::NegY,
+                "negz" => wfc::Axis::NegZ,
                 _ => panic!(),
             })
             .collect::<Vec<_>>();
@@ -494,8 +494,8 @@ enum ArrayIndex {
 }
 
 enum WfcInner {
-    UsesShannonEntropy(crate::wfc::Wfc<Wave, wfc::ShannonEntropy, BITS>),
-    UsesLinearEntropy(crate::wfc::Wfc<Wave, wfc::LinearEntropy, BITS>),
+    UsesShannonEntropy(wfc::Wfc<Wave, wfc::ShannonEntropy, BITS>),
+    UsesLinearEntropy(wfc::Wfc<Wave, wfc::LinearEntropy, BITS>),
 }
 
 #[pyclass]

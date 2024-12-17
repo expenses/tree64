@@ -1,4 +1,3 @@
-use crate::arrays::{compose, decompose};
 use fnv::FnvBuildHasher;
 use ordered_float::OrderedFloat;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
@@ -12,58 +11,58 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 #[derive(Clone)]
 struct IndexSet<T> {
-    vec: Vec<T>,
-    map: hashbrown::HashTable<u32>,
+    values: Vec<T>,
+    indices: hashbrown::HashTable<u32>,
 }
 
 impl<T> Default for IndexSet<T> {
     fn default() -> Self {
         Self {
-            vec: Default::default(),
-            map: Default::default(),
+            values: Default::default(),
+            indices: Default::default(),
         }
     }
 }
 
 impl<T: Hash + Eq + Clone + Debug> IndexSet<T> {
-    fn new_from_vec(vec: Vec<T>) -> Self {
-        let mut map = hashbrown::HashTable::with_capacity(vec.len());
+    fn new_from_vec(values: Vec<T>) -> Self {
+        let mut indices = hashbrown::HashTable::with_capacity(values.len());
 
-        for (index, value) in vec.iter().cloned().enumerate() {
+        for (index, value) in values.iter().cloned().enumerate() {
             use std::hash::BuildHasher;
             let hasher = FnvBuildHasher::default();
             // Only used when resizing
             let hasher_fn = |_: &u32| unreachable!();
-            map.insert_unique(hasher.hash_one(&value), index as u32, hasher_fn);
+            indices.insert_unique(hasher.hash_one(&value), index as u32, hasher_fn);
         }
 
-        Self { map, vec }
+        Self { values, indices }
     }
 
     fn len(&self) -> usize {
-        self.vec.len()
+        self.values.len()
     }
 
     fn is_empty(&self) -> bool {
-        self.vec.is_empty()
+        self.values.is_empty()
     }
 
     fn insert(&mut self, value: T) -> bool {
         use std::hash::BuildHasher;
         let hasher = FnvBuildHasher::default();
 
-        let index = self.vec.len() as u32;
+        let index = self.values.len() as u32;
 
         let hasher_fn =
-            |&val: &u32| unsafe { hasher.hash_one(self.vec.get_unchecked(val as usize)) };
+            |&val: &u32| unsafe { hasher.hash_one(self.values.get_unchecked(val as usize)) };
 
         match self
-            .map
+            .indices
             .entry(hasher.hash_one(&value), |other| *other == index, hasher_fn)
         {
             hashbrown::hash_table::Entry::Vacant(slot) => {
                 slot.insert(index);
-                self.vec.push(value);
+                self.values.push(value);
                 true
             }
             _ => false,
@@ -71,7 +70,7 @@ impl<T: Hash + Eq + Clone + Debug> IndexSet<T> {
     }
 
     fn get_index(&self, index: usize) -> Option<&T> {
-        self.vec.get(index)
+        self.values.get(index)
     }
 
     fn swap_remove(&mut self, value: &T) -> bool {
@@ -79,9 +78,9 @@ impl<T: Hash + Eq + Clone + Debug> IndexSet<T> {
         let hasher = FnvBuildHasher::default();
         // Search in the table for the value
         let index = if let Ok(entry) = self
-            .map
+            .indices
             .find_entry(hasher.hash_one(value), |&other| unsafe {
-                self.vec.get_unchecked(other as usize) == value
+                self.values.get_unchecked(other as usize) == value
             }) {
             let (index, _) = entry.remove();
             index
@@ -89,13 +88,13 @@ impl<T: Hash + Eq + Clone + Debug> IndexSet<T> {
             return false;
         };
         // Swap remove it.
-        self.vec.swap_remove(index as _);
+        self.values.swap_remove(index as _);
         // If the vec still has items, we need to change it's value.
-        if let Some(value) = self.vec.get(index as usize) {
+        if let Some(value) = self.values.get(index as usize) {
             use std::hash::BuildHasher;
             let hasher = FnvBuildHasher::default();
-            if let Ok(entry) = self.map.find_entry(hasher.hash_one(value), |&other| {
-                other == self.vec.len() as u32
+            if let Ok(entry) = self.indices.find_entry(hasher.hash_one(value), |&other| {
+                other == self.values.len() as u32
             }) {
                 *entry.into_mut() = index;
             }
@@ -250,6 +249,7 @@ pub struct Tileset<Wave: WaveNum, const BITS: usize> {
 }
 
 impl<Wave: WaveNum, const BITS: usize> Tileset<Wave, BITS> {
+    #[inline]
     pub fn add(&mut self, probability: f32) -> usize {
         let index = self.tiles.len();
         self.tiles.push(Tile::default());
@@ -257,6 +257,7 @@ impl<Wave: WaveNum, const BITS: usize> Tileset<Wave, BITS> {
         index
     }
 
+    #[inline]
     pub fn connect(&mut self, from: usize, to: usize, axises: &[Axis]) {
         for &axis in axises {
             self.tiles[from].connect(to, axis);
@@ -264,6 +265,7 @@ impl<Wave: WaveNum, const BITS: usize> Tileset<Wave, BITS> {
         }
     }
 
+    #[inline]
     pub fn connect_to_all(&mut self, tile: usize) {
         for other in 0..self.tiles.len() {
             self.connect(tile, other, &Axis::ALL)
@@ -280,6 +282,7 @@ impl<Wave: WaveNum, const BITS: usize> Tileset<Wave, BITS> {
         }
     }
 
+    #[inline]
     pub fn into_wfc<E: Entropy>(mut self, size: (u32, u32, u32)) -> Wfc<Wave, E, BITS> {
         self.normalize_probabilities();
 
@@ -302,6 +305,7 @@ impl<Wave: WaveNum, const BITS: usize> Tileset<Wave, BITS> {
         wfc
     }
 
+    #[inline]
     pub fn into_wfc_with_initial_state<E: Entropy>(
         mut self,
         size: (u32, u32, u32),
@@ -331,10 +335,12 @@ impl<Wave: WaveNum, const BITS: usize> Tileset<Wave, BITS> {
         wfc
     }
 
+    #[inline]
     pub fn create_wfc<E: Entropy>(&self, size: (u32, u32, u32)) -> Wfc<Wave, E, BITS> {
         self.clone().into_wfc(size)
     }
 
+    #[inline]
     pub fn create_wfc_with_initial_state<E: Entropy>(
         &self,
         size: (u32, u32, u32),
@@ -343,10 +349,12 @@ impl<Wave: WaveNum, const BITS: usize> Tileset<Wave, BITS> {
         self.clone().into_wfc_with_initial_state(size, array)
     }
 
+    #[inline]
     pub fn num_tiles(&self) -> usize {
         self.tiles.len()
     }
 
+    #[inline]
     pub fn initial_wave(&self) -> Wave {
         Wave::max_value() >> (BITS - self.tiles.len())
     }
@@ -364,6 +372,7 @@ pub struct ShannonEntropy;
 impl Entropy for ShannonEntropy {
     type Type = OrderedFloat<f32>;
 
+    #[inline]
     fn calculate<Wave: WaveNum, const BITS: usize>(
         probabilities: &[f32],
         wave: Wave,
@@ -388,6 +397,7 @@ pub struct LinearEntropy;
 impl Entropy for LinearEntropy {
     type Type = u8;
 
+    #[inline]
     fn calculate<Wave: WaveNum, const BITS: usize>(
         _probabilities: &[f32],
         wave: Wave,
@@ -414,11 +424,13 @@ pub struct Wfc<Wave: WaveNum, E: Entropy, const BITS: usize> {
 }
 
 impl<Wave: WaveNum, E: Entropy, const BITS: usize> Wfc<Wave, E, BITS> {
+    #[inline]
     pub fn initial_wave(&self) -> Wave {
         Wave::max_value() >> (BITS - self.tiles.len())
     }
 
-    pub fn collapse_initial_state(&mut self) {
+    #[inline]
+    fn collapse_initial_state(&mut self) {
         self.reset_initial();
 
         let initial_wave = self.initial_wave();
@@ -441,7 +453,7 @@ impl<Wave: WaveNum, E: Entropy, const BITS: usize> Wfc<Wave, E, BITS> {
         self.initial_state.clone_from(&self.state);
     }
 
-    pub fn reset_initial(&mut self) {
+    fn reset_initial(&mut self) {
         let wave = self.initial_wave();
         for value in self.state.array.iter_mut() {
             *value = wave;
@@ -457,6 +469,7 @@ impl<Wave: WaveNum, E: Entropy, const BITS: usize> Wfc<Wave, E, BITS> {
         );
     }
 
+    #[inline]
     pub fn reset(&mut self) {
         self.stack.clear();
 
@@ -467,21 +480,27 @@ impl<Wave: WaveNum, E: Entropy, const BITS: usize> Wfc<Wave, E, BITS> {
         }
     }
 
+    #[inline]
     pub fn num_tiles(&self) -> usize {
         self.tiles.len()
     }
 
+    #[inline]
     pub fn width(&self) -> u32 {
         self.width
     }
+
+    #[inline]
     pub fn height(&self) -> u32 {
         self.height
     }
 
+    #[inline]
     pub fn depth(&self) -> u32 {
         self.state.array.len() as u32 / self.width() / self.height()
     }
 
+    #[inline]
     pub fn find_lowest_entropy(&mut self, rng: &mut SmallRng) -> Option<(u32, u8)> {
         self.state.entropy_to_indices.peek(|set| {
             let index = rng.gen_range(0..set.len());
@@ -510,6 +529,7 @@ impl<Wave: WaveNum, E: Entropy, const BITS: usize> Wfc<Wave, E, BITS> {
         })
     }
 
+    #[inline]
     pub fn collapse_all_reset_on_contradiction_par(&mut self, mut rng: &mut SmallRng) -> u32 {
         let states: Vec<_> = (0..rayon::current_num_threads())
             .map(|_| (self.clone(), SmallRng::from_rng(&mut rng).unwrap()))
@@ -548,6 +568,7 @@ impl<Wave: WaveNum, E: Entropy, const BITS: usize> Wfc<Wave, E, BITS> {
         total_attempts
     }
 
+    #[inline]
     pub fn collapse_all_reset_on_contradiction(&mut self, rng: &mut SmallRng) -> u32 {
         let mut attempts = 1;
         while let Some((index, tile)) = self.find_lowest_entropy(rng) {
@@ -563,6 +584,7 @@ impl<Wave: WaveNum, E: Entropy, const BITS: usize> Wfc<Wave, E, BITS> {
         attempts
     }
 
+    #[inline]
     pub fn collapse_all(&mut self, rng: &mut SmallRng) -> bool {
         let mut any_contradictions = false;
         while let Some((index, tile)) = self.find_lowest_entropy(rng) {
@@ -574,10 +596,12 @@ impl<Wave: WaveNum, E: Entropy, const BITS: usize> Wfc<Wave, E, BITS> {
         any_contradictions
     }
 
+    #[inline]
     pub fn collapse(&mut self, index: u32, tile: u8) -> bool {
         self.partial_collapse(index, Wave::one().shl(tile as _))
     }
 
+    #[inline]
     pub fn partial_collapse(&mut self, index: u32, remaining_possible_states: Wave) -> bool {
         self.stack.clear();
         self.stack.push((index, remaining_possible_states));
@@ -617,19 +641,22 @@ impl<Wave: WaveNum, E: Entropy, const BITS: usize> Wfc<Wave, E, BITS> {
             let new_tiles = tile_list_from_wave::<_, BITS>(new);
 
             for axis in Axis::ALL {
-                let (mut x, mut y, mut z) =
-                    decompose(index as _, self.width() as _, self.height() as _);
+                let (mut x, mut y, mut z) = (
+                    index % self.width(),
+                    (index / self.width()) % self.height(),
+                    index / self.width() / self.height(),
+                );
                 match axis {
-                    Axis::X if x < self.width() as usize - 1 => x += 1,
-                    Axis::Y if y < self.height() as usize - 1 => y += 1,
-                    Axis::Z if z < self.depth() as usize - 1 => z += 1,
+                    Axis::X if x < self.width() - 1 => x += 1,
+                    Axis::Y if y < self.height() - 1 => y += 1,
+                    Axis::Z if z < self.depth() - 1 => z += 1,
                     Axis::NegX if x > 0 => x -= 1,
                     Axis::NegY if y > 0 => y -= 1,
                     Axis::NegZ if z > 0 => z -= 1,
                     _ => continue,
                 };
 
-                let index = compose(x, y, z, self.width() as _, self.height() as _) as u32;
+                let index = x + y * self.width() + z * self.width() * self.height();
 
                 let mut valid = Wave::zero();
 
@@ -644,12 +671,14 @@ impl<Wave: WaveNum, E: Entropy, const BITS: usize> Wfc<Wave, E, BITS> {
         any_contradictions
     }
 
+    #[inline]
     pub fn values(&self) -> Vec<u8> {
         let mut values = vec![0; self.state.array.len()];
         self.set_values(&mut values);
         values
     }
 
+    #[inline]
     pub fn set_values(&self, values: &mut [u8]) {
         self.state
             .array
@@ -671,6 +700,21 @@ impl<Wave: WaveNum, E: Entropy, const BITS: usize> Wfc<Wave, E, BITS> {
             .iter()
             .all(|&value| value.count_ones() == 1)
     }
+}
+
+fn find_any_with_early_stop<
+    T,
+    O: Send,
+    I: IntoParallelIterator<Item = T>,
+    F: Sync + Fn(T, &AtomicBool) -> Option<O>,
+>(
+    iterator: I,
+    func: F,
+) -> Option<O> {
+    let stop_flag = AtomicBool::new(false);
+    iterator.into_par_iter().find_map_any(|item| {
+        func(item, &stop_flag).inspect(|_| stop_flag.store(true, Ordering::Relaxed))
+    })
 }
 
 #[test]
@@ -850,19 +894,4 @@ fn pipes() {
     tileset
         .into_wfc::<ShannonEntropy>((10, 10, 10))
         .collapse_all_reset_on_contradiction(&mut rng);
-}
-
-fn find_any_with_early_stop<
-    T,
-    O: Send,
-    I: IntoParallelIterator<Item = T>,
-    F: Sync + Fn(T, &AtomicBool) -> Option<O>,
->(
-    iterator: I,
-    func: F,
-) -> Option<O> {
-    let stop_flag = AtomicBool::new(false);
-    iterator.into_par_iter().find_map_any(|item| {
-        func(item, &stop_flag).inspect(|_| stop_flag.store(true, Ordering::Relaxed))
-    })
 }

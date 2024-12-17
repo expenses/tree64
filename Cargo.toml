@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib", "lib"]
+crate-type = ["cdylib"]
 
 [dependencies]
 anyhow = "1.0.93"
@@ -22,6 +22,7 @@ ordered-float = "4.5.0"
 num-traits = "0.2.19"
 fnv = "1.0.7"
 hashbrown = "0.15.2"
+wfc = { path = "wfc" }
 
 [build-dependencies]
 xml = "0.8.20"
@@ -30,9 +31,5 @@ xml = "0.8.20"
 inherits = "release"
 debug = true
 
-[dev-dependencies]
-criterion = "0.5.1"
-
-[[bench]]
-name = "my_benchmark"
-harness = false
+[workspace]
+members = [".", "wfc"]
