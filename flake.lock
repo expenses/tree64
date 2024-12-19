@@ -15,6 +15,41 @@
         "type": "github"
       }
     },
+    "erosanix": {
+      "inputs": {
+        "flake-compat": "flake-compat",
+        "nixpkgs": "nixpkgs"
+      },
+      "locked": {
+        "lastModified": 1734467708,
+        "narHash": "sha256-pAMbcSN6p+oRC5hAnMES4GF+ZQOLOF57DNcOPmd9GKk=",
+        "owner": "emmanuelrosa",
+        "repo": "erosanix",
+        "rev": "2d06ca5981df856948cf21ead82463f193aba651",
+        "type": "github"
+      },
+      "original": {
+        "owner": "emmanuelrosa",
+        "repo": "erosanix",
+        "type": "github"
+      }
+    },
+    "flake-compat": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1673956053,
+        "narHash": "sha256-4gtG9iQuiKITOjNQQeQIpoIB6b16fm+504Ch3sNKLd8=",
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "rev": "35bb57c0c8d8b62bbfd284272c928ceb64ddbde9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "type": "github"
+      }
+    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -35,6 +70,22 @@
     },
     "nixpkgs": {
       "locked": {
+        "lastModified": 1732717133,
+        "narHash": "sha256-ycPFlGR3jbWV/thfYqsNpYMQfmfWWC8THdpL+EV+OJw=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "de7c32b0455f10014c41ffc560e7a414747bf429",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "master",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_2": {
+      "locked": {
         "lastModified": 1733759999,
         "narHash": "sha256-463SNPWmz46iLzJKRzO3Q2b0Aurff3U1n0nYItxq7jU=",
         "owner": "nixos",
@@ -52,8 +103,9 @@
     "root": {
       "inputs": {
         "crane": "crane",
+        "erosanix": "erosanix",
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs_2"
       }
     },
     "systems": {

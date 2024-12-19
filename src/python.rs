@@ -3,6 +3,16 @@ use numpy::{PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::exceptions::PyTypeError;
 use pyo3::types::PyFunction;
 
+#[pyfunction]
+pub fn write_vox(array: numpy::borrow::PyReadonlyArray3<u8>) -> PyResult<()> {
+    let dims = array.dims();
+    let w = dims[2];
+    let h = dims[1];
+    let d = dims[0];
+    crate::write_vox::write_vox("out.vox", array.as_slice()?, w, h, d)?;
+    Ok(())
+}
+
 #[pyclass]
 pub struct TevClient {
     inner: tev_client::TevClient,

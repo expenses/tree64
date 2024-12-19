@@ -4,12 +4,14 @@
   inputs.flake-utils.url = "github:numtide/flake-utils";
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
   inputs.crane.url = "github:ipetkov/crane";
+  inputs.erosanix.url = "github:emmanuelrosa/erosanix";
 
   outputs = {
     self,
     nixpkgs,
     flake-utils,
     crane,
+    erosanix,
   }:
     flake-utils.lib.eachDefaultSystem (
       system: let
@@ -18,6 +20,10 @@
         python-deps = ps: [ps.ipython ps.numpy ps.pillow ps.scikit-image ps.ffmpeg-python ps.zstandard ps.openusd];
       in rec {
         packages = rec {
+          magicavoxel = pkgs.callPackage ./nix/magicavoxel.nix {
+              inherit (erosanix.lib.${system}) mkWindowsApp;
+          };
+
           MarkovJunior = with pkgs;
             buildDotnetModule {
               src = ./MarkovJunior;
@@ -75,14 +81,18 @@
             writeShellScriptBin
             "usd2gltf"
             "${blender}/bin/blender --background -P ${./nix/convert.py} -- $@";
+          format = with pkgs;
+            writeShellScriptBin "format" ''
+              ${alejandra}/bin/alejandra . &&
+              ${black}/bin/black . &&
+              cargo fmt
+            '';
+          gen-flamegraph = with pkgs; writeShellScriptBin "gen-flamegraph" "${linuxPackages_latest.perf}/bin/perf script | ${flamegraph}/bin/stackcollapse-perf.pl | ${flamegraph}/bin/flamegraph.pl > out.svg";
         };
         devShells.default = with pkgs;
           mkShell {
             buildInputs = [
-              packages.usd2gltf
               black
-              tev
-              openusd
               linuxPackages_latest.perf
               flamegraph
               (packages.patched-python.withPackages (ps: [ps.markov ps.voxypy] ++ (python-deps ps)))
@@ -96,9 +106,8 @@
                 python3.pkgs.pip
                 maturin
                 linuxPackages_latest.perf
-                flamegraph
+                packages.gen-flamegraph
                 black
-                packages.usd2gltf
               ]
               ++ (python-deps python3.pkgs);
             shellHook = ''
@@ -121,12 +130,18 @@
               maturin
               black
               linuxPackages_latest.perf
-              flamegraph
-              openusd
+              packages.gen-flamegraph
             ]);
-            runScript = "bash";
+            runScript = "bash -c '. env/bin/activate && bash'";
           })
           .env;
+        devShells.tools = with pkgs;
+          mkShell {
+            buildInputs = [
+              packages.usd2gltf
+              openusd
+            ];
+          };
       }
     );
 }

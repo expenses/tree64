@@ -12,6 +12,7 @@ mod arrays;
 mod bespoke_regex;
 mod pattern_matching;
 mod python;
+mod write_vox;
 
 mod palette {
     include!(concat!(env!("OUT_DIR"), "/palette.rs"));
@@ -367,6 +368,7 @@ pub fn send_image(
 
 #[pymodule]
 fn markov(_py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(python::write_vox, m)?)?;
     m.add_function(wrap_pyfunction!(python::rep, m)?)?;
     m.add_function(wrap_pyfunction!(python::colour_image, m)?)?;
     m.add_function(wrap_pyfunction!(python::mesh_voxels, m)?)?;
