@@ -21,7 +21,7 @@
       in rec {
         packages = rec {
           magicavoxel = pkgs.callPackage ./nix/magicavoxel.nix {
-              inherit (erosanix.lib.${system}) mkWindowsApp;
+            inherit (erosanix.lib.${system}) mkWindowsApp;
           };
 
           MarkovJunior = with pkgs;

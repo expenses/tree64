@@ -109,6 +109,43 @@ def add_to_usd_stage(prim_path, stage, arr, time=1, palette=PICO8_PALETTE):
     )
 
 
+def add_to_usd_stage_as_points(prim_path, stage, arr, time=1, palette=PICO8_PALETTE):
+    from pxr import Sdf, UsdGeom
+
+    prim = stage.DefinePrim(prim_path, "PointInstancer")
+    geom_prim = UsdGeom.PointInstancer(prim)
+    nonzero = arr.nonzero()
+    nonzero_elements = arr[nonzero]
+
+    unique = np.unique(nonzero_elements)
+
+    value_to_prototype = np.zeros(np.max(unique), dtype=np.uint8)
+    print(value_to_prototype)
+    value_to_prototype[unique - 1] = range(len(unique))
+    print(value_to_prototype)
+
+    geom_prim.CreatePositionsAttr().Set(np.transpose(nonzero), time)
+    geom_prim.CreateProtoIndicesAttr().Set(value_to_prototype[nonzero_elements - 1])
+
+    prototypes_rel = geom_prim.CreatePrototypesRel()
+
+    for i, v in enumerate(unique):
+        cube = UsdGeom.Cube(stage.DefinePrim(f"/root/prototype_{v}", "Cube"))
+        cube.CreateSizeAttr().Set(1.0)
+        colours_attr = cube.CreateDisplayColorAttr().Set([palette.linear[v]])
+
+        prototypes_rel.AddTarget(f"/root/prototype_{v}")
+
+    """
+    color_attr = geom_prim.CreateDisplayColorAttr()
+    color_attr.Set(
+        np.array(palette.linear)[arr[nonzero]],
+        time
+    )
+    UsdGeom.Primvar(color_attr).SetInterpolation("vertex")
+    """
+
+
 def write_usd(filename, arr, palette=PICO8_PALETTE):
     from pxr import Usd
 
