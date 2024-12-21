@@ -23,6 +23,15 @@
           magicavoxel = pkgs.callPackage ./nix/magicavoxel.nix {
             inherit (erosanix.lib.${system}) mkWindowsApp;
           };
+          # Mostly useful as it writes files out in version 150, not the undocumented 200.
+          magicavoxel-old = pkgs.callPackage ./nix/magicavoxel.nix {
+            version = "0.99.6.4";
+            inherit (erosanix.lib.${system}) mkWindowsApp;
+          };
+          avoyd = pkgs.callPackage ./nix/avoyd.nix {
+            inherit (erosanix.lib.${system}) mkWindowsApp;
+          };
+          
 
           MarkovJunior = with pkgs;
             buildDotnetModule {

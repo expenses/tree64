@@ -23,6 +23,7 @@ num-traits = "0.2.19"
 fnv = "1.0.7"
 hashbrown = "0.15.2"
 wfc = { path = "wfc" }
+zstd = "0.13.2"
 
 [build-dependencies]
 xml = "0.8.20"

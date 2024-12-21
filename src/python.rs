@@ -4,13 +4,51 @@ use pyo3::exceptions::PyTypeError;
 use pyo3::types::PyFunction;
 
 #[pyfunction]
-pub fn write_vox(array: numpy::borrow::PyReadonlyArray3<u8>) -> PyResult<()> {
+pub fn write_vox(array: numpy::borrow::PyReadonlyArray3<u8>, filename: &str) -> PyResult<()> {
     let dims = array.dims();
     let w = dims[2];
     let h = dims[1];
     let d = dims[0];
-    crate::write_vox::write_vox("out.vox", array.as_slice()?, w, h, d)?;
+    crate::write_vox::write_vox(filename, array.as_slice()?, w, h, d)?;
     Ok(())
+}
+
+#[pyfunction]
+#[pyo3(signature = (array, filename, palette))]
+pub fn write_zvox(
+    array: numpy::borrow::PyReadonlyArray3<u8>,
+    filename: &str,
+    palette: &Palette,
+) -> PyResult<()> {
+    let dims = array.dims();
+    let w = dims[2];
+    let h = dims[1];
+    let d = dims[0];
+    let mut zvox_palette = [[0, 0, 0, 0]; 256];
+    for (i, [r, g, b]) in palette.srgb.iter().copied().enumerate() {
+        zvox_palette[i] = if i == 0 { [0; 4] } else { [r, g, b, 255] };
+    }
+    let slice = array.as_slice()?;
+    crate::write_zvox::write_zvox(filename, slice, w, h, d, zvox_palette)?;
+    Ok(())
+}
+
+#[pyfunction]
+pub fn read_zvox<'a>(
+    py: Python<'a>,
+    filename: &str,
+) -> PyResult<(Bound<'a, numpy::array::PyArray3<u8>>, Palette)> {
+    let (array, width, height, depth, palette) = crate::write_zvox::read_zvox(filename)?;
+    let palette = palette.map(|[r, g, b, _]| [r, g, b]);
+    let palette = Palette::new(palette.to_vec());
+    dbg!(width, height, depth);
+    //dbg!(&array[..width as usize * height as usize]);
+    let arr = numpy::array::PyArray1::from_vec(py, array).reshape((
+        depth as _,
+        height as _,
+        width as _,
+    ))?;
+    Ok((arr, palette))
 }
 
 #[pyclass]

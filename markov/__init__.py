@@ -4,6 +4,8 @@ import argparse
 
 ONCE = NodeSettings(count=1)
 
+def write_zvox(array, filename, palette=PICO8_PALETTE):
+    return markov.write_zvox(array, filename, palette)
 
 def do_times(pattern, count, **kwargs):
     return Pattern(pattern, node_settings=NodeSettings(count=count), **kwargs)
