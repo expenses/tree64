@@ -6,7 +6,7 @@ pub fn write_zvox(
     width: usize,
     height: usize,
     depth: usize,
-    palette: [[u8; 4]; 256]
+    palette: [[u8; 4]; 256],
 ) -> std::io::Result<()> {
     let mut file = std::fs::File::create(filename)?;
 

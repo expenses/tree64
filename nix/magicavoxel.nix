@@ -9,6 +9,10 @@
       url = "https://github.com/ephtracy/ephtracy.github.io/releases/download/0.99.7/MagicaVoxel-0.99.7.1-win64.zip";
       hash = "sha256-z/Ia4EYi8LGmSzPGbxP+UHbzACrKvR1y9MSTmn3x4d4=";
     };
+    "0.99.6.4" = fetchurl {
+      url = "https://github.com/ephtracy/ephtracy.github.io/releases/download/0.99.6/MagicaVoxel-0.99.6.4-win64.zip";
+      hash = "sha256-/StkFBzF4zoBzoBwCKNzm/PIbDDnj7Gx+NhV6/9a+L0=";
+    };
   };
 in
   mkWindowsApp rec {

@@ -23,6 +23,7 @@ num-traits = "0.2.19"
 fnv = "1.0.7"
 hashbrown = "0.15.2"
 wfc = { path = "wfc" }
+svo_dag = { path = "svo_dag" }
 zstd = "0.13.2"
 
 [build-dependencies]
@@ -33,4 +34,4 @@ inherits = "release"
 debug = true
 
 [workspace]
-members = [".", "wfc"]
+members = [".", "svo_dag", "wfc"]

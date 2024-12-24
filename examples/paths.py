@@ -82,7 +82,7 @@ initial_state[:, :, 0] = wave_from_tiles([empty])
 initial_state[:, :, -1] = wave_from_tiles([empty])
 
 wfc = tileset.tileset.create_wfc_with_initial_state(initial_state, entropy="linear")
-print(wfc.collapse_all())
+print(f"Found contradiction: {wfc.collapse_all()}")
 
 output = map_3d(wfc.values(), output, tiles)
 output[0, :, :] = index_for_colour("N")

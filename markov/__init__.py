@@ -110,6 +110,22 @@ def add_to_usd_stage(prim_path, stage, arr, time=1, palette=PICO8_PALETTE):
         Vt.IntArray.FromNumpy(indices), time
     )
 
+def add_to_usd_stage_as_dag_cubes(prim_path, stage, arr, time=1, palette=PICO8_PALETTE):
+    from pxr import UsdGeom
+
+    prim = stage.DefinePrim(prim_path, "PointInstancer")
+    geom_prim = UsdGeom.PointInstancer(prim)
+
+    positions, sizes, values = dag_to_cubes(arr)
+    geom_prim.CreatePositionsAttr().Set(positions, time)
+    geom_prim.CreateScalesAttr().Set([[float(size),float(size),float(size)] for size in sizes], time)
+    geom_prim.CreateProtoIndicesAttr([0] * len(sizes), time)
+
+    cube = UsdGeom.Cube(stage.DefinePrim(f"/root/prototype", "Cube"))
+    cube.AddXformOp(UsdGeom.XformOp.TypeTranslate).Set((0.5,0.5,0.5))
+    cube.CreateSizeAttr().Set(1.0)
+    prototypes_rel = geom_prim.CreatePrototypesRel()
+    prototypes_rel.AddTarget(f"/root/prototype")
 
 def add_to_usd_stage_as_points(prim_path, stage, arr, time=1, palette=PICO8_PALETTE):
     from pxr import Sdf, UsdGeom
@@ -288,7 +304,7 @@ def load_vox(filename):
     limited_palette = {"B", "Y", "D", "A", "W", "P", "R", "F", "U", "E", "N", "C"}
     limited_palette = [PICO8_PALETTE.srgb[index_for_colour(c)] for c in limited_palette]
     rgb_palette = [(r, g, b) for r, g, b, a in vox.get_palette()]
-    print(list(find_closest_pairs(rgb_palette, limited_palette)))
+    #print(list(find_closest_pairs(rgb_palette, limited_palette)))
 
     replacements = []
     for i, c in enumerate(find_closest_pairs(rgb_palette, limited_palette)):
@@ -296,7 +312,7 @@ def load_vox(filename):
             continue
         if rgb_palette[i] == tuple(limited_palette[c]):
             continue
-        print(rgb_palette[i], c, limited_palette[c])
+        #print(rgb_palette[i], c, limited_palette[c])
         replacements.append(([i], PICO8_PALETTE.srgb.index(limited_palette[c])))
 
     """

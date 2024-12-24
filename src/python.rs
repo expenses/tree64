@@ -34,6 +34,31 @@ pub fn write_zvox(
 }
 
 #[pyfunction]
+pub fn write_dag(array: numpy::borrow::PyReadonlyArray3<u8>, filename: &str) -> PyResult<()> {
+    let dims = array.dims();
+    let w = dims[2];
+    let h = dims[1];
+    let d = dims[0];
+    let slice = array.as_slice()?;
+    let dag = svo_dag::SvoDag::new(slice, w, h, d, 256);
+    dag.serialize(std::fs::File::create(filename)?)?;
+    Ok(())
+}
+
+#[pyfunction]
+pub fn dag_to_cubes(
+    array: numpy::borrow::PyReadonlyArray3<u8>,
+) -> PyResult<(Vec<[f32; 3]>, Vec<u32>, Vec<u32>)> {
+    let dims = array.dims();
+    let w = dims[2];
+    let h = dims[1];
+    let d = dims[0];
+    let slice = array.as_slice()?;
+    let dag = svo_dag::SvoDag::<u32>::new(slice, w, h, d, 256);
+    Ok(dag.cubes())
+}
+
+#[pyfunction]
 pub fn read_zvox<'a>(
     py: Python<'a>,
     filename: &str,

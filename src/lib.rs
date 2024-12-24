@@ -371,6 +371,8 @@ pub fn send_image(
 fn markov(_py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python::write_vox, m)?)?;
     m.add_function(wrap_pyfunction!(python::write_zvox, m)?)?;
+    m.add_function(wrap_pyfunction!(python::write_dag, m)?)?;
+    m.add_function(wrap_pyfunction!(python::dag_to_cubes, m)?)?;
     m.add_function(wrap_pyfunction!(python::read_zvox, m)?)?;
     m.add_function(wrap_pyfunction!(python::rep, m)?)?;
     m.add_function(wrap_pyfunction!(python::colour_image, m)?)?;

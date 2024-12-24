@@ -1,0 +1,9 @@
+[package]
+name = "svo_dag"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytemuck = { version = "1.21.0", features = ["derive"] }
+fnv = "1.0.7"
+hashbrown = "0.15.2"

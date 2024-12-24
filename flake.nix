@@ -31,8 +31,6 @@
           avoyd = pkgs.callPackage ./nix/avoyd.nix {
             inherit (erosanix.lib.${system}) mkWindowsApp;
           };
-          
-
           MarkovJunior = with pkgs;
             buildDotnetModule {
               src = ./MarkovJunior;
@@ -140,6 +138,7 @@
               black
               linuxPackages_latest.perf
               packages.gen-flamegraph
+              openusd
             ]);
             runScript = "bash -c '. env/bin/activate && bash'";
           })
