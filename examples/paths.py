@@ -50,13 +50,25 @@ up = tileset.add_mul(
 )
 
 tiles = np.zeros((tileset.tileset.num_tiles(), 5, 5, 5), dtype=np.uint8)
-line_vox = load_mkjr_vox("MarkovJunior/resources/tilesets/Paths/Line.vox")
-corner_vox = load_mkjr_vox("MarkovJunior/resources/tilesets/Paths/Turn.vox")
-down_vox = load_mkjr_vox("MarkovJunior/resources/tilesets/Paths/Down.vox")
-up_vox = load_mkjr_vox("MarkovJunior/resources/tilesets/Paths/Up.vox")
+limited_palette = {"B", "Y", "D", "A", "W", "P", "R", "F", "U", "E", "N", "C"}
+
+line_vox = load_mkjr_vox(
+    "MarkovJunior/resources/tilesets/Paths/Line.vox", limited_palette=limited_palette
+)
+corner_vox = load_mkjr_vox(
+    "MarkovJunior/resources/tilesets/Paths/Turn.vox", limited_palette=limited_palette
+)
+down_vox = load_mkjr_vox(
+    "MarkovJunior/resources/tilesets/Paths/Down.vox", limited_palette=limited_palette
+)
+up_vox = load_mkjr_vox(
+    "MarkovJunior/resources/tilesets/Paths/Up.vox", limited_palette=limited_palette
+)
 
 
-tiles[x] = load_mkjr_vox("MarkovJunior/resources/tilesets/Paths/X.vox")
+tiles[x] = load_mkjr_vox(
+    "MarkovJunior/resources/tilesets/Paths/X.vox", limited_palette=limited_palette
+)
 # tiles[empty] = load_mkjr_vox("MarkovJunior/resources/tilesets/Paths/Empty.vox")
 
 for i, slot in enumerate(line):

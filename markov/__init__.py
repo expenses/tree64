@@ -4,8 +4,10 @@ import argparse
 
 ONCE = NodeSettings(count=1)
 
+
 def write_zvox(array, filename, palette=PICO8_PALETTE):
     return markov.write_zvox(array, filename, palette)
+
 
 def do_times(pattern, count, **kwargs):
     return Pattern(pattern, node_settings=NodeSettings(count=count), **kwargs)
@@ -110,6 +112,7 @@ def add_to_usd_stage(prim_path, stage, arr, time=1, palette=PICO8_PALETTE):
         Vt.IntArray.FromNumpy(indices), time
     )
 
+
 def add_to_usd_stage_as_dag_cubes(prim_path, stage, arr, time=1, palette=PICO8_PALETTE):
     from pxr import UsdGeom
 
@@ -118,14 +121,17 @@ def add_to_usd_stage_as_dag_cubes(prim_path, stage, arr, time=1, palette=PICO8_P
 
     positions, sizes, values = dag_to_cubes(arr)
     geom_prim.CreatePositionsAttr().Set(positions, time)
-    geom_prim.CreateScalesAttr().Set([[float(size),float(size),float(size)] for size in sizes], time)
+    geom_prim.CreateScalesAttr().Set(
+        [[float(size), float(size), float(size)] for size in sizes], time
+    )
     geom_prim.CreateProtoIndicesAttr([0] * len(sizes), time)
 
     cube = UsdGeom.Cube(stage.DefinePrim(f"/root/prototype", "Cube"))
-    cube.AddXformOp(UsdGeom.XformOp.TypeTranslate).Set((0.5,0.5,0.5))
+    cube.AddXformOp(UsdGeom.XformOp.TypeTranslate).Set((0.5, 0.5, 0.5))
     cube.CreateSizeAttr().Set(1.0)
     prototypes_rel = geom_prim.CreatePrototypesRel()
     prototypes_rel.AddTarget(f"/root/prototype")
+
 
 def add_to_usd_stage_as_points(prim_path, stage, arr, time=1, palette=PICO8_PALETTE):
     from pxr import Sdf, UsdGeom
@@ -294,26 +300,29 @@ def hex2rgb(h):
     return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
 
 
-def load_vox(filename):
+def load_vox(filename, limited_palette={}):
     from voxypy.models import Entity
 
     vox = Entity().from_file(filename=filename)
 
     array = vox.get_dense()
 
-    limited_palette = {"B", "Y", "D", "A", "W", "P", "R", "F", "U", "E", "N", "C"}
-    limited_palette = [PICO8_PALETTE.srgb[index_for_colour(c)] for c in limited_palette]
-    rgb_palette = [(r, g, b) for r, g, b, a in vox.get_palette()]
-    #print(list(find_closest_pairs(rgb_palette, limited_palette)))
+    if limited_palette:
+        limited_palette = [
+            PICO8_PALETTE.srgb[index_for_colour(c)] for c in limited_palette
+        ]
+        rgb_palette = [(r, g, b) for r, g, b, a in vox.get_palette()]
+        # print(list(find_closest_pairs(rgb_palette, limited_palette)))
 
-    replacements = []
-    for i, c in enumerate(find_closest_pairs(rgb_palette, limited_palette)):
-        if not (array == i).any():
-            continue
-        if rgb_palette[i] == tuple(limited_palette[c]):
-            continue
-        #print(rgb_palette[i], c, limited_palette[c])
-        replacements.append(([i], PICO8_PALETTE.srgb.index(limited_palette[c])))
+        replacements = []
+        for i, c in enumerate(find_closest_pairs(rgb_palette, limited_palette)):
+            if not (array == i).any():
+                continue
+            if rgb_palette[i] == tuple(limited_palette[c]):
+                continue
+            # print(rgb_palette[i], c, limited_palette[c])
+            replacements.append(([i], PICO8_PALETTE.srgb.index(limited_palette[c])))
+        array = replace_values(array, replacements)
 
     """
     # MarkovJunior voxel models often have the palette ordered differently
@@ -331,11 +340,11 @@ def load_vox(filename):
     """
     palette = Palette([(r, g, b) for (r, g, b, a) in vox.get_palette()])
 
-    return replace_values(array, replacements)
+    return array
 
 
-def load_mkjr_vox(filename):
+def load_mkjr_vox(filename, limited_palette=None):
     return np.rot90(
-        load_vox(filename),
+        load_vox(filename, limited_palette=limited_palette),
         axes=(0, 2),
     )

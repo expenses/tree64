@@ -2,7 +2,7 @@
   mkWindowsApp,
   wineWowPackages,
   fetchurl,
-  requireFile
+  requireFile,
 }: let
 in
   mkWindowsApp rec {
