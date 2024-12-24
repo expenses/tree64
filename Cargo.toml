@@ -34,4 +34,4 @@ inherits = "release"
 debug = true
 
 [workspace]
-members = [".", "svo_dag", "wfc"]
+members = [".", "svo_dag", "voxviewer", "wfc"]
