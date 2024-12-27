@@ -4458,6 +4458,8 @@ name = "voxviewer"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bytemuck",
+ "svo_dag",
 ]
 
 [[package]]

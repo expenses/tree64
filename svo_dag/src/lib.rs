@@ -262,6 +262,14 @@ impl<T: NodeValue> SvoDag<T> {
 
         (positions, sizes, values)
     }
+
+    pub fn node_bytes(&self) -> &[u8] {
+        bytemuck::cast_slice(&self.nodes)
+    }
+
+    pub fn num_nodes(&self) -> usize {
+        self.nodes.len()
+    }
 }
 
 fn get_child_index(size: u32, x: u32, y: u32, z: u32) -> usize {

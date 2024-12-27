@@ -154,6 +154,7 @@
           mkShell rec {
             nativeBuildInputs = [
               pkg-config
+              renderdoc
             ];
             buildInputs = [
               udev

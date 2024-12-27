@@ -10,3 +10,5 @@ markov/*.so
 *.usdc
 *.mp4
 perf.*
+voxviewer/*.cap
+voxviewer/voxviewer
