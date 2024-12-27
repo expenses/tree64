@@ -7,3 +7,8 @@ edition = "2021"
 bevy = "0.15.0"
 bytemuck = { version = "1.21.0", features = ["derive"] }
 svo_dag = { path = "../svo_dag" }
+bevy_panorbit_camera = "0.21.2"
+log = "0.4.22"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+bevy = { version = "0.15.0", features = ["webgpu"] }

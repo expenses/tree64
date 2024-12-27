@@ -843,6 +843,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_panorbit_camera"
+version = "0.21.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55e54a2fbf69a596957134b387093009c1d4dc046a6c9f3d62f37230525dca19"
+dependencies = [
+ "bevy",
+]
+
+[[package]]
 name = "bevy_pbr"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1260,7 +1269,7 @@ dependencies = [
  "bitflags 2.6.0",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -4458,7 +4467,9 @@ name = "voxviewer"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_panorbit_camera",
  "bytemuck",
+ "log",
  "svo_dag",
 ]
 

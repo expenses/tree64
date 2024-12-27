@@ -5,31 +5,27 @@ use bevy::{
         system::{lifetimeless::SRes, SystemParamItem},
     },
     math::*,
-    pbr::{
-        DrawMesh, MeshPipeline, MeshPipelineKey, MeshPipelineViewLayoutKey, RenderMeshInstances,
-        SetMeshBindGroup, SetMeshViewBindGroup,
-    },
+    pbr::{MeshPipeline, MeshPipelineKey, MeshPipelineViewLayoutKey, SetMeshViewBindGroup},
     prelude::*,
     render::{
         extract_component::{ExtractComponent, ExtractComponentPlugin},
         primitives::*,
-        render_asset::{RenderAsset, RenderAssets},
         render_graph::{self, RenderGraph, RenderLabel},
         render_phase::*,
         render_resource::{binding_types::*, *},
         renderer::{RenderContext, RenderDevice},
-        storage::*,
         view::{self, ExtractedView, RenderVisibleEntities, VisibilitySystems},
         *,
     },
 };
+use std::borrow::Cow;
 use std::sync::atomic::AtomicU32;
-use std::{borrow::Cow, error::Error};
 
 fn main() {
     App::new()
         .add_systems(Startup, setup)
         .add_plugins(DefaultPlugins)
+        .add_plugins(bevy_panorbit_camera::PanOrbitCameraPlugin)
         .add_plugins(VoxelRendererPlugin)
         .run();
 }
@@ -47,8 +43,17 @@ fn setup(mut commands: Commands) {
     ));
 
     commands.spawn((
-        Camera3d::default(),
+        DirectionalLight {
+            illuminance: 1000.0,
+            ..default()
+        },
+        Transform::from_xyz(0.0, 2.0, 0.0)
+            .with_rotation(Quat::from_rotation_x(-std::f32::consts::PI / 4.)),
+    ));
+
+    commands.spawn((
         Transform::from_xyz(-20.0, 20.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
+        bevy_panorbit_camera::PanOrbitCamera::default(),
     ));
 }
 
@@ -99,6 +104,7 @@ impl Plugin for VoxelRendererPlugin {
 struct Cube {
     pos: UVec3,
     size: u32,
+    value: u32,
 }
 
 #[derive(Copy, Clone, ShaderType, Default, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -150,7 +156,7 @@ impl bevy::render::render_resource::SpecializedRenderPipeline for RenderingPipel
 
     fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
         RenderPipelineDescriptor {
-            label: Some("render pipeline".into()),
+            label: Some("VoxelRenderer::render pipeline".into()),
             layout: vec![
                 self.mesh_pipeline
                     .get_view_layout(MeshPipelineViewLayoutKey::from(key))
@@ -230,7 +236,7 @@ impl FromWorld for VoxelRendererPipeline {
         let render_device = world.resource::<RenderDevice>();
         //let mesh_pipeline_view_layout = world.resource::<bevy::pbr::MeshPipelineViewLayout>();
         let base_bgl = render_device.create_bind_group_layout(
-            "VoxelRendererBase",
+            "VoxelRenderer::base_bgl",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
                 (
@@ -242,7 +248,7 @@ impl FromWorld for VoxelRendererPipeline {
             ),
         );
         let draw_bgl = render_device.create_bind_group_layout(
-            "VoxelRendererDraw",
+            "VoxelRenderer::draw_bgl",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::VERTEX,
                 (storage_buffer_read_only_sized(false, None),),
@@ -250,7 +256,7 @@ impl FromWorld for VoxelRendererPipeline {
         );
 
         let workitem_bgl = render_device.create_bind_group_layout(
-            "VoxelRendererWorkItems",
+            "VoxelRenderer::workitem_bgl",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
                 (
@@ -261,7 +267,7 @@ impl FromWorld for VoxelRendererPipeline {
             ),
         );
         let uniform_bgl = render_device.create_bind_group_layout(
-            "VoxelRendererUniform",
+            "VoxelRenderer::uniform_bgl",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
                 (uniform_buffer::<Uniforms>(false),),
@@ -269,7 +275,7 @@ impl FromWorld for VoxelRendererPipeline {
         );
         let pipeline_cache = world.resource::<PipelineCache>();
         let pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-            label: Some("compute pipeline".into()),
+            label: Some("VoxelRenderer::compute pipeline".into()),
             layout: vec![base_bgl.clone(), workitem_bgl.clone(), uniform_bgl.clone()],
             push_constant_ranges: Vec::new(),
             shader: world.load_asset("shader.wgsl"),
@@ -280,34 +286,32 @@ impl FromWorld for VoxelRendererPipeline {
 
         let render_device = world.resource::<RenderDevice>();
         let mut array = [1; 8 * 8 * 8];
-        array[0] = 0;
+        for z in 0..8 {
+            if z % 2 == 0 {
+                for i in 0..8 * 8 {
+                    array[i + z * 8 * 8] = 0;
+                }
+            }
+        }
+        array[0] = 2;
         let dag = svo_dag::SvoDag::new(&array, 8, 8, 8, 256);
 
         let buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
-            label: Some("nodes"),
+            label: Some("VoxelRenderer::nodes"),
             contents: dag.node_bytes(),
             usage: bevy::render::render_resource::BufferUsages::STORAGE,
         });
 
         let cubes = render_device.create_buffer(&BufferDescriptor {
-            label: Some("cubes"),
+            label: Some("VoxelRenderer::cubes"),
             size: 16 + (1_000_000 * std::mem::size_of::<Cube>()) as u64,
             usage: bevy::render::render_resource::BufferUsages::STORAGE
                 | bevy::render::render_resource::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        let atomic_u32 = |label| {
-            render_device.create_buffer_with_data(&BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(&[0_u32]),
-                usage: bevy::render::render_resource::BufferUsages::STORAGE
-                    | bevy::render::render_resource::BufferUsages::COPY_DST,
-            })
-        };
-
         let node_data = render_device.create_buffer_with_data(&BufferInitDescriptor {
-            label: Some("NodeData"),
+            label: Some("VoxelRenderer::node_data"),
             contents: bytemuck::bytes_of(&NodeData {
                 reserved_indices: 256,
             }),
@@ -318,7 +322,7 @@ impl FromWorld for VoxelRendererPipeline {
             .into_iter()
             .map(|i| {
                 let uniforms = render_device.create_buffer_with_data(&BufferInitDescriptor {
-                    label: Some(&format!("uniforms {}", i)),
+                    label: Some(&format!("VoxelRenderer::uniforms {}", i)),
                     contents: bytemuck::bytes_of(&Uniforms { half_size: i }),
                     usage: bevy::render::render_resource::BufferUsages::UNIFORM,
                 });
@@ -332,7 +336,7 @@ impl FromWorld for VoxelRendererPipeline {
             .collect();
 
         let draw_indirect = render_device.create_buffer_with_data(&BufferInitDescriptor {
-            label: Some("draw_indirect_args"),
+            label: Some("VoxelRenderer::draw_indirect_args"),
             contents: bevy::render::render_resource::DrawIndirectArgs {
                 vertex_count: 0,
                 instance_count: 1,
@@ -367,7 +371,7 @@ impl FromWorld for VoxelRendererPipeline {
         );
 
         let first_work_item = render_device.create_buffer_with_data(&BufferInitDescriptor {
-            label: Some("first_work_item"),
+            label: Some("VoxelRenderer::first_work_item"),
             contents: bytemuck::cast_slice(&[WorkItem {
                 pos: UVec3::ZERO,
                 index: ((dag.num_nodes() as u32) - 1),
@@ -376,8 +380,14 @@ impl FromWorld for VoxelRendererPipeline {
         });
 
         let work_items = [
-            ("work_items_0", "work_items_0_dispatch"),
-            ("work_items_1", "work_items_1_dispatch"),
+            (
+                "VoxelRenderer::work_items_0",
+                "VoxelRenderer::work_items_0_dispatch",
+            ),
+            (
+                "VoxelRenderer::work_items_1",
+                "VoxelRenderer::work_items_1_dispatch",
+            ),
         ]
         .map(|(label, dispatch_label)| WorkItems {
             buffer: render_device.create_buffer(&BufferDescriptor {
@@ -388,7 +398,7 @@ impl FromWorld for VoxelRendererPipeline {
                 mapped_at_creation: false,
             }),
             dispatch: render_device.create_buffer_with_data(&BufferInitDescriptor {
-                label: Some(&dispatch_label),
+                label: Some(dispatch_label),
                 contents: bevy::render::render_resource::DispatchIndirectArgs { x: 1, y: 1, z: 1 }
                     .as_bytes(),
                 usage: bevy::render::render_resource::BufferUsages::COPY_DST
@@ -429,7 +439,7 @@ impl FromWorld for VoxelRendererPipeline {
             work_items,
             draw_bind_group,
             u32_1_buffer: render_device.create_buffer_with_data(&BufferInitDescriptor {
-                label: Some("u32_1_buffer"),
+                label: Some("VoxelRenderer::u32_1_buffer"),
                 contents: bytemuck::cast_slice(&[1_u32]),
                 usage: bevy::render::render_resource::BufferUsages::COPY_SRC,
             }),
@@ -514,7 +524,7 @@ impl<P> RenderCommand<P> for DrawCustomPhaseItem
 where
     P: PhaseItem,
 {
-    type Param = (SRes<VoxelRendererPipeline>);
+    type Param = SRes<VoxelRendererPipeline>;
 
     type ViewQuery = ();
 
@@ -551,6 +561,12 @@ impl render_graph::Node for VoxelRendererNode {
                 CachedPipelineState::Ok(_) => {
                     self.ready = true;
                 }
+                #[cfg(target_arch = "wasm32")]
+                CachedPipelineState::Err(
+                    err @ bevy::render::render_resource::PipelineCacheError::ShaderNotLoaded(_),
+                ) => {
+                    log::debug!("Caught {err}. Optimistically assuming that the shader is still being downloaded.");
+                }
                 CachedPipelineState::Err(err) => {
                     panic!("{err}");
                 }
@@ -572,7 +588,7 @@ impl render_graph::Node for VoxelRendererNode {
         let pipeline_cache = world.resource::<PipelineCache>();
         let pipeline = world.resource::<VoxelRendererPipeline>();
 
-        let mut command_encoder = render_context.command_encoder();
+        let command_encoder = render_context.command_encoder();
 
         command_encoder.clear_buffer(&pipeline.cubes, 0, Some(4));
         command_encoder.clear_buffer(&pipeline.draw_indirect, 0, Some(4));
