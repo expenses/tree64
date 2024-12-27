@@ -1,5 +1,6 @@
 use bevy::{
-    core_pipeline::core_3d::{Opaque3d, Opaque3dBinKey, CORE_3D_DEPTH_FORMAT},
+    core_pipeline::core_3d::{graph::Core3d, Opaque3d, Opaque3dBinKey, CORE_3D_DEPTH_FORMAT},
+    ecs::query::WorldQuery,
     ecs::{
         query::ROQueryItem,
         system::{lifetimeless::SRes, SystemParamItem},
@@ -7,10 +8,12 @@ use bevy::{
     math::*,
     pbr::{MeshPipeline, MeshPipelineKey, MeshPipelineViewLayoutKey, SetMeshViewBindGroup},
     prelude::*,
+    render::primitives::Aabb,
+    render::render_graph::{NodeRunError, RenderGraphContext, ViewNodeRunner},
     render::{
         extract_component::{ExtractComponent, ExtractComponentPlugin},
         primitives::*,
-        render_graph::{self, RenderGraph, RenderLabel},
+        render_graph::{self, RenderGraph, RenderGraphApp, RenderLabel},
         render_phase::*,
         render_resource::{binding_types::*, *},
         renderer::{RenderContext, RenderDevice},
@@ -39,7 +42,7 @@ fn setup(mut commands: Commands) {
             center: Vec3A::ZERO,
             half_extents: Vec3A::splat(0.5),
         },
-        CustomRenderedEntity,
+        VoxelModel,
     ));
 
     commands.spawn((
@@ -64,10 +67,10 @@ struct VoxelRendererPlugin;
 
 impl Plugin for VoxelRendererPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(ExtractComponentPlugin::<CustomRenderedEntity>::default())
+        app.add_plugins(ExtractComponentPlugin::<VoxelModel>::default())
             .add_systems(
                 PostUpdate,
-                view::check_visibility::<With<CustomRenderedEntity>>
+                view::check_visibility::<With<VoxelModel>>
                     .in_set(VisibilitySystems::CheckVisibility),
             );
         //app.add_systems(Startup, prepare_bind_groups)
@@ -81,16 +84,22 @@ impl Plugin for VoxelRendererPlugin {
 
         render_app
             .init_resource::<SpecializedRenderPipelines<RenderingPipeline>>()
-            .add_render_command::<Opaque3d, DrawCustomPhaseItemCommands>()
+            .add_render_command::<Opaque3d, DrawVoxelCubesCommands>()
             .add_systems(Render, queue_custom_phase_item.in_set(RenderSet::Queue));
         /*render_app.add_systems(
             Render,
             prepare_bind_groups.in_set(RenderSet::PrepareBindGroups),
         );*/
 
-        let mut render_graph = render_app.world_mut().resource_mut::<RenderGraph>();
-        render_graph.add_node(VoxelRendererLabel, VoxelRendererNode::default());
-        render_graph.add_node_edge(VoxelRendererLabel, bevy::render::graph::CameraDriverLabel);
+        render_app
+            .add_render_graph_node::<ViewNodeRunner<VoxelRendererNode>>(Core3d, VoxelRendererLabel);
+        render_app.add_render_graph_edges(
+            Core3d,
+            (
+                bevy::core_pipeline::core_3d::graph::Node3d::MainOpaquePass,
+                VoxelRendererLabel,
+            ),
+        );
     }
 
     fn finish(&self, app: &mut App) {
@@ -459,9 +468,7 @@ fn queue_custom_phase_item(
     pipeline_cache: Res<PipelineCache>,
     mut specialized_render_pipelines: ResMut<SpecializedRenderPipelines<RenderingPipeline>>,
 ) {
-    let draw_custom_phase_item = opaque_draw_functions
-        .read()
-        .id::<DrawCustomPhaseItemCommands>();
+    let draw_custom_phase_item = opaque_draw_functions.read().id::<DrawVoxelCubesCommands>();
 
     // Render phases are per-view, so we need to iterate over all views so that
     // the entity appears in them. (In this example, we have only one view, but
@@ -477,10 +484,7 @@ fn queue_custom_phase_item(
 
         // Find all the custom rendered entities that are visible from this
         // view.
-        for &entity in view_visible_entities
-            .get::<With<CustomRenderedEntity>>()
-            .iter()
-        {
+        for &entity in view_visible_entities.get::<With<VoxelModel>>().iter() {
             // Add the custom render item. We use the
             // [`BinnedRenderPhaseType::NonMesh`] type to skip the special
             // handling that Bevy has for meshes (preprocessing, indirect
@@ -508,19 +512,14 @@ fn queue_custom_phase_item(
     }
 }
 
-type DrawCustomPhaseItemCommands = (
-    SetItemPipeline,
-    SetMeshViewBindGroup<0>,
-    SetMeshViewBindGroup<0>,
-    DrawCustomPhaseItem,
-);
+type DrawVoxelCubesCommands = (SetItemPipeline, SetMeshViewBindGroup<0>, DrawVoxelCubes);
 
 #[derive(Clone, Component, ExtractComponent)]
-struct CustomRenderedEntity;
+struct VoxelModel;
 
-struct DrawCustomPhaseItem;
+struct DrawVoxelCubes;
 
-impl<P> RenderCommand<P> for DrawCustomPhaseItem
+impl<P> RenderCommand<P> for DrawVoxelCubes
 where
     P: PhaseItem,
 {
@@ -551,7 +550,7 @@ struct VoxelRendererNode {
     ready: bool,
 }
 
-impl render_graph::Node for VoxelRendererNode {
+impl render_graph::ViewNode for VoxelRendererNode {
     fn update(&mut self, world: &mut World) {
         let pipeline = world.resource::<VoxelRendererPipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
@@ -575,12 +574,16 @@ impl render_graph::Node for VoxelRendererNode {
         }
     }
 
-    fn run(
+    type ViewQuery = ();
+
+    // Required method
+    fn run<'w>(
         &self,
-        _graph: &mut render_graph::RenderGraphContext,
-        render_context: &mut RenderContext,
-        world: &World,
-    ) -> Result<(), render_graph::NodeRunError> {
+        graph: &mut RenderGraphContext<'_>,
+        render_context: &mut RenderContext<'w>,
+        view_query: <Self::ViewQuery as WorldQuery>::Item<'w>,
+        world: &'w World,
+    ) -> Result<(), NodeRunError> {
         if !self.ready {
             return Ok(());
         }
