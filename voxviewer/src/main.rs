@@ -5,6 +5,10 @@ use bevy::{
         system::{lifetimeless::SRes, SystemParamItem},
     },
     math::*,
+    pbr::{
+        DrawMesh, MeshPipeline, MeshPipelineKey, MeshPipelineViewLayoutKey, RenderMeshInstances,
+        SetMeshBindGroup, SetMeshViewBindGroup,
+    },
     prelude::*,
     render::{
         extract_component::{ExtractComponent, ExtractComponentPlugin},
@@ -44,7 +48,7 @@ fn setup(mut commands: Commands) {
 
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(0.0, 0.0, 1.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::from_xyz(-20.0, 20.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
 
@@ -71,6 +75,7 @@ impl Plugin for VoxelRendererPlugin {
         let render_app = app.sub_app_mut(RenderApp);
 
         render_app
+            .init_resource::<SpecializedRenderPipelines<RenderingPipeline>>()
             .add_render_command::<Opaque3d, DrawCustomPhaseItemCommands>()
             .add_systems(Render, queue_custom_phase_item.in_set(RenderSet::Queue));
         /*render_app.add_systems(
@@ -86,7 +91,7 @@ impl Plugin for VoxelRendererPlugin {
     fn finish(&self, app: &mut App) {
         let render_app = app.sub_app_mut(RenderApp);
         render_app.init_resource::<VoxelRendererPipeline>();
-        //render_app.init_resource::<VoxelRendererBaseResources>();
+        render_app.init_resource::<RenderingPipeline>();
     }
 }
 
@@ -121,6 +126,88 @@ struct WorkItems {
 }
 
 #[derive(Resource)]
+struct RenderingPipeline {
+    shader_handle: Handle<Shader>,
+    draw_bgl: BindGroupLayout,
+    mesh_pipeline: MeshPipeline,
+}
+
+impl FromWorld for RenderingPipeline {
+    fn from_world(world: &mut World) -> Self {
+        let vrp = world.resource::<VoxelRendererPipeline>();
+        // Load the shader
+        let shader_handle: Handle<Shader> = world.resource::<AssetServer>().load("render.wgsl");
+        Self {
+            shader_handle,
+            draw_bgl: vrp.draw_bgl.clone(),
+            mesh_pipeline: MeshPipeline::from_world(world),
+        }
+    }
+}
+
+impl bevy::render::render_resource::SpecializedRenderPipeline for RenderingPipeline {
+    type Key = bevy::pbr::MeshPipelineKey;
+
+    fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
+        RenderPipelineDescriptor {
+            label: Some("render pipeline".into()),
+            layout: vec![
+                self.mesh_pipeline
+                    .get_view_layout(MeshPipelineViewLayoutKey::from(key))
+                    .clone(),
+                /*mesh_pipeline_view_layout.bind_group_layout.clone(), */
+                self.draw_bgl.clone(),
+            ],
+            vertex: VertexState {
+                shader: self.shader_handle.clone(),
+                entry_point: "vertex".into(),
+                buffers: Default::default(),
+                shader_defs: Default::default(),
+            },
+            fragment: Some(FragmentState {
+                shader: self.shader_handle.clone(),
+                shader_defs: vec![],
+                // Make sure this matches the entry point of your shader.
+                // It can be anything as long as it matches here and in the shader.
+                entry_point: "fragment".into(),
+                targets: vec![Some(ColorTargetState {
+                    format: TextureFormat::bevy_default(),
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            primitive: PrimitiveState {
+                //topology: bevy::render::render_resource::PrimitiveTopology::PointList,
+                ..Default::default()
+            },
+            depth_stencil: Some(DepthStencilState {
+                format: CORE_3D_DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: CompareFunction::GreaterEqual,
+                stencil: StencilState {
+                    front: StencilFaceState::IGNORE,
+                    back: StencilFaceState::IGNORE,
+                    read_mask: 0,
+                    write_mask: 0,
+                },
+                bias: DepthBiasState {
+                    constant: 0,
+                    slope_scale: 0.0,
+                    clamp: 0.0,
+                },
+            }),
+            multisample: MultisampleState {
+                count: 4,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            push_constant_ranges: vec![],
+            zero_initialize_workgroup_memory: false,
+        }
+    }
+}
+
+#[derive(Resource)]
 struct VoxelRendererPipeline {
     base_bgl: BindGroupLayout,
     uniform_bgl: BindGroupLayout,
@@ -134,8 +221,8 @@ struct VoxelRendererPipeline {
     u32_1_buffer: Buffer,
     cubes: Buffer,
     draw_indirect: Buffer,
-    render_pipeline: CachedRenderPipelineId,
     draw_bind_group: BindGroup,
+    draw_bgl: BindGroupLayout,
 }
 
 impl FromWorld for VoxelRendererPipeline {
@@ -188,58 +275,6 @@ impl FromWorld for VoxelRendererPipeline {
             shader: world.load_asset("shader.wgsl"),
             shader_defs: vec![],
             entry_point: Cow::from("expand_voxels"),
-            zero_initialize_workgroup_memory: false,
-        });
-
-        let render_shader = world.load_asset("render.wgsl");
-
-        let render_pipeline = pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
-            label: Some("render pipeline".into()),
-            layout: vec![/*mesh_pipeline_view_layout.bind_group_layout.clone(), */draw_bgl.clone()],
-            vertex: VertexState {
-                shader: render_shader.clone(),
-                entry_point: "vertex".into(),
-                buffers: Default::default(),
-                shader_defs: Default::default(),
-            },
-            fragment: Some(FragmentState {
-                shader: render_shader,
-                shader_defs: vec![],
-                // Make sure this matches the entry point of your shader.
-                // It can be anything as long as it matches here and in the shader.
-                entry_point: "fragment".into(),
-                targets: vec![Some(ColorTargetState {
-                    format: TextureFormat::bevy_default(),
-                    blend: None,
-                    write_mask: ColorWrites::ALL,
-                })],
-            }),
-            primitive: PrimitiveState {
-                topology: bevy::render::render_resource::PrimitiveTopology::PointList,
-                ..Default::default()
-            },
-            depth_stencil: Some(DepthStencilState {
-                format: CORE_3D_DEPTH_FORMAT,
-                depth_write_enabled: false,
-                depth_compare: CompareFunction::GreaterEqual,
-                stencil: StencilState {
-                    front: StencilFaceState::IGNORE,
-                    back: StencilFaceState::IGNORE,
-                    read_mask: 0,
-                    write_mask: 0,
-                },
-                bias: DepthBiasState {
-                    constant: 0,
-                    slope_scale: 0.0,
-                    clamp: 0.0,
-                },
-            }),
-            multisample: MultisampleState {
-                count: 4,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            push_constant_ranges: vec![],
             zero_initialize_workgroup_memory: false,
         });
 
@@ -399,7 +434,7 @@ impl FromWorld for VoxelRendererPipeline {
                 usage: bevy::render::render_resource::BufferUsages::COPY_SRC,
             }),
             draw_indirect,
-            render_pipeline,
+            draw_bgl,
         }
     }
 }
@@ -409,8 +444,10 @@ impl FromWorld for VoxelRendererPipeline {
 fn queue_custom_phase_item(
     mut opaque_render_phases: ResMut<ViewBinnedRenderPhases<Opaque3d>>,
     opaque_draw_functions: Res<DrawFunctions<Opaque3d>>,
-    pipeline: Res<VoxelRendererPipeline>,
-    views: Query<(Entity, &RenderVisibleEntities, &Msaa), With<ExtractedView>>,
+    pipeline: Res<RenderingPipeline>,
+    views: Query<(Entity, &RenderVisibleEntities, &ExtractedView, &Msaa)>,
+    pipeline_cache: Res<PipelineCache>,
+    mut specialized_render_pipelines: ResMut<SpecializedRenderPipelines<RenderingPipeline>>,
 ) {
     let draw_custom_phase_item = opaque_draw_functions
         .read()
@@ -419,10 +456,14 @@ fn queue_custom_phase_item(
     // Render phases are per-view, so we need to iterate over all views so that
     // the entity appears in them. (In this example, we have only one view, but
     // it's good practice to loop over all views anyway.)
-    for (view_entity, view_visible_entities, msaa) in views.iter() {
+    for (view_entity, view_visible_entities, view, msaa) in &views {
         let Some(opaque_phase) = opaque_render_phases.get_mut(&view_entity) else {
             continue;
         };
+
+        // Create the key based on the view. In this case we only care about MSAA and HDR
+        let view_key = MeshPipelineKey::from_msaa_samples(msaa.samples())
+            | MeshPipelineKey::from_hdr(view.hdr);
 
         // Find all the custom rendered entities that are visible from this
         // view.
@@ -441,7 +482,11 @@ fn queue_custom_phase_item(
             opaque_phase.add(
                 Opaque3dBinKey {
                     draw_function: draw_custom_phase_item,
-                    pipeline: pipeline.render_pipeline,
+                    pipeline: specialized_render_pipelines.specialize(
+                        &pipeline_cache,
+                        &pipeline,
+                        view_key,
+                    ),
                     asset_id: AssetId::<Mesh>::invalid().untyped(),
                     material_bind_group_id: None,
                     lightmap_image: None,
@@ -453,7 +498,12 @@ fn queue_custom_phase_item(
     }
 }
 
-type DrawCustomPhaseItemCommands = (SetItemPipeline, DrawCustomPhaseItem);
+type DrawCustomPhaseItemCommands = (
+    SetItemPipeline,
+    SetMeshViewBindGroup<0>,
+    SetMeshViewBindGroup<0>,
+    DrawCustomPhaseItem,
+);
 
 #[derive(Clone, Component, ExtractComponent)]
 struct CustomRenderedEntity;
@@ -479,7 +529,7 @@ where
     ) -> RenderCommandResult {
         let pipeline = custom_phase_item_buffers.into_inner();
 
-        pass.set_bind_group(0, &pipeline.draw_bind_group, &[]);
+        pass.set_bind_group(1, &pipeline.draw_bind_group, &[]);
         pass.draw_indirect(&pipeline.draw_indirect, 0);
 
         RenderCommandResult::Success

@@ -76,7 +76,7 @@ fn expand_voxels(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
         let index = atomicAdd(&cubes.len, u32(1));
         cubes.data[index].pos=pos;
         cubes.data[index].size=uniforms.half_size;
-        atomicAdd(&draw_indirect_vertex_count, u32(1));
+        atomicAdd(&draw_indirect_vertex_count, u32(18));
     } else {
         let index = atomicAdd(&output_work_items.len, u32(1));
         atomicMax(&output_invocations_count, (index / 8) + 1);
