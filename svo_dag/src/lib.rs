@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 use std::hash::BuildHasher;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::ops::{Add, Sub};
 
 pub trait NodeValue:
@@ -221,6 +221,28 @@ impl<T: NodeValue> SvoDag<T> {
         writer.write_all(&(self.nodes.len() as u32).to_le_bytes())?;
         writer.write_all(bytemuck::cast_slice(&self.nodes))?;
         Ok(())
+    }
+
+    pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
+        let mut buffer = [0; 3];
+        reader.read_exact(&mut buffer)?;
+        assert_eq!(&buffer, b"DAG");
+        let mut size = 0_u8;
+        reader.read_exact(bytemuck::bytes_of_mut(&mut size))?;
+        assert_eq!(size as usize, std::mem::size_of::<T>());
+        let mut reserved_indices = 0_u32;
+        let mut size = 0_u32;
+        let mut num_nodes = 0_u32;
+        reader.read_exact(bytemuck::bytes_of_mut(&mut reserved_indices))?;
+        reader.read_exact(bytemuck::bytes_of_mut(&mut size))?;
+        reader.read_exact(bytemuck::bytes_of_mut(&mut num_nodes))?;
+        let mut nodes = vec![Node([T::from(0_u8); 8]); num_nodes as usize];
+        reader.read_exact(bytemuck::cast_slice_mut(&mut nodes))?;
+        Ok(Self {
+            size,
+            nodes,
+            reserved_indices: T::try_from(reserved_indices as usize).unwrap(),
+        })
     }
 
     pub fn cubes(&self) -> (Vec<[f32; 3]>, Vec<u32>, Vec<T>) {

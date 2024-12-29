@@ -59,16 +59,9 @@ fn setup(
         ),
     );
 
-    let mut array = [1; 8 * 8 * 8];
-    for z in 0..8 {
-        if z % 2 == 0 {
-            for i in 0..8 * 8 {
-                array[i + z * 8 * 8] = 0;
-            }
-        }
-    }
-    array[0] = 2;
-    let svo_dag = svo_dag::SvoDag::new(&array, 8, 8, 8, 256);
+    let filename = std::env::args().nth(1).unwrap();
+
+    let svo_dag = svo_dag::SvoDag::<u32>::read(std::fs::File::open(&filename).unwrap()).unwrap();
 
     let buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
         label: Some("my::nodes"),
@@ -123,7 +116,8 @@ fn setup(
             ..default()
         },
         Transform::from_xyz(0.0, 2.0, 0.0)
-            .with_rotation(Quat::from_rotation_x(-std::f32::consts::PI / 4.)),
+            .with_rotation(Quat::from_rotation_x(-std::f32::consts::PI / 4.))
+            .with_rotation(Quat::from_rotation_y(-std::f32::consts::PI * 3.3)),
     ));
 
     commands.spawn((
