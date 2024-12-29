@@ -124,10 +124,11 @@ impl bevy::render::render_resource::SpecializedRenderPipeline for RenderingPipel
 
 #[derive(Resource)]
 pub struct VoxelRendererPipeline {
-    pub base_bgl: BindGroupLayout,
+    base_bgl: BindGroupLayout,
     pub uniform_bgl: BindGroupLayout,
     pub pipeline: CachedComputePipelineId,
-    pub bind_group: BindGroup,
+    pub base_bind_group: BindGroup,
+    pub node_bind_group: BindGroup,
     pub nodes: Buffer,
     pub uniform_bind_groups: Vec<BindGroup>,
     pub first_work_item: Buffer,
@@ -144,13 +145,23 @@ impl FromWorld for VoxelRendererPipeline {
     fn from_world(world: &mut World) -> Self {
         let render_device = world.resource::<RenderDevice>();
         //let mesh_pipeline_view_layout = world.resource::<bevy::pbr::MeshPipelineViewLayout>();
-        let base_bgl = render_device.create_bind_group_layout(
-            "VoxelRenderer::base_bgl",
+
+        let node_bgl = render_device.create_bind_group_layout(
+            "VoxelRenderer::node_bgl",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
                 (
                     storage_buffer_read_only_sized(false, None),
                     uniform_buffer::<NodeData>(false),
+                ),
+            ),
+        );
+
+        let base_bgl = render_device.create_bind_group_layout(
+            "VoxelRenderer::base_bgl",
+            &BindGroupLayoutEntries::sequential(
+                ShaderStages::COMPUTE,
+                (
                     storage_buffer_sized(false, None),
                     storage_buffer::<AtomicU32>(false),
                 ),
@@ -185,7 +196,12 @@ impl FromWorld for VoxelRendererPipeline {
         let pipeline_cache = world.resource::<PipelineCache>();
         let pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: Some("VoxelRenderer::compute pipeline".into()),
-            layout: vec![base_bgl.clone(), workitem_bgl.clone(), uniform_bgl.clone()],
+            layout: vec![
+                node_bgl.clone(),
+                base_bgl.clone(),
+                workitem_bgl.clone(),
+                uniform_bgl.clone(),
+            ],
             push_constant_ranges: Vec::new(),
             shader: world.load_asset("shader.wgsl"),
             shader_defs: vec![],
@@ -258,12 +274,19 @@ impl FromWorld for VoxelRendererPipeline {
                 | bevy::render::render_resource::BufferUsages::INDIRECT,
         });
 
-        let bind_group_0 = render_device.create_bind_group(
+        let node_bind_group = render_device.create_bind_group(
             None,
-            &base_bgl,
+            &node_bgl,
             &BindGroupEntries::sequential((
                 buffer.as_entire_buffer_binding(),
                 node_data.as_entire_buffer_binding(),
+            )),
+        );
+
+        let base_bind_group = render_device.create_bind_group(
+            None,
+            &base_bgl,
+            &BindGroupEntries::sequential((
                 cubes.as_entire_buffer_binding(),
                 bevy::render::render_resource::BufferBinding {
                     buffer: &draw_indirect,
@@ -337,7 +360,8 @@ impl FromWorld for VoxelRendererPipeline {
             base_bgl,
             uniform_bgl,
             nodes: buffer,
-            bind_group: bind_group_0,
+            base_bind_group,
+            node_bind_group,
             flip_flop_bind_groups: [
                 workitems_fn(&work_items[0], &work_items[1]),
                 workitems_fn(&work_items[1], &work_items[0]),

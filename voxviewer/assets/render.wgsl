@@ -38,6 +38,16 @@ struct VertexOutput {
     @location(2) world_position: vec3<f32>,
 };
 
+
+const TRIANGLE_UVS = array<vec2<u32>, 6>(
+    vec2(0,0),
+    vec2(1,0),
+    vec2(0,1),
+    vec2(1,0),
+    vec2(0,1),
+    vec2(1,1)
+);
+
 @vertex
 fn vertex(@builtin(vertex_index) vertex_id: u32) -> VertexOutput {
     var cube = cubes.data[vertex_id / 18];
@@ -45,33 +55,20 @@ fn vertex(@builtin(vertex_index) vertex_id: u32) -> VertexOutput {
     let center = vec3<f32>(cube.pos + cube.size / 2);
     let direction = view.world_position.xyz - center;
 
-    let x = u32(direction.x > 0.0);
-    let y = u32(direction.y > 0.0);
-    let z = u32(direction.z > 0.0);
+    let uv = TRIANGLE_UVS[vertex_id % 6];
+    let index_in_cube = vertex_id % 18;
+    var triangle = vec3<u32>(0);
 
-    let triangles = array<vec3<u32>, 18>(
-        // x
-        vec3(x,0,0),
-        vec3(x,1,0),
-        vec3(x,0,1),
-        vec3(x,1,0),
-        vec3(x,0,1),
-        vec3(x,1,1),
-        // y
-        vec3(0,y,0),
-        vec3(1,y,0),
-        vec3(0,y,1),
-        vec3(1,y,0),
-        vec3(0,y,1),
-        vec3(1,y,1),
-        // z
-        vec3(0,0,z),
-        vec3(1,0,z),
-        vec3(0,1,z),
-        vec3(1,0,z),
-        vec3(0,1,z),
-        vec3(1,1,z),
-    );
+    if index_in_cube < 6 {
+        let x = u32(direction.x > 0.0);
+        triangle = vec3(x, uv);
+    } else if index_in_cube < 12 {
+        let y = u32(direction.y > 0.0);
+        triangle = vec3(uv.x, y, uv.y);
+    } else {
+        let z = u32(direction.z > 0.0);
+        triangle = vec3(uv, z);
+    }
 
     let normals = array<vec3<f32>, 3>(
         vec3(select(-1.0, 1.0, direction.x > 0.0), 0.0, 0.0),
@@ -79,11 +76,11 @@ fn vertex(@builtin(vertex_index) vertex_id: u32) -> VertexOutput {
         vec3(0.0, 0.0, select(-1.0, 1.0, direction.z > 0.0)),
     );
 
-    let world_pos = vec3<f32>(cube.pos + triangles[vertex_id % 18] * cube.size);
+    let world_pos = vec3<f32>(cube.pos + triangle * cube.size);
 
     var out:VertexOutput;
     out.clip_position = position_world_to_clip(world_pos);
-    out.normal = normals[(vertex_id/6)%3];
+    out.normal = normals[index_in_cube / 6];
     out.colour = select(vec3(1.0), vec3(1.0, 0.0, 0.0), cube.value == 2);
     out.world_position = world_pos;
 

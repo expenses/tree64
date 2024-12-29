@@ -28,6 +28,7 @@ mod pipeline;
 use pipeline::{RenderingPipeline, VoxelRendererPipeline};
 
 use phase_item::{queue_voxel_phase_items, VoxelBinnedPhaseItem};
+use renderer::RenderDevice;
 
 fn main() {
     App::new()
@@ -38,7 +39,7 @@ fn main() {
         .run();
 }
 
-fn setup(mut commands: Commands) {
+fn setup(mut commands: Commands, render_device: Res<RenderDevice>) {
     commands.spawn((
         Visibility::default(),
         Transform::default(),
@@ -47,7 +48,26 @@ fn setup(mut commands: Commands) {
             center: Vec3A::ZERO,
             half_extents: Vec3A::splat(0.5),
         },
-        VoxelModel,
+        VoxelModel {
+            buffer: {
+                let mut array = [1; 8 * 8 * 8];
+                for z in 0..8 {
+                    if z % 2 == 0 {
+                        for i in 0..8 * 8 {
+                            array[i + z * 8 * 8] = 0;
+                        }
+                    }
+                }
+                array[0] = 2;
+                let svo_dag = svo_dag::SvoDag::new(&array, 8, 8, 8, 256);
+
+                render_device.create_buffer_with_data(&BufferInitDescriptor {
+                    label: Some("VoxelRenderer::nodes"),
+                    contents: svo_dag.node_bytes(),
+                    usage: bevy::render::render_resource::BufferUsages::STORAGE,
+                })
+            },
+        },
     ));
 
     commands.spawn((
@@ -100,13 +120,6 @@ impl Plugin for VoxelRendererPlugin {
                 view::check_visibility::<With<VoxelModel>>
                     .in_set(VisibilitySystems::CheckVisibility),
             );
-        //app.add_systems(Startup, prepare_bind_groups)
-
-        /*
-        // Extract the game of life image resource from the main world into the render world
-        // for operation on by the compute shader and display on the sprite.
-        app.add_plugins(ExtractResourcePlugin::<GameOfLifeImages>::default());
-        */
         let render_app = app.sub_app_mut(RenderApp);
 
         render_app
@@ -120,21 +133,15 @@ impl Plugin for VoxelRendererPlugin {
                     queue_voxel_phase_items.in_set(RenderSet::Queue),
                     prepare_voxel_render_pipelines.in_set(RenderSet::Prepare),
                 ),
+            )
+            .add_render_graph_node::<ViewNodeRunner<VoxelRendererNode>>(Core3d, VoxelRendererLabel)
+            .add_render_graph_edges(
+                Core3d,
+                (
+                    VoxelRendererLabel,
+                    bevy::core_pipeline::core_3d::graph::Node3d::MainOpaquePass,
+                ),
             );
-        /*render_app.add_systems(
-            Render,
-            prepare_bind_groups.in_set(RenderSet::PrepareBindGroups),
-        );*/
-
-        render_app
-            .add_render_graph_node::<ViewNodeRunner<VoxelRendererNode>>(Core3d, VoxelRendererLabel);
-        render_app.add_render_graph_edges(
-            Core3d,
-            (
-                VoxelRendererLabel,
-                bevy::core_pipeline::core_3d::graph::Node3d::MainOpaquePass,
-            ),
-        );
     }
 
     fn finish(&self, app: &mut App) {
@@ -147,7 +154,10 @@ impl Plugin for VoxelRendererPlugin {
 type DrawVoxelCubesCommands = (SetMeshViewBindGroup<0>, DrawVoxelCubes);
 
 #[derive(Clone, Component, ExtractComponent)]
-struct VoxelModel;
+struct VoxelModel {
+    buffer: Buffer,
+    //svo_dag: svo_dag::SvoDag<u32>,
+}
 
 struct DrawVoxelCubes;
 
@@ -210,33 +220,18 @@ impl render_graph::ViewNode for VoxelRendererNode {
         &'static ViewTarget,
         &'static ViewDepthTexture,
         &'static VoxelRenderPipeline,
-        //Option<&'static SkyboxBindGroup>,
-        //&'static ViewUniformOffset,
     );
 
-    // Required method
     fn run<'w>(
         &self,
         graph: &mut RenderGraphContext<'_>,
         render_context: &mut RenderContext<'w>,
-        (
-            view,
-            camera,
-            target,
-            depth,
-            render_pipeline,
-            //skybox_pipeline,
-            //skybox_bind_group,
-            //view_uniform_offset,
-        ): QueryItem<'w, Self::ViewQuery>,
+        (view, camera, target, depth, render_pipeline): QueryItem<'w, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
         if !self.ready {
             return Ok(());
         }
-
-        //let opaque_draw_functions = world.resource::<DrawFunctions<Opaque3d>>();
-        //let draw_custom_phase_item = opaque_draw_functions.read().get::<DrawVoxelCubesCommands>();
 
         let voxel_phases = world.resource::<ViewBinnedRenderPhases<VoxelBinnedPhaseItem>>();
         let voxel_phase = voxel_phases.get(&view).unwrap();
@@ -244,101 +239,124 @@ impl render_graph::ViewNode for VoxelRendererNode {
         let pipeline_cache = world.resource::<PipelineCache>();
         let pipeline = world.resource::<VoxelRendererPipeline>();
 
-        let color_attachments = [Some(target.get_color_attachment())];
-        let depth_stencil_attachment = Some(depth.get_attachment(StoreOp::Store));
-
         let view_entity = graph.view_entity();
-        render_context.add_command_buffer_generation_task(move |render_device| {
-            // Command encoder setup
-            let mut command_encoder =
-                render_device.create_command_encoder(&CommandEncoderDescriptor {
-                    label: Some("voxel_command_encoder"),
-                });
 
-            let render_pipeline = match pipeline_cache.get_render_pipeline(render_pipeline.0) {
-                Some(render_pipeline) => render_pipeline,
-                None => return command_encoder.finish(),
-            };
+        let draw_functions = world.resource::<DrawFunctions<VoxelBinnedPhaseItem>>();
+        let draw_function_id = draw_functions.read().id::<DrawVoxelCubesCommands>();
 
-            command_encoder.clear_buffer(&pipeline.cubes, 0, Some(4));
-            command_encoder.clear_buffer(&pipeline.draw_indirect, 0, Some(4));
+        {
+            let mut draw_functions = draw_functions.write();
+            draw_functions.prepare(world);
+        }
 
-            command_encoder.copy_buffer_to_buffer(
-                &pipeline.u32_1_buffer,
-                0,
-                &pipeline.work_items[0].buffer,
-                0,
-                4,
-            );
+        for &(ref key, entity) in voxel_phase.non_mesh_items.iter() {
+            let color_attachments = [Some(target.get_color_attachment())];
+            let depth_stencil_attachment = Some(depth.get_attachment(StoreOp::Store));
 
-            command_encoder.copy_buffer_to_buffer(
-                &pipeline.first_work_item,
-                0,
-                &pipeline.work_items[0].buffer,
-                // There's padding after the atomic in the buffer as it's not tightly packed.
-                16,
-                std::mem::size_of::<pipeline::WorkItem>() as u64,
-            );
+            render_context.add_command_buffer_generation_task(move |render_device| {
+                // Command encoder setup
+                let mut command_encoder =
+                    render_device.create_command_encoder(&CommandEncoderDescriptor {
+                        label: Some("voxel_command_encoder"),
+                    });
 
-            command_encoder.copy_buffer_to_buffer(
-                &pipeline.u32_1_buffer,
-                0,
-                &pipeline.work_items[0].dispatch,
-                0,
-                std::mem::size_of::<u32>() as u64,
-            );
+                let render_pipeline = match pipeline_cache.get_render_pipeline(render_pipeline.0) {
+                    Some(render_pipeline) => render_pipeline,
+                    None => return command_encoder.finish(),
+                };
 
-            let init_pipeline = pipeline_cache
-                .get_compute_pipeline(pipeline.pipeline)
-                .unwrap();
+                command_encoder.clear_buffer(&pipeline.cubes, 0, Some(4));
+                command_encoder.clear_buffer(&pipeline.draw_indirect, 0, Some(4));
 
-            for (i, uniform_bind_group) in pipeline.uniform_bind_groups.iter().rev().enumerate() {
-                command_encoder.clear_buffer(&pipeline.work_items[(i + 1) % 2].buffer, 0, Some(4));
-                command_encoder.clear_buffer(
-                    &pipeline.work_items[(i + 1) % 2].dispatch,
+                command_encoder.copy_buffer_to_buffer(
+                    &pipeline.u32_1_buffer,
                     0,
-                    Some(std::mem::size_of::<u32>() as u64),
+                    &pipeline.work_items[0].buffer,
+                    0,
+                    4,
                 );
 
-                let mut pass = command_encoder.begin_compute_pass(&ComputePassDescriptor {
-                    label: Some("voxel_command_encoder_compute_pass"),
-                    ..Default::default()
-                });
+                command_encoder.copy_buffer_to_buffer(
+                    &pipeline.first_work_item,
+                    0,
+                    &pipeline.work_items[0].buffer,
+                    // There's padding after the atomic in the buffer as it's not tightly packed.
+                    16,
+                    std::mem::size_of::<pipeline::WorkItem>() as u64,
+                );
 
-                pass.set_pipeline(init_pipeline);
-                pass.set_bind_group(0, &pipeline.bind_group, &[]);
-                pass.set_bind_group(1, &pipeline.flip_flop_bind_groups[i % 2], &[]);
-                pass.set_bind_group(2, uniform_bind_group, &[]);
-                pass.dispatch_workgroups_indirect(&pipeline.work_items[i % 2].dispatch, 0);
-            }
+                command_encoder.copy_buffer_to_buffer(
+                    &pipeline.u32_1_buffer,
+                    0,
+                    &pipeline.work_items[0].dispatch,
+                    0,
+                    std::mem::size_of::<u32>() as u64,
+                );
 
-            // Render pass setup
-            let render_pass = command_encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("voxel_command_encoder_render_pass"),
-                color_attachments: &color_attachments,
-                depth_stencil_attachment,
-                timestamp_writes: None,
-                occlusion_query_set: None,
+                let init_pipeline = pipeline_cache
+                    .get_compute_pipeline(pipeline.pipeline)
+                    .unwrap();
+
+                for (i, uniform_bind_group) in pipeline.uniform_bind_groups.iter().rev().enumerate()
+                {
+                    command_encoder.clear_buffer(
+                        &pipeline.work_items[(i + 1) % 2].buffer,
+                        0,
+                        Some(4),
+                    );
+                    command_encoder.clear_buffer(
+                        &pipeline.work_items[(i + 1) % 2].dispatch,
+                        0,
+                        Some(std::mem::size_of::<u32>() as u64),
+                    );
+
+                    let mut pass = command_encoder.begin_compute_pass(&ComputePassDescriptor {
+                        label: Some("voxel_command_encoder_compute_pass"),
+                        ..Default::default()
+                    });
+
+                    pass.set_pipeline(init_pipeline);
+                    pass.set_bind_group(0, &pipeline.node_bind_group, &[]);
+                    pass.set_bind_group(1, &pipeline.base_bind_group, &[]);
+                    pass.set_bind_group(2, &pipeline.flip_flop_bind_groups[i % 2], &[]);
+                    pass.set_bind_group(3, uniform_bind_group, &[]);
+                    pass.dispatch_workgroups_indirect(&pipeline.work_items[i % 2].dispatch, 0);
+                }
+
+                {
+                    let render_pass = command_encoder.begin_render_pass(&RenderPassDescriptor {
+                        label: Some("voxel_command_encoder_render_pass"),
+                        color_attachments: &color_attachments,
+                        depth_stencil_attachment,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    let mut render_pass = TrackedRenderPass::new(&render_device, render_pass);
+
+                    if let Some(viewport) = camera.viewport.as_ref() {
+                        render_pass.set_camera_viewport(viewport);
+                    }
+
+                    render_pass.set_render_pipeline(render_pipeline);
+                    render_pass.set_bind_group(1, &pipeline.draw_bind_group, &[]);
+
+                    let mut draw_functions = draw_functions.write();
+                    let binned_phase_item = VoxelBinnedPhaseItem::new(
+                        key.clone(),
+                        entity,
+                        0..1,
+                        PhaseItemExtraIndex(0),
+                    );
+                    draw_functions
+                        .get_mut(draw_function_id)
+                        .unwrap()
+                        .draw(world, &mut render_pass, view_entity, &binned_phase_item)
+                        .unwrap();
+                }
+
+                command_encoder.finish()
             });
-            let mut render_pass = TrackedRenderPass::new(&render_device, render_pass);
-            //let pass_span = diagnostics.pass_span(&mut render_pass, "main_opaque_pass_3d");
-
-            if let Some(viewport) = camera.viewport.as_ref() {
-                render_pass.set_camera_viewport(viewport);
-            }
-
-            render_pass.set_render_pipeline(render_pipeline);
-            render_pass.set_bind_group(1, &pipeline.draw_bind_group, &[]);
-
-            if let Err(err) = voxel_phase.render(&mut render_pass, world, view_entity) {
-                error!("Error encountered while rendering the opaque phase {err:?}");
-            }
-
-            //pass_span.end(&mut render_pass);
-            drop(render_pass);
-
-            command_encoder.finish()
-        });
+        }
 
         Ok(())
     }

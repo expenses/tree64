@@ -34,14 +34,15 @@ struct OutputWorkItems {
 
 @group(0) @binding(0) var<storage, read> nodes: array<array<u32, 8>>;
 @group(0) @binding(1) var<uniform> node_data: NodeData;
-@group(0) @binding(2) var<storage, read_write> cubes: Cubes;
-@group(0) @binding(3) var<storage, read_write> draw_indirect_vertex_count: atomic<u32>;
 
-@group(1) @binding(0) var<storage, read> input_work_items: InputWorkItems;
-@group(1) @binding(1) var<storage, read_write> output_work_items: OutputWorkItems;
-@group(1) @binding(2) var<storage, read_write> output_invocations_count: atomic<u32>;
+@group(1) @binding(0) var<storage, read_write> cubes: Cubes;
+@group(1) @binding(1) var<storage, read_write> draw_indirect_vertex_count: atomic<u32>;
 
-@group(2) @binding(0) var<uniform> uniforms: UniformBuffer;
+@group(2) @binding(0) var<storage, read> input_work_items: InputWorkItems;
+@group(2) @binding(1) var<storage, read_write> output_work_items: OutputWorkItems;
+@group(2) @binding(2) var<storage, read_write> output_invocations_count: atomic<u32>;
+
+@group(3) @binding(0) var<uniform> uniforms: UniformBuffer;
 
 fn cull(pos: vec3<u32>) -> bool {
     return false;
