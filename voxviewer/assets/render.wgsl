@@ -20,7 +20,7 @@
 
 struct Cube {
     pos: vec3<u32>,
-    size: u32,
+    size_log2: u32,
     value: u32
 }
 
@@ -51,8 +51,9 @@ const TRIANGLE_UVS = array<vec2<u32>, 6>(
 @vertex
 fn vertex(@builtin(vertex_index) vertex_id: u32) -> VertexOutput {
     var cube = cubes.data[vertex_id / 18];
+    let size = u32(1) << cube.size_log2;
 
-    let center = vec3<f32>(cube.pos + cube.size / 2);
+    let center = vec3<f32>(cube.pos + size / 2);
     let direction = view.world_position.xyz - center;
 
     let uv = TRIANGLE_UVS[vertex_id % 6];
@@ -76,7 +77,7 @@ fn vertex(@builtin(vertex_index) vertex_id: u32) -> VertexOutput {
         vec3(0.0, 0.0, select(-1.0, 1.0, direction.z > 0.0)),
     );
 
-    let world_pos = vec3<f32>(cube.pos + triangle * cube.size);
+    let world_pos = vec3<f32>(cube.pos + triangle * size);
 
     var out:VertexOutput;
     out.clip_position = position_world_to_clip(world_pos);

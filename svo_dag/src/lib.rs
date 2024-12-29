@@ -270,6 +270,10 @@ impl<T: NodeValue> SvoDag<T> {
     pub fn num_nodes(&self) -> usize {
         self.nodes.len()
     }
+
+    pub fn num_levels(&self) -> u8 {
+        self.size.ilog2() as u8
+    }
 }
 
 fn get_child_index(size: u32, x: u32, y: u32, z: u32) -> usize {

@@ -19,20 +19,20 @@ struct Cube {
 #[derive(Copy, Clone, ShaderType, Default, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 struct Uniforms {
-    half_size: u32,
+    half_size_log2: u32,
 }
 
 #[derive(Copy, Clone, ShaderType, Default, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
-struct NodeData {
-    reserved_indices: u32,
+pub struct NodeData {
+    pub reserved_indices: u32,
 }
 
 #[derive(Copy, Clone, ShaderType, Default, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct WorkItem {
-    pos: UVec3,
-    index: u32,
+    pub pos: UVec3,
+    pub index: u32,
 }
 
 pub struct WorkItems {
@@ -124,14 +124,10 @@ impl bevy::render::render_resource::SpecializedRenderPipeline for RenderingPipel
 
 #[derive(Resource)]
 pub struct VoxelRendererPipeline {
-    base_bgl: BindGroupLayout,
     pub uniform_bgl: BindGroupLayout,
     pub pipeline: CachedComputePipelineId,
     pub base_bind_group: BindGroup,
-    pub node_bind_group: BindGroup,
-    pub nodes: Buffer,
     pub uniform_bind_groups: Vec<BindGroup>,
-    pub first_work_item: Buffer,
     pub flip_flop_bind_groups: [BindGroup; 2],
     pub work_items: [WorkItems; 2],
     pub u32_1_buffer: Buffer,
@@ -210,22 +206,6 @@ impl FromWorld for VoxelRendererPipeline {
         });
 
         let render_device = world.resource::<RenderDevice>();
-        let mut array = [1; 8 * 8 * 8];
-        for z in 0..8 {
-            if z % 2 == 0 {
-                for i in 0..8 * 8 {
-                    array[i + z * 8 * 8] = 0;
-                }
-            }
-        }
-        array[0] = 2;
-        let dag = svo_dag::SvoDag::new(&array, 8, 8, 8, 256);
-
-        let buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
-            label: Some("VoxelRenderer::nodes"),
-            contents: dag.node_bytes(),
-            usage: bevy::render::render_resource::BufferUsages::STORAGE,
-        });
 
         let cubes = render_device.create_buffer(&BufferDescriptor {
             label: Some("VoxelRenderer::cubes"),
@@ -235,20 +215,11 @@ impl FromWorld for VoxelRendererPipeline {
             mapped_at_creation: false,
         });
 
-        let node_data = render_device.create_buffer_with_data(&BufferInitDescriptor {
-            label: Some("VoxelRenderer::node_data"),
-            contents: bytemuck::bytes_of(&NodeData {
-                reserved_indices: 256,
-            }),
-            usage: bevy::render::render_resource::BufferUsages::UNIFORM,
-        });
-
-        let uniform_bind_groups = [1, 2, 4]
-            .into_iter()
+        let uniform_bind_groups = (0..32)
             .map(|i| {
                 let uniforms = render_device.create_buffer_with_data(&BufferInitDescriptor {
                     label: Some(&format!("VoxelRenderer::uniforms {}", i)),
-                    contents: bytemuck::bytes_of(&Uniforms { half_size: i }),
+                    contents: bytemuck::bytes_of(&Uniforms { half_size_log2: i }),
                     usage: bevy::render::render_resource::BufferUsages::UNIFORM,
                 });
 
@@ -274,15 +245,6 @@ impl FromWorld for VoxelRendererPipeline {
                 | bevy::render::render_resource::BufferUsages::INDIRECT,
         });
 
-        let node_bind_group = render_device.create_bind_group(
-            None,
-            &node_bgl,
-            &BindGroupEntries::sequential((
-                buffer.as_entire_buffer_binding(),
-                node_data.as_entire_buffer_binding(),
-            )),
-        );
-
         let base_bind_group = render_device.create_bind_group(
             None,
             &base_bgl,
@@ -301,15 +263,6 @@ impl FromWorld for VoxelRendererPipeline {
             &draw_bgl,
             &BindGroupEntries::sequential((cubes.as_entire_buffer_binding(),)),
         );
-
-        let first_work_item = render_device.create_buffer_with_data(&BufferInitDescriptor {
-            label: Some("VoxelRenderer::first_work_item"),
-            contents: bytemuck::cast_slice(&[WorkItem {
-                pos: UVec3::ZERO,
-                index: ((dag.num_nodes() as u32) - 1),
-            }]),
-            usage: bevy::render::render_resource::BufferUsages::COPY_SRC,
-        });
 
         let work_items = [
             (
@@ -357,18 +310,14 @@ impl FromWorld for VoxelRendererPipeline {
 
         Self {
             pipeline,
-            base_bgl,
             uniform_bgl,
-            nodes: buffer,
             base_bind_group,
-            node_bind_group,
             flip_flop_bind_groups: [
                 workitems_fn(&work_items[0], &work_items[1]),
                 workitems_fn(&work_items[1], &work_items[0]),
             ],
             cubes,
             uniform_bind_groups,
-            first_work_item,
             work_items,
             draw_bind_group,
             u32_1_buffer: render_device.create_buffer_with_data(&BufferInitDescriptor {

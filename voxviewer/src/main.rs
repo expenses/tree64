@@ -1,10 +1,10 @@
+use bevy::pbr::{
+    MeshViewBindGroup, ViewEnvironmentMapUniformOffset, ViewFogUniformOffset,
+    ViewLightProbesUniformOffset, ViewLightsUniformOffset, ViewScreenSpaceReflectionsUniformOffset,
+};
 use bevy::{
     core_pipeline::core_3d::graph::Core3d,
-    ecs::{
-        query::QueryItem,
-        query::ROQueryItem,
-        system::{lifetimeless::SRes, SystemParamItem},
-    },
+    ecs::query::QueryItem,
     math::*,
     pbr::{MeshPipelineKey, SetMeshViewBindGroup},
     prelude::*,
@@ -32,14 +32,76 @@ use renderer::RenderDevice;
 
 fn main() {
     App::new()
-        .add_systems(Startup, setup)
         .add_plugins(DefaultPlugins)
-        .add_plugins(bevy_panorbit_camera::PanOrbitCameraPlugin)
         .add_plugins(VoxelRendererPlugin)
+        .add_plugins(bevy_panorbit_camera::PanOrbitCameraPlugin)
+        .add_systems(Startup, setup)
         .run();
 }
 
-fn setup(mut commands: Commands, render_device: Res<RenderDevice>) {
+fn setup(
+    mut commands: Commands,
+    render_device: Res<RenderDevice>,
+    //pipeline: Res<VoxelRendererPipeline>,
+) {
+    let node_bgl = render_device.create_bind_group_layout(
+        "VoxelRenderer::node_bgl",
+        &BindGroupLayoutEntries::sequential(
+            ShaderStages::COMPUTE,
+            (
+                bevy::render::render_resource::binding_types::storage_buffer_read_only_sized(
+                    false, None,
+                ),
+                bevy::render::render_resource::binding_types::uniform_buffer::<pipeline::NodeData>(
+                    false,
+                ),
+            ),
+        ),
+    );
+
+    let mut array = [1; 8 * 8 * 8];
+    for z in 0..8 {
+        if z % 2 == 0 {
+            for i in 0..8 * 8 {
+                array[i + z * 8 * 8] = 0;
+            }
+        }
+    }
+    array[0] = 2;
+    let svo_dag = svo_dag::SvoDag::new(&array, 8, 8, 8, 256);
+
+    let buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
+        label: Some("my::nodes"),
+        contents: svo_dag.node_bytes(),
+        usage: bevy::render::render_resource::BufferUsages::STORAGE,
+    });
+
+    let node_data = render_device.create_buffer_with_data(&BufferInitDescriptor {
+        label: Some("my::node_data"),
+        contents: bytemuck::bytes_of(&pipeline::NodeData {
+            reserved_indices: 256,
+        }),
+        usage: bevy::render::render_resource::BufferUsages::UNIFORM,
+    });
+
+    let node_bind_group = render_device.create_bind_group(
+        None,
+        &node_bgl,
+        &BindGroupEntries::sequential((
+            buffer.as_entire_buffer_binding(),
+            node_data.as_entire_buffer_binding(),
+        )),
+    );
+
+    let first_work_item = render_device.create_buffer_with_data(&BufferInitDescriptor {
+        label: Some("VoxelRenderer::first_work_item"),
+        contents: bytemuck::cast_slice(&[pipeline::WorkItem {
+            pos: UVec3::ZERO,
+            index: ((svo_dag.num_nodes() as u32) - 1),
+        }]),
+        usage: bevy::render::render_resource::BufferUsages::COPY_SRC,
+    });
+
     commands.spawn((
         Visibility::default(),
         Transform::default(),
@@ -49,24 +111,9 @@ fn setup(mut commands: Commands, render_device: Res<RenderDevice>) {
             half_extents: Vec3A::splat(0.5),
         },
         VoxelModel {
-            buffer: {
-                let mut array = [1; 8 * 8 * 8];
-                for z in 0..8 {
-                    if z % 2 == 0 {
-                        for i in 0..8 * 8 {
-                            array[i + z * 8 * 8] = 0;
-                        }
-                    }
-                }
-                array[0] = 2;
-                let svo_dag = svo_dag::SvoDag::new(&array, 8, 8, 8, 256);
-
-                render_device.create_buffer_with_data(&BufferInitDescriptor {
-                    label: Some("VoxelRenderer::nodes"),
-                    contents: svo_dag.node_bytes(),
-                    usage: bevy::render::render_resource::BufferUsages::STORAGE,
-                })
-            },
+            bind_group: node_bind_group,
+            first_work_item,
+            levels: svo_dag.num_levels(),
         },
     ));
 
@@ -151,47 +198,34 @@ impl Plugin for VoxelRendererPlugin {
     }
 }
 
-type DrawVoxelCubesCommands = (SetMeshViewBindGroup<0>, DrawVoxelCubes);
+type DrawVoxelCubesCommands = SetMeshViewBindGroup<0>;
 
 #[derive(Clone, Component, ExtractComponent)]
 struct VoxelModel {
-    buffer: Buffer,
+    bind_group: BindGroup,
+    first_work_item: Buffer,
+    levels: u8,
     //svo_dag: svo_dag::SvoDag<u32>,
 }
 
-struct DrawVoxelCubes;
-
-impl<P> RenderCommand<P> for DrawVoxelCubes
-where
-    P: PhaseItem,
-{
-    type Param = SRes<VoxelRendererPipeline>;
-
-    type ViewQuery = ();
-
-    type ItemQuery = ();
-
-    fn render<'w>(
-        _: &P,
-        _: ROQueryItem<'w, Self::ViewQuery>,
-        _: Option<ROQueryItem<'w, Self::ItemQuery>>,
-        custom_phase_item_buffers: SystemParamItem<'w, '_, Self::Param>,
-        pass: &mut TrackedRenderPass<'w>,
-    ) -> RenderCommandResult {
-        let pipeline = custom_phase_item_buffers.into_inner();
-        pass.draw_indirect(&pipeline.draw_indirect, 0);
-
-        RenderCommandResult::Success
-    }
-}
-
-#[derive(Default)]
 struct VoxelRendererNode {
     ready: bool,
+    models: QueryState<&'static VoxelModel>,
+}
+
+impl FromWorld for VoxelRendererNode {
+    fn from_world(world: &mut World) -> Self {
+        Self {
+            models: QueryState::new(world),
+            ready: false,
+        }
+    }
 }
 
 impl render_graph::ViewNode for VoxelRendererNode {
     fn update(&mut self, world: &mut World) {
+        self.models.update_archetypes(world);
+
         let pipeline = world.resource::<VoxelRendererPipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
 
@@ -216,6 +250,13 @@ impl render_graph::ViewNode for VoxelRendererNode {
 
     type ViewQuery = (
         Entity,
+        &'static ViewUniformOffset,
+        &'static ViewLightsUniformOffset,
+        &'static ViewFogUniformOffset,
+        &'static ViewLightProbesUniformOffset,
+        &'static ViewScreenSpaceReflectionsUniformOffset,
+        &'static ViewEnvironmentMapUniformOffset,
+        &'static MeshViewBindGroup,
         &'static ExtractedCamera,
         &'static ViewTarget,
         &'static ViewDepthTexture,
@@ -224,9 +265,22 @@ impl render_graph::ViewNode for VoxelRendererNode {
 
     fn run<'w>(
         &self,
-        graph: &mut RenderGraphContext<'_>,
+        _graph: &mut RenderGraphContext<'_>,
         render_context: &mut RenderContext<'w>,
-        (view, camera, target, depth, render_pipeline): QueryItem<'w, Self::ViewQuery>,
+        (
+            view,
+            view_uniform_offset,
+            view_lights_offset,
+            view_fog_offset,
+            view_light_probes_offset,
+            view_ssr_offset,
+            view_environment_map_offset,
+            mesh_view_bind_group,
+            camera,
+            target,
+            depth,
+            render_pipeline,
+        ): QueryItem<'w, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
         if !self.ready {
@@ -239,17 +293,9 @@ impl render_graph::ViewNode for VoxelRendererNode {
         let pipeline_cache = world.resource::<PipelineCache>();
         let pipeline = world.resource::<VoxelRendererPipeline>();
 
-        let view_entity = graph.view_entity();
+        for &(ref _key, (entity, _main_entity)) in voxel_phase.non_mesh_items.iter() {
+            let model = self.models.get_manual(world, entity).unwrap();
 
-        let draw_functions = world.resource::<DrawFunctions<VoxelBinnedPhaseItem>>();
-        let draw_function_id = draw_functions.read().id::<DrawVoxelCubesCommands>();
-
-        {
-            let mut draw_functions = draw_functions.write();
-            draw_functions.prepare(world);
-        }
-
-        for &(ref key, entity) in voxel_phase.non_mesh_items.iter() {
             let color_attachments = [Some(target.get_color_attachment())];
             let depth_stencil_attachment = Some(depth.get_attachment(StoreOp::Store));
 
@@ -277,7 +323,7 @@ impl render_graph::ViewNode for VoxelRendererNode {
                 );
 
                 command_encoder.copy_buffer_to_buffer(
-                    &pipeline.first_work_item,
+                    &model.first_work_item,
                     0,
                     &pipeline.work_items[0].buffer,
                     // There's padding after the atomic in the buffer as it's not tightly packed.
@@ -297,8 +343,10 @@ impl render_graph::ViewNode for VoxelRendererNode {
                     .get_compute_pipeline(pipeline.pipeline)
                     .unwrap();
 
-                for (i, uniform_bind_group) in pipeline.uniform_bind_groups.iter().rev().enumerate()
-                {
+                for i in 0..model.levels as usize {
+                    let uniform_bind_group =
+                        &pipeline.uniform_bind_groups[model.levels as usize - 1 - i];
+
                     command_encoder.clear_buffer(
                         &pipeline.work_items[(i + 1) % 2].buffer,
                         0,
@@ -316,7 +364,7 @@ impl render_graph::ViewNode for VoxelRendererNode {
                     });
 
                     pass.set_pipeline(init_pipeline);
-                    pass.set_bind_group(0, &pipeline.node_bind_group, &[]);
+                    pass.set_bind_group(0, &model.bind_group, &[]);
                     pass.set_bind_group(1, &pipeline.base_bind_group, &[]);
                     pass.set_bind_group(2, &pipeline.flip_flop_bind_groups[i % 2], &[]);
                     pass.set_bind_group(3, uniform_bind_group, &[]);
@@ -340,18 +388,20 @@ impl render_graph::ViewNode for VoxelRendererNode {
                     render_pass.set_render_pipeline(render_pipeline);
                     render_pass.set_bind_group(1, &pipeline.draw_bind_group, &[]);
 
-                    let mut draw_functions = draw_functions.write();
-                    let binned_phase_item = VoxelBinnedPhaseItem::new(
-                        key.clone(),
-                        entity,
-                        0..1,
-                        PhaseItemExtraIndex(0),
+                    render_pass.set_bind_group(
+                        0,
+                        &mesh_view_bind_group.value,
+                        &[
+                            view_uniform_offset.offset,
+                            view_lights_offset.offset,
+                            view_fog_offset.offset,
+                            **view_light_probes_offset,
+                            **view_ssr_offset,
+                            **view_environment_map_offset,
+                        ],
                     );
-                    draw_functions
-                        .get_mut(draw_function_id)
-                        .unwrap()
-                        .draw(world, &mut render_pass, view_entity, &binned_phase_item)
-                        .unwrap();
+
+                    render_pass.draw_indirect(&pipeline.draw_indirect, 0);
                 }
 
                 command_encoder.finish()

@@ -1,5 +1,5 @@
 struct UniformBuffer {
-    half_size: u32,
+    half_size_log2: u32,
 };
 
 struct NodeData {
@@ -13,7 +13,7 @@ struct WorkItem {
 
 struct Cube {
     pos: vec3<u32>,
-    size: u32,
+    size_log2: u32,
     value: u32
 }
 
@@ -64,11 +64,13 @@ fn expand_voxels(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
         return;
     }
 
+    let half_size = u32(1) << uniforms.half_size_log2;
+
     let pos = work_item.pos + vec3(
             (octant % 2),
             ((octant/2) % 2),
             ((octant/4) % 2)
-        ) * uniforms.half_size;
+        ) * half_size;
 
     if (cull(pos)) {
         return;
@@ -77,7 +79,7 @@ fn expand_voxels(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     if (value < node_data.reserved_indices) {
         let index = atomicAdd(&cubes.len, u32(1));
         cubes.data[index].pos=pos;
-        cubes.data[index].size=uniforms.half_size;
+        cubes.data[index].size_log2=uniforms.half_size_log2;
         cubes.data[index].value = value;
         atomicAdd(&draw_indirect_vertex_count, u32(18));
     } else {
