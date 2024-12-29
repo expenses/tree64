@@ -209,7 +209,7 @@ impl FromWorld for VoxelRendererPipeline {
 
         let cubes = render_device.create_buffer(&BufferDescriptor {
             label: Some("VoxelRenderer::cubes"),
-            size: 16 + (1_000_000 * std::mem::size_of::<Cube>()) as u64,
+            size: 16 + (2_000_000 * std::mem::size_of::<Cube>()) as u64,
             usage: bevy::render::render_resource::BufferUsages::STORAGE
                 | bevy::render::render_resource::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -277,7 +277,7 @@ impl FromWorld for VoxelRendererPipeline {
         .map(|(label, dispatch_label)| WorkItems {
             buffer: render_device.create_buffer(&BufferDescriptor {
                 label: Some(label),
-                size: 16 + (std::mem::size_of::<WorkItem>() * 100_000) as u64,
+                size: 16 + (std::mem::size_of::<WorkItem>() * 200_000) as u64,
                 usage: bevy::render::render_resource::BufferUsages::COPY_DST
                     | bevy::render::render_resource::BufferUsages::STORAGE,
                 mapped_at_creation: false,
