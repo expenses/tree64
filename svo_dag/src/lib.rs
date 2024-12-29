@@ -56,12 +56,10 @@ impl<T: NodeValue> EditableSvoDag<T> {
         let size = width.max(height).max(depth).next_power_of_two();
 
         let access = |x, y, z| {
-            T::from(
-                slice
-                    .get(x + y * width + z * width * height)
-                    .copied()
-                    .unwrap_or(0),
-            )
+            T::from(match slice.get(x + y * width + z * width * height) {
+                Some(&value) if x < width && y < height => value,
+                _ => 0,
+            })
         };
 
         let mut cached_indices: hashbrown::HashTable<T> = hashbrown::HashTable::new();
@@ -182,6 +180,21 @@ impl<T: NodeValue> SvoDag<T> {
     }
     */
 
+    pub fn as_array(&self) -> Vec<u8> {
+        let size = self.size as usize;
+        let mut array = vec![0; size * size * size];
+        for z in 0..size {
+            for y in 0..size {
+                for x in 0..size {
+                    array[x + y * size + z * size * size] =
+                        (self.index(x as _, y as _, z as _)).try_into().unwrap() as u8;
+                }
+            }
+        }
+
+        array
+    }
+
     fn root(&self) -> Node<T> {
         *self.nodes.last().unwrap()
     }
@@ -295,6 +308,10 @@ impl<T: NodeValue> SvoDag<T> {
 
     pub fn num_levels(&self) -> u8 {
         self.size.ilog2() as u8
+    }
+
+    pub fn size(&self) -> u32 {
+        self.size
     }
 }
 

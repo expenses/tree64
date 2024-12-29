@@ -46,6 +46,20 @@ pub fn write_dag(array: numpy::borrow::PyReadonlyArray3<u8>, filename: &str) -> 
 }
 
 #[pyfunction]
+pub fn read_dag<'a>(
+    py: Python<'a>,
+    filename: &str,
+) -> PyResult<Bound<'a, numpy::array::PyArray3<u8>>> {
+    let dag = svo_dag::SvoDag::<u32>::read(std::fs::File::open(filename)?)?;
+    let arr = numpy::array::PyArray1::from_vec(py, dag.as_array()).reshape((
+        dag.size() as _,
+        dag.size() as _,
+        dag.size() as _,
+    ))?;
+    Ok(arr)
+}
+
+#[pyfunction]
 pub fn dag_to_cubes(
     array: numpy::borrow::PyReadonlyArray3<u8>,
 ) -> PyResult<(Vec<[f32; 3]>, Vec<u32>, Vec<u32>)> {
