@@ -4,11 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bevy = "0.15.0"
-bytemuck = { version = "1.21.0", features = ["derive"] }
-svo_dag = { path = "../svo_dag" }
-bevy_panorbit_camera = "0.21.2"
+env_logger = "0.11.6"
 log = "0.4.22"
-
-[target.'cfg(target_family = "wasm")'.dependencies]
-bevy = { version = "0.15.0", features = ["webgpu"] }
+pollster = "0.4.0"
+wgpu = "23.0.1"
+winit = "0.29"
+console_error_panic_hook = "0.1.7"
+console_log = "1.0.0"
+wasm-bindgen-futures = "0.4.49"
+wasm-bindgen = "0.2.99"
+web-sys = { version = "0.3.76", features = ["Response"] }

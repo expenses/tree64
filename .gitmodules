@@ -1,3 +1,6 @@
 [submodule "MarkovJunior"]
 	path = MarkovJunior
 	url = https://github.com/mxgmn/MarkovJunior
+[submodule "voxviewer/cubiquity"]
+	path = voxviewer/cubiquity
+	url = https://github.com/expenses/cubiquity

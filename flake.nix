@@ -6,12 +6,18 @@
   inputs.crane.url = "github:ipetkov/crane";
   inputs.erosanix.url = "github:emmanuelrosa/erosanix";
 
+  inputs.fenix = {
+    url = "github:nix-community/fenix";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
+
   outputs = {
     self,
     nixpkgs,
     flake-utils,
     crane,
     erosanix,
+    fenix,
   }:
     flake-utils.lib.eachDefaultSystem (
       system: let
@@ -95,6 +101,52 @@
               cargo fmt
             '';
           gen-flamegraph = with pkgs; writeShellScriptBin "gen-flamegraph" "${linuxPackages_latest.perf}/bin/perf script | ${flamegraph}/bin/stackcollapse-perf.pl | ${flamegraph}/bin/flamegraph.pl > out.svg";
+          slang = with pkgs;
+            stdenv.mkDerivation {
+              name = "slang";
+              nativeBuildInputs = [cmake python3];
+              buildInputs = [llvmPackages_13.libllvm llvmPackages_13.clang-unwrapped xorg.libX11];
+              src = fetchFromGitHub {
+                owner = "shader-slang";
+                repo = "slang";
+                rev = "f3b916ebe529abbc35a351b20b2c70129a193208";
+                hash = "sha256-SWi9MZdaix+A8kFYrc7HHIjh3C8r67MwYLAQXR3ZcPo=";
+                fetchSubmodules = true;
+              };
+              cmakeFlags = [
+                "-DSLANG_SLANG_LLVM_FLAVOR=USE_SYSTEM_LLVM"
+              ];
+            };
+
+          wasm-bindgen-99 = pkgs.wasm-bindgen-cli.override {
+            version = "0.2.99";
+            hash = "sha256-1AN2E9t/lZhbXdVznhTcniy+7ZzlaEp/gwLEAucs6EA=";
+            cargoHash = "sha256-DbwAh8RJtW38LJp+J9Ht8fAROK9OabaJ85D9C/Vkve4=";
+          };
+
+          voxviewer-wasm = let
+            craneLib = (crane.mkLib pkgs).overrideToolchain (with fenix.packages.${system};
+              combine [
+                stable.rustc
+                stable.cargo
+                targets.wasm32-unknown-unknown.stable.rust-std
+              ]);
+          in
+            craneLib.buildPackage rec {
+              name = "voxviewer";
+              src = pkgs.lib.cleanSource ./.;
+              cargoArtifacts = craneLib.buildDepsOnly {name = "voxviewer-deps"; inherit src CARGO_BUILD_TARGET cargoExtraArgs;};
+              CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+                        cargoExtraArgs = "--package=voxviewer";
+              doCheck = false;
+            };
+
+          voxviewer-dir = with pkgs; runCommand "voxviewer-dir" {} ''
+            ${wasm-bindgen-99}/bin/wasm-bindgen ${voxviewer-wasm}/bin/voxviewer.wasm --target web --out-dir $out
+            cp -r ${./voxviewer/assets}/* $out
+          '';
+
+          serve-voxviewer = with pkgs; writeShellScriptBin "serve-voxviewer" "${caddy}/bin/caddy file-server --listen ':8000' --root ${voxviewer-dir}";
         };
         devShells.default = with pkgs;
           mkShell {
@@ -153,10 +205,16 @@
         devShells.bevy = with pkgs;
           mkShell rec {
             nativeBuildInputs = [
+              packages.slang
               pkg-config
               renderdoc
               caddy
-              (wasm-bindgen-cli.override {version = "0.2.99"; hash = "sha256-1AN2E9t/lZhbXdVznhTcniy+7ZzlaEp/gwLEAucs6EA="; cargoHash = "sha256-DbwAh8RJtW38LJp+J9Ht8fAROK9OabaJ85D9C/Vkve4=";})
+              spirv-tools
+              (wasm-bindgen-cli.override {
+                version = "0.2.99";
+                hash = "sha256-1AN2E9t/lZhbXdVznhTcniy+7ZzlaEp/gwLEAucs6EA=";
+                cargoHash = "sha256-DbwAh8RJtW38LJp+J9Ht8fAROK9OabaJ85D9C/Vkve4=";
+              })
             ];
             buildInputs = [
               udev
