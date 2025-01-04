@@ -1,4 +1,5 @@
 use dolly::prelude::*;
+use egui_winit::egui;
 use winit::{
     event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent},
     event_loop::EventLoop,
@@ -240,7 +241,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     let surface = instance.create_surface(&window).unwrap();
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
+            power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             // Request an adapter which can render to our surface
             compatible_surface: Some(&surface),
@@ -256,7 +257,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                 required_features: wgpu::Features::empty(),
                 // Make sure we use the texture resolution limits from the adapter, so we can support images the size of the swapchain.
                 required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::MemoryUsage,
+                memory_hints: wgpu::MemoryHints::Performance,
             },
             None,
         )
@@ -270,6 +271,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         .get_default_config(&adapter, size.width, size.height)
         .unwrap();
     config.view_formats = vec![swapchain_format];
+    config.present_mode = wgpu::PresentMode::AutoVsync;
     surface.configure(&device, &config);
 
     log::info!("{:?}\n{:?}", &config, &swapchain_capabilities.formats);
@@ -277,14 +279,30 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     let pipelines = Pipelines::new(&device, swapchain_format).await;
     let mut resizables = Resizables::new(size.width, size.height, &device, &pipelines);
 
+    let mut egui_renderer = egui_wgpu::Renderer::new(&device, swapchain_format, None, 1, false);
+
+    let egui_context = egui::Context::default();
+
+    let mut egui_state = egui_winit::State::new(
+        egui_context,
+        egui::viewport::ViewportId::ROOT,
+        &window,
+        None,
+        None,
+        None,
+    );
+
     // Create a smoothed orbit camera
     let mut camera: CameraRig = CameraRig::builder()
         .with(YawPitch::new().yaw_degrees(45.0).pitch_degrees(-30.0))
-        .with(Smooth::new_rotation(1.5))
+        .with(Smooth::new_rotation(0.5))
         .with(Arm::new(glam::Vec3::Z * 250.0))
         .build();
 
     let mut mouse_down = false;
+
+    let mut sun_long = 1.0_f32;
+    let mut sun_lat = 1.0_f32;
 
     let window = &window;
     event_loop
@@ -294,9 +312,13 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
             // the resources are properly cleaned up.
             let _ = (&instance, &adapter);
 
+
             match event {
-                Event::WindowEvent { event, .. } => match event {
-                    WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => mouse_down = state == ElementState::Pressed,
+                Event::WindowEvent { event, .. } => {
+                    let egui_response = egui_state.on_window_event(window, &event);
+
+                    match event {
+                    WindowEvent::MouseInput { state, button: MouseButton::Left, .. } if !egui_response.consumed => mouse_down = state == ElementState::Pressed,
                     WindowEvent::Resized(new_size) => {
                         // Reconfigure the surface with the new size
                         config.width = new_size.width.max(1);
@@ -328,7 +350,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                 ).inverse(),
                                 resolution: glam::UVec2::new(config.width, config.height),
                                 camera_pos: transform.position.into(),
-                                sun_direction: glam::Vec3::new(1.0, 2.0, 0.5).normalize(),
+                                sun_direction: glam::Vec3::new(sun_long.sin() * sun_lat.cos(), sun_lat.sin(), sun_long.cos() * sun_lat.cos()),
                                 _padding0: Default::default(),
                                 _padding1: Default::default(),
                                 _padding2: Default::default()
@@ -348,6 +370,51 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                             device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                                 label: None,
                             });
+                        let (tessellated, screen_descriptor) = {
+                            let raw_input = egui_state.take_egui_input(window);
+
+                            egui_state
+                                .egui_ctx()
+                                .set_pixels_per_point(window.scale_factor() as _);
+
+                        let egui_output = egui_state.egui_ctx().run(raw_input, |ctx| {
+                            egui::Window::new("Controls").show(ctx, |ui| {
+                                egui::CollapsingHeader::new("Lighting").default_open(true).show(ui, |ui| {
+                                    egui::CollapsingHeader::new("Sun").default_open(true).show(ui, |ui| {
+                                        ui.label("Latitude");
+                                        ui.add(egui::Slider::new(&mut sun_lat, 0.0..=std::f32::consts::FRAC_PI_2));
+                                        ui.label("Longitude");
+                                        ui.add(egui::Slider::new(&mut sun_long, -std::f32::consts::PI..=std::f32::consts::PI));
+                                    });
+                                });
+                            });
+                        });
+
+
+                            egui_state.handle_platform_output(window, egui_output.platform_output);
+
+
+                        let tris = egui_state.egui_ctx()
+                                    .tessellate(egui_output.shapes, window.scale_factor() as _);
+
+                        for (id, image_delta) in &egui_output.textures_delta.set {
+                            egui_renderer
+                                        .update_texture(&device, &queue, *id, image_delta);
+                                }
+
+                                let screen_descriptor = egui_wgpu::ScreenDescriptor {
+                                    pixels_per_point: window.scale_factor() as _,
+                                    size_in_pixels: [config.width, config.height]
+                                };
+
+                            let command_buffers = egui_renderer
+                                            .update_buffers(&device, &queue, &mut encoder, &tris, &screen_descriptor);
+
+                            debug_assert!(command_buffers.is_empty());
+
+                                (tris, screen_descriptor)
+                        };
+
                         {
                             let mut compute_pass =
                                 encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
@@ -375,10 +442,12 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                     depth_stencil_attachment: None,
                                     timestamp_writes: None,
                                     occlusion_query_set: None,
-                                });
+                                }).forget_lifetime();
                             rpass.set_pipeline(&pipelines.blit_srgb);
                             rpass.set_bind_group(0, &resizables.bind_group, &[]);
                             rpass.draw(0..3, 0..1);
+
+                                        egui_renderer.render(&mut rpass, &tessellated, &screen_descriptor);
                         }
 
                         queue.submit(Some(encoder.finish()));
@@ -386,10 +455,10 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                     }
                     WindowEvent::CloseRequested => target.exit(),
                     _ => {}
-                },
+                }},
                 Event::DeviceEvent { event, .. } => match event {
                     DeviceEvent::MouseMotion { delta: (x, y) } if mouse_down => {
-                        camera.driver_mut::<YawPitch>().rotate_yaw_pitch((-x/4.0) as f32, (-y/4.0) as f32);
+                        camera.driver_mut::<YawPitch>().rotate_yaw_pitch((-x/2.0) as f32, (-y/2.0) as f32);
                     },
                     _ => {}
                 },
@@ -405,11 +474,11 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 pub fn main() {
     let event_loop = EventLoop::new().unwrap();
     #[allow(unused_mut)]
-    let mut builder = winit::window::WindowBuilder::new();
+    let mut builder = winit::window::WindowAttributes::default();
     #[cfg(target_arch = "wasm32")]
     {
         use wasm_bindgen::JsCast;
-        use winit::platform::web::WindowBuilderExtWebSys;
+        use winit::platform::web::WindowAttributesExtWebSys;
         let canvas = wgpu::web_sys::window()
             .unwrap()
             .document()
@@ -420,7 +489,7 @@ pub fn main() {
             .unwrap();
         builder = builder.with_canvas(Some(canvas));
     }
-    let window = builder.build(&event_loop).unwrap();
+    let window = event_loop.create_window(builder).unwrap();
 
     #[cfg(not(target_arch = "wasm32"))]
     {

@@ -8,7 +8,7 @@ env_logger = "0.11.6"
 log = "0.4.22"
 pollster = "0.4.0"
 wgpu = "23.0.1"
-winit = "0.29"
+winit = "0.30"
 console_error_panic_hook = "0.1.7"
 console_log = "1.0.0"
 wasm-bindgen-futures = "0.4.49"
@@ -17,3 +17,6 @@ web-sys = { version = "0.3.76", features = ["Response"] }
 glam = { version = "0.28", features = ["bytemuck"] }
 bytemuck = { version = "1.21.0", features = ["derive"] }
 dolly = "0.6.0"
+egui-wgpu = "0.30"
+egui = { version = "0.30.0", features = ["default_fonts"] }
+egui-winit = { version = "0.30.0", default-features = false }
