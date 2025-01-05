@@ -4,3 +4,6 @@
 [submodule "voxviewer/cubiquity"]
 	path = voxviewer/cubiquity
 	url = https://github.com/expenses/cubiquity
+[submodule "voxviewer/Falcor"]
+	path = voxviewer/Falcor
+	url = https://github.com/NVIDIAGameWorks/Falcor/

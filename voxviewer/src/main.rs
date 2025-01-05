@@ -1,7 +1,8 @@
 use dolly::prelude::*;
 use egui_winit::egui;
+use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use winit::{
-    event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent},
+    event::{DeviceEvent, ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::EventLoop,
     window::Window,
 };
@@ -16,6 +17,10 @@ struct Uniforms {
     sun_direction: glam::Vec3,
     _padding1: u32,
     resolution: glam::UVec2,
+    settings: i32,
+    frame_index: u32,
+    cos_sun_apparent_size: f32,
+    accumulated_frame_index: u32,
     _padding2: [u32; 2],
 }
 
@@ -26,6 +31,7 @@ struct Pipelines {
     trace: wgpu::ComputePipeline,
     trace_bgl: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
+    dag_data: wgpu::Buffer,
 }
 
 impl Pipelines {
@@ -68,6 +74,16 @@ impl Pipelines {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
                         format: wgpu::TextureFormat::Rgba16Float,
@@ -75,10 +91,35 @@ impl Pipelines {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
             ],
         });
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+
+        let dag_data = [
+            [1, 1, 1, 0, 2, 0, 0, 0],
+            [1, 1, 1, 256, 1, 256, 256, 0],
+            [1, 1, 1, 257, 1, 257, 257, 0],
+            [1, 1, 1, 258, 1, 258, 258, 0],
+            [1, 1, 1, 259, 1, 259, 259, 0],
+            [1, 1, 1, 260, 1, 260, 260, 0],
+        ];
 
         Self {
             sampler,
@@ -146,6 +187,11 @@ impl Pipelines {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
+            dag_data: device.create_buffer_init(&BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&dag_data),
+                usage: wgpu::BufferUsages::STORAGE,
+            }),
         }
     }
 }
@@ -173,29 +219,67 @@ async fn load_resource_str(filename: &str) -> String {
 }
 
 struct Resizables {
-    bind_group: wgpu::BindGroup,
-    trace_bind_group: wgpu::BindGroup,
+    blit_bind_groups: [wgpu::BindGroup; 2],
+    trace_bind_groups: [wgpu::BindGroup; 2],
 }
 
 impl Resizables {
     fn new(width: u32, height: u32, device: &wgpu::Device, pipelines: &Pipelines) -> Self {
-        let hdr = device.create_texture(&wgpu::TextureDescriptor {
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
-            label: None,
-            mip_level_count: 1,
-            sample_count: 1,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
+        let create_hdr = || {
+            device.create_texture(&wgpu::TextureDescriptor {
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                label: None,
+                mip_level_count: 1,
+                sample_count: 1,
+                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        };
 
-        Self {
-            bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let hdr_a = create_hdr();
+        let hdr_b = create_hdr();
+
+        let create_trace_bind_group = |a: &wgpu::Texture, b: &wgpu::Texture| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &pipelines.trace_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: pipelines.uniform_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: pipelines.dag_data.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(
+                            &a.create_view(&Default::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(
+                            &b.create_view(&Default::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
+                    },
+                ],
+            })
+        };
+
+        let create_blit_bind_group = |hdr: &wgpu::Texture| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
                 layout: &pipelines.bgl,
                 entries: &[
@@ -210,23 +294,18 @@ impl Resizables {
                         resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
                     },
                 ],
-            }),
-            trace_bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &pipelines.trace_bgl,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: pipelines.uniform_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(
-                            &hdr.create_view(&Default::default()),
-                        ),
-                    },
-                ],
-            }),
+            })
+        };
+
+        Self {
+            blit_bind_groups: [
+                create_blit_bind_group(&hdr_a),
+                create_blit_bind_group(&hdr_b),
+            ],
+            trace_bind_groups: [
+                create_trace_bind_group(&hdr_a, &hdr_b),
+                create_trace_bind_group(&hdr_b, &hdr_a),
+            ],
         }
     }
 }
@@ -303,6 +382,11 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 
     let mut sun_long = 1.0_f32;
     let mut sun_lat = 1.0_f32;
+    let mut enable_shadows = false;
+    let mut frame_index = 0;
+    let mut sun_apparent_size = 0.0_f32;
+    let mut accumulate_samples = false;
+    let mut accumulated_frame_index = 0;
 
     let window = &window;
     event_loop
@@ -332,9 +416,25 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                         );
                         // On macos the window needs to be redrawn manually after resizing
                         window.request_redraw();
+                    },
+                    WindowEvent::MouseWheel { delta, .. } => {
+                        // TODO: this is very WIP.
+                        let pixel_delta_divisor = if cfg!(target_arch = "wasm32") {
+                            1000.0
+                        } else {
+                            100.0
+                        };
+                        camera.driver_mut::<Arm>().offset.z *= 1.0 + match delta {
+                            MouseScrollDelta::LineDelta(_, y) => y / 10.0,
+                            MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / pixel_delta_divisor,
+                        }
                     }
                     WindowEvent::RedrawRequested => {
                         let transform = camera.update(1.0 / 60.0);
+
+                        if !accumulate_samples {
+                            accumulated_frame_index = 0;
+                        }
 
                         queue.write_buffer(
                             &pipelines.uniform_buffer,
@@ -351,11 +451,20 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                 resolution: glam::UVec2::new(config.width, config.height),
                                 camera_pos: transform.position.into(),
                                 sun_direction: glam::Vec3::new(sun_long.sin() * sun_lat.cos(), sun_lat.sin(), sun_long.cos() * sun_lat.cos()),
+                                settings: (enable_shadows as i32) | (accumulate_samples as i32) << 1,
+                                frame_index,
+                                accumulated_frame_index,
                                 _padding0: Default::default(),
                                 _padding1: Default::default(),
+                                cos_sun_apparent_size: sun_apparent_size.to_radians().cos(),
                                 _padding2: Default::default()
                             }),
                         );
+
+                        if accumulate_samples {
+                        accumulated_frame_index += 1;
+                        }
+                        frame_index += 1;
 
                         let frame = surface
                             .get_current_texture()
@@ -379,12 +488,16 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 
                         let egui_output = egui_state.egui_ctx().run(raw_input, |ctx| {
                             egui::Window::new("Controls").show(ctx, |ui| {
+                                ui.checkbox(&mut accumulate_samples, "Accumulate Samples");
                                 egui::CollapsingHeader::new("Lighting").default_open(true).show(ui, |ui| {
+                                    ui.checkbox(&mut enable_shadows, "Enable shadows");
                                     egui::CollapsingHeader::new("Sun").default_open(true).show(ui, |ui| {
                                         ui.label("Latitude");
                                         ui.add(egui::Slider::new(&mut sun_lat, 0.0..=std::f32::consts::FRAC_PI_2));
                                         ui.label("Longitude");
                                         ui.add(egui::Slider::new(&mut sun_long, -std::f32::consts::PI..=std::f32::consts::PI));
+                                        ui.label("Apparent size (degrees)");
+                                        ui.add(egui::Slider::new(&mut sun_apparent_size, 0.0..=90.0));
                                     });
                                 });
                             });
@@ -420,7 +533,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                 encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
 
                             compute_pass.set_pipeline(&pipelines.trace);
-                            compute_pass.set_bind_group(0, &resizables.trace_bind_group, &[]);
+                            compute_pass.set_bind_group(0, &resizables.trace_bind_groups[accumulated_frame_index as usize % 2], &[]);
                             compute_pass.dispatch_workgroups(
                                 ((config.width - 1) / 8) + 1,
                                 ((config.height - 1) / 8) + 1,
@@ -444,7 +557,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                     occlusion_query_set: None,
                                 }).forget_lifetime();
                             rpass.set_pipeline(&pipelines.blit_srgb);
-                            rpass.set_bind_group(0, &resizables.bind_group, &[]);
+                            rpass.set_bind_group(0, &resizables.blit_bind_groups[accumulated_frame_index as usize % 2], &[]);
                             rpass.draw(0..3, 0..1);
 
                                         egui_renderer.render(&mut rpass, &tessellated, &screen_descriptor);
