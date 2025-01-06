@@ -29,6 +29,7 @@ uniform Settings settings;
 uniform uint frame_index;
 uniform float cos_sun_aparent_size;
 uniform uint accumulated_frame_index;
+uniform uint num_bounces;
 
 [Flags]
 enum Settings {
@@ -126,7 +127,11 @@ float3 compute_shading<S: ISampleGenerator>(RayVolumeIntersection intersection, 
     radiance += material.get_direct_lighting(sampler) * throughput;
 
     BSDFSample sample_result;
-    if (material.material.sample(material.shading_data, sampler, sample_result)) {
+    for (uint i = 0; i < num_bounces; i++) {
+        if (!material.material.sample(material.shading_data, sampler, sample_result)) {
+            break;
+        }
+
         throughput *= sample_result.weight;
 
         let ray = Ray3f(material.shading_data.computeRayOrigin(), sample_result.wo);
@@ -183,9 +188,8 @@ void main(
     var sample = trace(ray, rng);
 
     if ((settings & Settings::AccumulateSamples) && (accumulated_frame_index > 0)) {
-        float3 accumulated_samples = previous.SampleLevel(sampler, original_tex_coords, 0);
-        float3 combined_value = accumulated_samples * (float(accumulated_frame_index) / float(accumulated_frame_index+1)) + sample * (1. / float(accumulated_frame_index+1));
-        sample = combined_value;
+        float3 past_samples = previous.SampleLevel(sampler, original_tex_coords, 0);
+        sample += past_samples;
     }
 
     current.Store(dispatch_thread_id.xy, sample);

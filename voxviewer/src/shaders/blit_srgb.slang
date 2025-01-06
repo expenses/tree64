@@ -5,6 +5,8 @@ struct V2P
     float2 Uv : COLOR0;
 };
 
+uniform uint accumulated_frame_index;
+
 [shader("vertex")]
 V2P VSMain(uint vId : SV_VertexID)
 {
@@ -22,5 +24,5 @@ V2P psIn,
     SamplerState sampler,
 ) : SV_Target0
 {
-    return float4(hdr.Sample(sampler, psIn.Uv), 1.0);
+    return float4(hdr.Sample(sampler, psIn.Uv) / float(accumulated_frame_index+1), 1.0);
 }

@@ -21,7 +21,8 @@ struct Uniforms {
     frame_index: u32,
     cos_sun_apparent_size: f32,
     accumulated_frame_index: u32,
-    _padding2: [u32; 2],
+    num_bounces: u32,
+    _padding2: u32,
 }
 
 struct Pipelines {
@@ -32,6 +33,7 @@ struct Pipelines {
     trace_bgl: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
     dag_data: wgpu::Buffer,
+    blit_uniform_buffer: wgpu::Buffer,
 }
 
 impl Pipelines {
@@ -42,6 +44,16 @@ impl Pipelines {
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -50,7 +62,7 @@ impl Pipelines {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 1,
+                    binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
@@ -187,6 +199,12 @@ impl Pipelines {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
+            blit_uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: std::mem::size_of::<[u32; 4]>() as _,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
             dag_data: device.create_buffer_init(&BufferInitDescriptor {
                 label: None,
                 contents: bytemuck::cast_slice(&dag_data),
@@ -289,12 +307,16 @@ impl Resizables {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
+                        resource: pipelines.blit_uniform_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
                         resource: wgpu::BindingResource::TextureView(
                             &hdr.create_view(&Default::default()),
                         ),
                     },
                     wgpu::BindGroupEntry {
-                        binding: 1,
+                        binding: 2,
                         resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
                     },
                 ],
@@ -319,7 +341,10 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     size.width = size.width.max(1);
     size.height = size.height.max(1);
 
-    let instance = wgpu::Instance::default();
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        //backends: wgpu::Backends::VULKAN,
+        ..Default::default()
+    });
 
     let surface = instance.create_surface(&window).unwrap();
     let adapter = instance
@@ -391,6 +416,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     let mut sun_apparent_size = 0.0_f32;
     let mut accumulate_samples = false;
     let mut accumulated_frame_index = 0;
+    let mut num_bounces = 0;
 
     let window = &window;
     event_loop
@@ -457,13 +483,14 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                 sun_direction: glam::Vec3::new(sun_long.sin() * sun_lat.cos(), sun_lat.sin(), sun_long.cos() * sun_lat.cos()),
                                 settings: (enable_shadows as i32) | (accumulate_samples as i32) << 1,
                                 frame_index,
-                                accumulated_frame_index,
+                                accumulated_frame_index, num_bounces,
+                                cos_sun_apparent_size: sun_apparent_size.to_radians().cos(),
                                 _padding0: Default::default(),
                                 _padding1: Default::default(),
-                                cos_sun_apparent_size: sun_apparent_size.to_radians().cos(),
                                 _padding2: Default::default()
                             }),
                         );
+                        queue.write_buffer(&pipelines.blit_uniform_buffer, 0, bytemuck::bytes_of(&accumulated_frame_index));;
 
                         if accumulate_samples {
                         accumulated_frame_index += 1;
@@ -494,6 +521,8 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                             egui::Window::new("Controls").show(ctx, |ui| {
                                 ui.checkbox(&mut accumulate_samples, "Accumulate Samples");
                                 egui::CollapsingHeader::new("Lighting").default_open(true).show(ui, |ui| {
+                                    ui.label("Number of bounces");
+                                    ui.add(egui::Slider::new(&mut num_bounces, 0..=5));
                                     ui.checkbox(&mut enable_shadows, "Enable shadows");
                                     egui::CollapsingHeader::new("Sun").default_open(true).show(ui, |ui| {
                                         ui.label("Latitude");
