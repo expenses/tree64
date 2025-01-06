@@ -437,6 +437,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     let mut num_bounces = 0;
     let mut background_colour = [0.01; 3];
     let mut sun_colour = [1.0; 3];
+    let mut vertical_fov = 45.0_f32;
 
     let window = &window;
     event_loop
@@ -497,7 +498,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                 #[rustfmt::skip]
                                 v_inv: glam::Mat4::look_to_rh(transform.position.into(), transform.forward(), transform.up()).inverse(),
                                 p_inv: glam::Mat4::perspective_rh(
-                                    45.0_f32.to_radians(),
+                                    vertical_fov.to_radians(),
                                     config.width as f32 / config.height as f32,
                                     0.0001,
                                     1000.0,
@@ -512,10 +513,6 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                 cos_sun_apparent_size: sun_apparent_size.to_radians().cos(),
                                 background_colour: glam::Vec3::from(background_colour).into(),
                                 padding: Default::default()
-                                //_padding0: Default::default(),
-                                //_padding1: Default::default(),
-                                //_padding2: Default::default(),
-                                //_padding3: Default::default()
                             }),
                         );
                         queue.write_buffer(&pipelines.blit_uniform_buffer, 0, bytemuck::bytes_of(&accumulated_frame_index));;
@@ -565,6 +562,8 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                     ui.label("Background colour");
                                     egui::widgets::color_picker::color_edit_button_rgb(ui, &mut background_colour);
                                 });
+                                ui.label("Field of view (vertical)");
+                                ui.add(egui::Slider::new(&mut vertical_fov, 1.0..=120.0));
                             });
                         });
 
