@@ -1,10 +1,18 @@
 @binding(1) @group(0) var<storage, read> svo_dag_0 : array<array<u32, i32(8)>>;
 
-@binding(2) @group(0) var entryPointParams_current_0 : texture_storage_2d<rgba16float, write>;
+struct Material_std430_0
+{
+    @align(16) base_colour_0 : vec3<f32>,
+    @align(4) emission_factor_0 : f32,
+};
 
-@binding(3) @group(0) var entryPointParams_previous_0 : texture_2d<f32>;
+@binding(2) @group(0) var<storage, read> materials_0 : array<Material_std430_0>;
 
-@binding(4) @group(0) var entryPointParams_sampler_0 : sampler;
+@binding(3) @group(0) var entryPointParams_current_0 : texture_storage_2d<rgba16float, write>;
+
+@binding(4) @group(0) var entryPointParams_previous_0 : texture_2d<f32>;
+
+@binding(5) @group(0) var entryPointParams_sampler_0 : sampler;
 
 struct _MatrixStorage_float4x4_ColMajorstd140_0
 {
@@ -130,6 +138,13 @@ fn sampleNext2D_0( sg_1 : ptr<function, TinyUniformSampleGenerator_0>) -> vec2<f
     var _S11 : f32 = sampleNext1D_0(&((*sg_1)));
     sample_0[i32(1)] = _S11;
     return sample_0;
+}
+
+fn createRay_0( px_0 : vec2<f32>,  PInv_1 : mat4x4<f32>,  VInv_1 : mat4x4<f32>) -> vec3<f32>
+{
+    var dirEye_0 : vec4<f32> = (((vec4<f32>(vec3<f32>(px_0 * vec2<f32>(2.0f) - vec2<f32>(1.0f), -1.0f), 1.0f)) * (PInv_1)));
+    dirEye_0[i32(3)] = 0.0f;
+    return normalize((((dirEye_0) * (VInv_1))).xyz);
 }
 
 fn sample_disk_concentric_0( u_0 : vec2<f32>) -> vec2<f32>
@@ -379,9 +394,38 @@ fn ShadingData_computeRayOrigin_0( this_7 : ShadingData_0,  viewside_0 : bool) -
     return computeRayOrigin_0(this_7.posW_0, _S31);
 }
 
+struct SubDAG_0
+{
+     lowerBound_0 : vec3<i32>,
+     nodeHeight_0 : i32,
+     padding0_0 : u32,
+     nodeIndex_0 : u32,
+     padding1_0 : u32,
+     padding2_0 : u32,
+};
+
+fn initial_subdag_0() -> SubDAG_0
+{
+    var subDAG_0 : SubDAG_0;
+    subDAG_0.lowerBound_0 = vec3<i32>(vec3<u32>(u32(0)));
+    subDAG_0.nodeHeight_0 = i32(6);
+    subDAG_0.nodeIndex_0 = u32(261);
+    return subDAG_0;
+}
+
 fn bool3_and_0( a_2 : vec3<bool>,  b_2 : vec3<bool>) -> vec3<bool>
 {
     return (a_2 & (b_2));
+}
+
+fn max3_0( vec_0 : vec3<f32>) -> f32
+{
+    return max(max(vec_0.x, vec_0.y), vec_0.z);
+}
+
+fn min3_0( vec_1 : vec3<f32>) -> f32
+{
+    return min(min(vec_1.x, vec_1.y), vec_1.z);
 }
 
 fn findFirstChild_0( nodeEntry_0 : f32,  rayOrigin_0 : vec3<f32>,  invRayDir_0 : vec3<f32>,  nodeCentre_0 : vec3<i32>) -> vec3<i32>
@@ -405,10 +449,10 @@ fn GET_NODE_FN_0( node_0 : u32,  childId_2 : u32) -> u32
     return svo_dag_0[node_0 - u32(256)][childId_2];
 }
 
-fn findNearestMaterial_0( nodeIndex_0 : u32,  rayDirSignBits_0 : u32) -> u32
+fn findNearestMaterial_0( nodeIndex_1 : u32,  rayDirSignBits_0 : u32) -> u32
 {
     var _S33 : u32 = (u32(4275817112) ^ (rayDirSignBits_0 * u32(286331153)));
-    var _S34 : u32 = nodeIndex_0;
+    var _S34 : u32 = nodeIndex_1;
     for(;;)
     {
         if(_S34 >= u32(256))
@@ -455,7 +499,7 @@ struct Ray3f_0
      mDir_0 : vec3<f32>,
 };
 
-fn intersectRayNodeESVO_0( nodeIndex_1 : u32,  nodePos_0 : vec3<i32>,  nodeHeight_0 : i32,  ray_0 : Ray3f_0,  rayDirSign_0 : vec3<f32>,  rayDirSignBits_1 : u32,  computeSurfaceProperties_0 : bool,  maxFootprint_0 : f32) -> RayVolumeIntersection_0
+fn intersectRayNodeESVO_0( nodeIndex_2 : u32,  nodePos_0 : vec3<i32>,  nodeHeight_1 : i32,  ray_0 : Ray3f_0,  rayDirSign_0 : vec3<f32>,  rayDirSignBits_1 : u32,  computeSurfaceProperties_0 : bool,  maxFootprint_0 : f32) -> RayVolumeIntersection_0
 {
     const _S35 : vec3<f32> = vec3<f32>(0.0f, 0.0f, 0.0f);
     var intersection_0 : RayVolumeIntersection_0;
@@ -464,132 +508,130 @@ fn intersectRayNodeESVO_0( nodeIndex_1 : u32,  nodePos_0 : vec3<i32>,  nodeHeigh
     intersection_0.material_0 = u32(0);
     intersection_0.position_0 = _S35;
     intersection_0.normal_1 = _S35;
-    var nodeSize_0 : u32 = (u32(1) << (u32(nodeHeight_0)));
+    var nodeSize_0 : u32 = (u32(1) << (u32(nodeHeight_1)));
     var invRayDir_1 : vec3<f32> = vec3<f32>(1.0f, 1.0f, 1.0f) / ray_0.mDir_0;
     var _S36 : vec3<f32> = vec3<f32>(nodePos_0);
-    var nodeT0_0 : vec3<f32> = (_S36 - ray_0.mOrigin_0) * invRayDir_1;
-    var nodeT1_0 : vec3<f32> = (_S36 + vec3<f32>(f32(nodeSize_0)) - ray_0.mOrigin_0) * invRayDir_1;
-    var _S37 : f32 = max(max(nodeT0_0.x, nodeT0_0.y), nodeT0_0.z);
-    var _S38 : f32 = min(min(nodeT1_0.x, nodeT1_0.y), nodeT1_0.z);
-    if(_S37 < _S38)
+    var nodeEntry_1 : f32 = max3_0((_S36 - ray_0.mOrigin_0) * invRayDir_1);
+    var nodeExit_0 : f32 = min3_0((_S36 + vec3<f32>(f32(nodeSize_0)) - ray_0.mOrigin_0) * invRayDir_1);
+    if(nodeEntry_1 < nodeExit_0)
     {
         var childNodeSize_0 : i32 = i32(nodeSize_0 / u32(2));
-        var _S39 : vec3<i32> = vec3<i32>(childNodeSize_0);
-        var childId_3 : vec3<i32> = findFirstChild_0(_S37, ray_0.mOrigin_0, invRayDir_1, nodePos_0 + _S39);
-        var _S40 : vec3<i32> = nodePos_0 + childId_3 * _S39;
+        var _S37 : vec3<i32> = vec3<i32>(childNodeSize_0);
+        var childId_3 : vec3<i32> = findFirstChild_0(nodeEntry_1, ray_0.mOrigin_0, invRayDir_1, nodePos_0 + _S37);
+        var _S38 : vec3<i32> = nodePos_0 + childId_3 * _S37;
         var nodeStack_0 : array<u32, i32(33)>;
-        var _S41 : vec3<f32> = - rayDirSign_0;
-        var _S42 : u32 = nodeIndex_1;
-        var lastExit_0 : f32 = _S38;
-        var childPos_0 : vec3<i32> = _S40;
+        var _S39 : vec3<f32> = - rayDirSign_0;
+        var _S40 : u32 = nodeIndex_2;
+        var lastExit_0 : f32 = nodeExit_0;
+        var childPos_0 : vec3<i32> = _S38;
         var childNodeSize_1 : i32 = childNodeSize_0;
         var childId_4 : vec3<i32> = childId_3;
-        var _S43 : i32 = nodeHeight_0;
-        var _S44 : vec3<i32> = vec3<i32>(i32(1));
+        var _S41 : i32 = nodeHeight_1;
+        var _S42 : vec3<i32> = vec3<i32>(i32(1));
         for(;;)
         {
             var childT1_0 : vec3<f32> = (vec3<f32>(childPos_0 + vec3<i32>(childNodeSize_1)) - ray_0.mOrigin_0) * invRayDir_1;
-            var _S45 : f32 = min(min(childT1_0.x, childT1_0.y), childT1_0.z);
-            var childNodeIndex_1 : u32 = GET_NODE_FN_0(_S42, (u32(((((childId_4[i32(0)] & (i32(1)))) | ((((childId_4[i32(1)] & (i32(1)))) << bitcast<u32>(i32(1))))) | ((((childId_4[i32(2)] & (i32(1)))) << bitcast<u32>(i32(2)))))) ^ (rayDirSignBits_1)));
-            var _S46 : u32;
+            var tChildExit_0 : f32 = min3_0(childT1_0);
+            var childNodeIndex_1 : u32 = GET_NODE_FN_0(_S40, (u32(((((childId_4[i32(0)] & (i32(1)))) | ((((childId_4[i32(1)] & (i32(1)))) << bitcast<u32>(i32(1))))) | ((((childId_4[i32(2)] & (i32(1)))) << bitcast<u32>(i32(2)))))) ^ (rayDirSignBits_1)));
+            var _S43 : u32;
             var lastExit_1 : f32;
             var childPos_1 : vec3<i32>;
             var childId_5 : vec3<i32>;
-            var _S47 : i32;
+            var _S44 : i32;
             var childNodeSize_2 : i32;
-            var _S48 : bool;
+            var _S45 : bool;
             if(childNodeIndex_1 > u32(0))
             {
                 var childT0_0 : vec3<f32> = (vec3<f32>(childPos_0) - ray_0.mOrigin_0) * invRayDir_1;
-                var _S49 : f32 = max(max(childT0_0.x, childT0_0.y), childT0_0.z);
-                var hasLargeFootprint_0 : bool = f32(childNodeSize_1) / _S45 > maxFootprint_0;
+                var tChildEntry_0 : f32 = max3_0(childT0_0);
+                var hasLargeFootprint_0 : bool = f32(childNodeSize_1) / tChildExit_0 > maxFootprint_0;
                 if(childNodeIndex_1 >= u32(256))
                 {
-                    _S48 = hasLargeFootprint_0;
+                    _S45 = hasLargeFootprint_0;
                 }
                 else
                 {
-                    _S48 = false;
+                    _S45 = false;
                 }
-                if(_S48)
+                if(_S45)
                 {
-                    if(_S45 < lastExit_0)
+                    if(tChildExit_0 < lastExit_0)
                     {
-                        nodeStack_0[_S43] = _S42;
+                        nodeStack_0[_S41] = _S40;
                     }
-                    var _S50 : i32 = _S43 - i32(1);
+                    var _S46 : i32 = _S41 - i32(1);
                     var childNodeSize_3 : i32 = childNodeSize_1 / i32(2);
-                    var _S51 : vec3<i32> = vec3<i32>(childNodeSize_3);
-                    var childId_6 : vec3<i32> = findFirstChild_0(_S49, ray_0.mOrigin_0, invRayDir_1, childPos_0 + _S51);
-                    var _S52 : vec3<i32> = childPos_0 + childId_6 * _S51;
-                    _S46 = childNodeIndex_1;
-                    lastExit_1 = _S45;
-                    _S47 = _S50;
-                    childPos_1 = _S52;
+                    var _S47 : vec3<i32> = vec3<i32>(childNodeSize_3);
+                    var childId_6 : vec3<i32> = findFirstChild_0(tChildEntry_0, ray_0.mOrigin_0, invRayDir_1, childPos_0 + _S47);
+                    var _S48 : vec3<i32> = childPos_0 + childId_6 * _S47;
+                    _S43 = childNodeIndex_1;
+                    lastExit_1 = tChildExit_0;
+                    _S44 = _S46;
+                    childPos_1 = _S48;
                     childNodeSize_2 = childNodeSize_3;
                     childId_5 = childId_6;
                 }
                 else
                 {
                     intersection_0.hit_0 = true;
-                    intersection_0.distance_0 = _S49;
+                    intersection_0.distance_0 = tChildEntry_0;
                     if(computeSurfaceProperties_0)
                     {
                         intersection_0.material_0 = findNearestMaterial_0(childNodeIndex_1, rayDirSignBits_1);
-                        intersection_0.normal_1 = vec3<f32>(vec3<f32>(_S49, _S49, _S49) == childT0_0) * _S41;
+                        intersection_0.normal_1 = vec3<f32>(vec3<f32>(tChildEntry_0, tChildEntry_0, tChildEntry_0) == childT0_0) * _S39;
                     }
-                    _S46 = _S42;
+                    _S43 = _S40;
                     lastExit_1 = lastExit_0;
-                    _S47 = _S43;
+                    _S44 = _S41;
                     childPos_1 = childPos_0;
                     childNodeSize_2 = childNodeSize_1;
                     childId_5 = childId_4;
                 }
-                _S42 = _S46;
-                _S43 = _S47;
+                _S40 = _S43;
+                _S41 = _S44;
             }
             else
             {
-                var nextChildFlipsVec_0 : vec3<i32> = vec3<i32>(childT1_0 <= vec3<f32>(_S45, _S45, _S45));
+                var nextChildFlipsVec_0 : vec3<i32> = vec3<i32>(childT1_0 <= vec3<f32>(tChildExit_0, tChildExit_0, tChildExit_0));
                 var childId_7 : vec3<i32> = (childId_4 ^ (nextChildFlipsVec_0));
                 var childPos_2 : vec3<i32> = childPos_0 + nextChildFlipsVec_0 * vec3<i32>(childNodeSize_1);
                 if(!all(((childId_7 & (nextChildFlipsVec_0))) == nextChildFlipsVec_0))
                 {
                     var differingBits_0 : vec3<i32> = (childPos_0 ^ (childPos_2));
                     var msb_0 : u32 = firstLeadingBit(u32(((differingBits_0[i32(0)] | (differingBits_0[i32(1)])) | (differingBits_0[i32(2)]))));
-                    var _S53 : i32 = i32(msb_0 + u32(1));
+                    var _S49 : i32 = i32(msb_0 + u32(1));
                     var childNodeSize_4 : i32 = (i32(1) << bitcast<u32>(i32(msb_0)));
-                    var childId_8 : vec3<i32> = ((childPos_2 >> (vec3<u32>(msb_0))) & (_S44));
-                    var _S54 : vec3<u32> = vec3<u32>(u32(_S53));
-                    var childPos_3 : vec3<i32> = (((childPos_2 >> (_S54)) << (_S54))) + childId_8 * vec3<i32>(childNodeSize_4);
-                    _S46 = nodeStack_0[_S53];
+                    var childId_8 : vec3<i32> = ((childPos_2 >> (vec3<u32>(msb_0))) & (_S42));
+                    var _S50 : vec3<u32> = vec3<u32>(u32(_S49));
+                    var childPos_3 : vec3<i32> = (((childPos_2 >> (_S50)) << (_S50))) + childId_8 * vec3<i32>(childNodeSize_4);
+                    _S43 = nodeStack_0[_S49];
                     lastExit_1 = 0.0f;
-                    _S47 = _S53;
+                    _S44 = _S49;
                     childPos_1 = childPos_3;
                     childNodeSize_2 = childNodeSize_4;
                     childId_5 = childId_8;
                 }
                 else
                 {
-                    _S46 = _S42;
+                    _S43 = _S40;
                     lastExit_1 = lastExit_0;
-                    _S47 = _S43;
+                    _S44 = _S41;
                     childPos_1 = childPos_2;
                     childNodeSize_2 = childNodeSize_1;
                     childId_5 = childId_7;
                 }
-                _S42 = _S46;
-                _S43 = _S47;
+                _S40 = _S43;
+                _S41 = _S44;
             }
             if(intersection_0.hit_0 == false)
             {
-                _S48 = _S43 <= nodeHeight_0;
+                _S45 = _S41 <= nodeHeight_1;
             }
             else
             {
-                _S48 = false;
+                _S45 = false;
             }
-            if(!_S48)
+            if(!_S45)
             {
                 break;
             }
@@ -602,31 +644,21 @@ fn intersectRayNodeESVO_0( nodeIndex_1 : u32,  nodePos_0 : vec3<i32>,  nodeHeigh
     return intersection_0;
 }
 
-struct SubDAG_0
+fn intersect_subdag_0( ray_1 : Ray3f_0,  subDAG_1 : SubDAG_0,  computeSurfaceProperties_1 : bool,  maxFootprint_1 : f32) -> RayVolumeIntersection_0
 {
-     lowerBound_0 : vec3<i32>,
-     nodeHeight_1 : i32,
-     padding0_0 : u32,
-     nodeIndex_2 : u32,
-     padding1_0 : u32,
-     padding2_0 : u32,
-};
-
-fn intersect_subdag_0( ray_1 : Ray3f_0,  subDAG_0 : SubDAG_0,  computeSurfaceProperties_1 : bool,  maxFootprint_1 : f32) -> RayVolumeIntersection_0
-{
-    var _S55 : vec3<f32> = vec3<f32>(0.0f);
+    var _S51 : vec3<f32> = vec3<f32>(0.0f);
     var intersection_1 : RayVolumeIntersection_0;
     intersection_1.hit_0 = false;
     intersection_1.distance_0 = 0.0f;
     intersection_1.material_0 = u32(0);
-    intersection_1.position_0 = _S55;
-    intersection_1.normal_1 = _S55;
-    if(any(bool3_and_0(ray_1.mDir_0 < _S55, ray_1.mOrigin_0 < _S55)))
+    intersection_1.position_0 = _S51;
+    intersection_1.normal_1 = _S51;
+    if(any(bool3_and_0(ray_1.mDir_0 < _S51, ray_1.mOrigin_0 < _S51)))
     {
         return intersection_1;
     }
-    var _S56 : u32 = (u32(1) << (u32(subDAG_0.nodeHeight_1)));
-    if(any(bool3_and_0(ray_1.mDir_0 >= _S55, ray_1.mOrigin_0 >= vec3<f32>(f32(_S56)) - vec3<f32>(0.5f))))
+    var _S52 : u32 = (u32(1) << (u32(subDAG_1.nodeHeight_0)));
+    if(any(bool3_and_0(ray_1.mDir_0 >= _S51, ray_1.mOrigin_0 >= vec3<f32>(f32(_S52)) - vec3<f32>(0.5f))))
     {
         return intersection_1;
     }
@@ -636,8 +668,8 @@ fn intersect_subdag_0( ray_1 : Ray3f_0,  subDAG_0 : SubDAG_0,  computeSurfacePro
     var reflectedRay_0 : Ray3f_0 = ray_1;
     reflectedRay_0.mOrigin_0 = (reflectedRay_0.mOrigin_0 + vec3<f32>(0.5f, 0.5f, 0.5f)) * rayDirSign_1;
     reflectedRay_0.mDir_0 = abs(reflectedRay_0.mDir_0);
-    var nodeSize_1 : i32 = i32(_S56);
-    intersection_1 = intersectRayNodeESVO_0(subDAG_0.nodeIndex_2, subDAG_0.lowerBound_0 * vec3<i32>(rayDirSign_1) - rayDirSignBitsAsVec_0 * vec3<i32>(nodeSize_1, nodeSize_1, nodeSize_1), subDAG_0.nodeHeight_1, reflectedRay_0, rayDirSign_1, rayDirSignBits_2, computeSurfaceProperties_1, maxFootprint_1);
+    var nodeSize_1 : i32 = i32(_S52);
+    intersection_1 = intersectRayNodeESVO_0(subDAG_1.nodeIndex_0, subDAG_1.lowerBound_0 * vec3<i32>(rayDirSign_1) - rayDirSignBitsAsVec_0 * vec3<i32>(nodeSize_1, nodeSize_1, nodeSize_1), subDAG_1.nodeHeight_0, reflectedRay_0, rayDirSign_1, rayDirSignBits_2, computeSurfaceProperties_1, maxFootprint_1);
     if(intersection_1.hit_0)
     {
         intersection_1.position_0 = ray_1.mOrigin_0 + ray_1.mDir_0 * vec3<f32>(intersection_1.distance_0);
@@ -650,11 +682,7 @@ fn shoot_shadow_ray_0( ray_2 : Ray3f_0) -> bool
 {
     if(((globalParams_0.settings_0 & (i32(1)))) != i32(0))
     {
-        var subDAG_1 : SubDAG_0;
-        subDAG_1.lowerBound_0 = vec3<i32>(vec3<u32>(u32(0)));
-        subDAG_1.nodeHeight_1 = i32(6);
-        subDAG_1.nodeIndex_2 = u32(261);
-        return intersect_subdag_0(ray_2, subDAG_1, false, 0.00350000010803342f).hit_0;
+        return intersect_subdag_0(ray_2, initial_subdag_0(), false, 0.00350000010803342f).hit_0;
     }
     return false;
 }
@@ -663,52 +691,43 @@ struct MaterialAndShadingData_0
 {
      material_1 : PBRTDiffuseMaterialInstance_0,
      shading_data_0 : ShadingData_0,
+     emission_0 : vec3<f32>,
 };
 
 fn MaterialAndShadingData_get_direct_lighting_0( this_8 : MaterialAndShadingData_0,  sampler_1 : ptr<function, TinyUniformSampleGenerator_0>) -> vec3<f32>
 {
-    var _S57 : vec3<f32> = ShadingData_computeRayOrigin_0(this_8.shading_data_0, true);
-    var _S58 : vec3<f32> = sample_light_0(&((*sampler_1)));
-    var _S59 : Ray3f_0 = Ray3f_0( _S57, _S58 );
-    var lighting_0 : f32 = f32(!shoot_shadow_ray_0(_S59));
-    var _S60 : vec3<f32> = PBRTDiffuseMaterialInstance_eval_0(this_8.material_1, this_8.shading_data_0, globalParams_0.sun_direction_0, &((*sampler_1)));
-    return _S60 * vec3<f32>(lighting_0) * globalParams_0.sun_colour_0;
+    var _S53 : vec3<f32> = ShadingData_computeRayOrigin_0(this_8.shading_data_0, true);
+    var _S54 : vec3<f32> = sample_light_0(&((*sampler_1)));
+    var _S55 : Ray3f_0 = Ray3f_0( _S53, _S54 );
+    var lighting_0 : f32 = f32(!shoot_shadow_ray_0(_S55));
+    var _S56 : vec3<f32> = PBRTDiffuseMaterialInstance_eval_0(this_8.material_1, this_8.shading_data_0, globalParams_0.sun_direction_0, &((*sampler_1)));
+    return _S56 * vec3<f32>(lighting_0) * globalParams_0.sun_colour_0 + this_8.emission_0;
 }
 
 fn MaterialHeader_x24init_0() -> MaterialHeader_0
 {
-    var _S61 : MaterialHeader_0;
-    _S61.packedData_0 = vec4<u32>(u32(0), u32(0), u32(0), u32(0));
-    return _S61;
+    var _S57 : MaterialHeader_0;
+    _S57.packedData_0 = vec4<u32>(u32(0), u32(0), u32(0), u32(0));
+    return _S57;
 }
 
 fn ShadingData_x24init_0() -> ShadingData_0
 {
-    var _S62 : ShadingData_0;
-    _S62.mtl_0 = MaterialHeader_x24init_0();
-    return _S62;
+    var _S58 : ShadingData_0;
+    _S58.mtl_0 = MaterialHeader_x24init_0();
+    return _S58;
 }
 
 fn MaterialAndShadingData_x24init_0() -> MaterialAndShadingData_0
 {
-    var _S63 : MaterialAndShadingData_0;
-    _S63.shading_data_0 = ShadingData_x24init_0();
-    return _S63;
-}
-
-fn ShadingFrame_createIdentity_0() -> ShadingFrame_0
-{
-    var sf_2 : ShadingFrame_0;
-    sf_2.T_0 = vec3<f32>(1.0f, 0.0f, 0.0f);
-    sf_2.B_0 = vec3<f32>(0.0f, 1.0f, 0.0f);
-    sf_2.N_0 = vec3<f32>(0.0f, 0.0f, 1.0f);
-    return sf_2;
+    var _S59 : MaterialAndShadingData_0;
+    _S59.shading_data_0 = ShadingData_x24init_0();
+    return _S59;
 }
 
 fn create_shading_data_from_intersection_0( intersection_2 : RayVolumeIntersection_0,  ray_3 : Ray3f_0) -> ShadingData_0
 {
     var shading_data_1 : ShadingData_0 = ShadingData_x24init_0();
-    shading_data_1.frame_0 = ShadingFrame_createIdentity_0();
     shading_data_1.frame_0.N_0 = intersection_2.normal_1;
     shading_data_1.frame_0.T_0 = intersection_2.normal_1.yzx;
     shading_data_1.frame_0.B_0 = intersection_2.normal_1.zxy;
@@ -720,32 +739,28 @@ fn create_shading_data_from_intersection_0( intersection_2 : RayVolumeIntersecti
     return shading_data_1;
 }
 
-var<private> PALETTE_0 : array<vec3<f32>, i32(2)> = array<vec3<f32>, i32(2)>( vec3<f32>(1.0f), vec3<f32>(1.0f, 0.0f, 0.0f) );
-
 fn create_material_from_intersection_0( intersection_3 : RayVolumeIntersection_0,  ray_4 : Ray3f_0) -> MaterialAndShadingData_0
 {
     var output_0 : MaterialAndShadingData_0 = MaterialAndShadingData_x24init_0();
     output_0.shading_data_0 = create_shading_data_from_intersection_0(intersection_3, ray_4);
-    var _S64 : PBRTDiffuseBSDF_0 = PBRTDiffuseBSDF_0( PALETTE_0[intersection_3.material_0 - u32(1)] );
+    var _S60 : vec3<f32> = materials_0[intersection_3.material_0 - u32(1)].base_colour_0;
+    var _S61 : PBRTDiffuseBSDF_0 = PBRTDiffuseBSDF_0( materials_0[intersection_3.material_0 - u32(1)].base_colour_0 );
     output_0.material_1.sf_1 = output_0.shading_data_0.frame_0;
-    output_0.material_1.bsdf_0 = _S64;
+    output_0.material_1.bsdf_0 = _S61;
+    output_0.emission_0 = _S60 * vec3<f32>(materials_0[intersection_3.material_0 - u32(1)].emission_factor_0);
     return output_0;
 }
 
 fn compute_shading_0( intersection_4 : RayVolumeIntersection_0,  ray_5 : Ray3f_0,  sampler_2 : ptr<function, TinyUniformSampleGenerator_0>) -> vec3<f32>
 {
     var material_2 : MaterialAndShadingData_0 = create_material_from_intersection_0(intersection_4, ray_5);
-    var _S65 : vec3<f32> = MaterialAndShadingData_get_direct_lighting_0(material_2, &((*sampler_2)));
-    var _S66 : vec3<f32> = vec3<f32>(1.0f);
-    var subDAG_2 : SubDAG_0;
-    subDAG_2.lowerBound_0 = vec3<i32>(vec3<u32>(u32(0)));
-    subDAG_2.nodeHeight_1 = i32(6);
-    subDAG_2.nodeIndex_2 = u32(261);
-    var _S67 : SubDAG_0 = subDAG_2;
+    var _S62 : vec3<f32> = MaterialAndShadingData_get_direct_lighting_0(material_2, &((*sampler_2)));
+    var _S63 : vec3<f32> = vec3<f32>(1.0f);
+    var _S64 : SubDAG_0 = initial_subdag_0();
     var material_3 : MaterialAndShadingData_0 = material_2;
     var i_1 : u32 = u32(0);
-    var throughput_0 : vec3<f32> = _S66;
-    var radiance_0 : vec3<f32> = _S65;
+    var throughput_0 : vec3<f32> = _S63;
+    var radiance_0 : vec3<f32> = _S62;
     for(;;)
     {
         if(i_1 < globalParams_0.num_bounces_0)
@@ -755,50 +770,46 @@ fn compute_shading_0( intersection_4 : RayVolumeIntersection_0,  ray_5 : Ray3f_0
         {
             break;
         }
-        var _S68 : MaterialAndShadingData_0 = material_3;
+        var _S65 : MaterialAndShadingData_0 = material_3;
         var sample_result_0 : BSDFSample_0;
-        var _S69 : bool = PBRTDiffuseMaterialInstance_sample_0(material_3.material_1, material_3.shading_data_0, &((*sampler_2)), &(sample_result_0), true);
-        if(!_S69)
+        var _S66 : bool = PBRTDiffuseMaterialInstance_sample_0(material_3.material_1, material_3.shading_data_0, &((*sampler_2)), &(sample_result_0), true);
+        if(!_S66)
         {
             break;
         }
-        var _S70 : vec3<f32>;
-        var _S71 : MaterialAndShadingData_0;
+        var _S67 : vec3<f32>;
+        var _S68 : MaterialAndShadingData_0;
         var throughput_1 : vec3<f32> = throughput_0 * sample_result_0.weight_1;
-        var _S72 : Ray3f_0 = Ray3f_0( ShadingData_computeRayOrigin_0(_S68.shading_data_0, true), sample_result_0.wo_2 );
-        var _S73 : RayVolumeIntersection_0 = intersect_subdag_0(_S72, _S67, true, 0.00350000010803342f);
-        if(_S73.hit_0)
+        var _S69 : Ray3f_0 = Ray3f_0( ShadingData_computeRayOrigin_0(_S65.shading_data_0, true), sample_result_0.wo_2 );
+        var _S70 : RayVolumeIntersection_0 = intersect_subdag_0(_S69, _S64, true, 0.00350000010803342f);
+        if(_S70.hit_0)
         {
-            var material_4 : MaterialAndShadingData_0 = create_material_from_intersection_0(_S73, _S72);
-            _S71 = material_4;
-            var _S74 : vec3<f32> = MaterialAndShadingData_get_direct_lighting_0(material_4, &((*sampler_2)));
-            _S70 = radiance_0 + _S74 * throughput_1;
+            var material_4 : MaterialAndShadingData_0 = create_material_from_intersection_0(_S70, _S69);
+            _S68 = material_4;
+            var _S71 : vec3<f32> = MaterialAndShadingData_get_direct_lighting_0(material_4, &((*sampler_2)));
+            _S67 = radiance_0 + _S71 * throughput_1;
         }
         else
         {
             radiance_0 = radiance_0 + globalParams_0.background_colour_0 * throughput_1;
             break;
         }
-        var _S75 : u32 = i_1 + u32(1);
-        material_3 = _S71;
-        i_1 = _S75;
+        var _S72 : u32 = i_1 + u32(1);
+        material_3 = _S68;
+        i_1 = _S72;
         throughput_0 = throughput_1;
-        radiance_0 = _S70;
+        radiance_0 = _S67;
     }
     return radiance_0;
 }
 
 fn trace_0( ray_6 : Ray3f_0,  sampler_3 : ptr<function, TinyUniformSampleGenerator_0>) -> vec3<f32>
 {
-    var subDAG_3 : SubDAG_0;
-    subDAG_3.lowerBound_0 = vec3<i32>(vec3<u32>(u32(0)));
-    subDAG_3.nodeHeight_1 = i32(6);
-    subDAG_3.nodeIndex_2 = u32(261);
-    var intersection_5 : RayVolumeIntersection_0 = intersect_subdag_0(ray_6, subDAG_3, true, 0.00350000010803342f);
+    var intersection_5 : RayVolumeIntersection_0 = intersect_subdag_0(ray_6, initial_subdag_0(), true, 0.00350000010803342f);
     if(intersection_5.hit_0)
     {
-        var _S76 : vec3<f32> = compute_shading_0(intersection_5, ray_6, &((*sampler_3)));
-        return _S76;
+        var _S73 : vec3<f32> = compute_shading_0(intersection_5, ray_6, &((*sampler_3)));
+        return _S73;
     }
     return globalParams_0.background_colour_0;
 }
@@ -807,41 +818,38 @@ fn trace_0( ray_6 : Ray3f_0,  sampler_3 : ptr<function, TinyUniformSampleGenerat
 @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) dispatch_thread_id_0 : vec3<u32>)
 {
-    var _S77 : vec2<u32> = dispatch_thread_id_0.xy;
-    var _S78 : vec2<f32> = vec2<f32>(_S77);
-    var _S79 : vec2<f32> = (_S78 + vec2<f32>(0.5f)) / vec2<f32>(globalParams_0.resolution_0);
-    var rng_3 : TinyUniformSampleGenerator_0 = TinyUniformSampleGenerator_x24init_0(_S77, globalParams_0.frame_index_0);
-    var _S80 : vec2<f32> = vec2<f32>(0.5f);
+    var _S74 : vec2<u32> = dispatch_thread_id_0.xy;
+    var _S75 : vec2<f32> = vec2<f32>(_S74);
+    var _S76 : vec2<f32> = (_S75 + vec2<f32>(0.5f)) / vec2<f32>(globalParams_0.resolution_0);
+    var rng_3 : TinyUniformSampleGenerator_0 = TinyUniformSampleGenerator_x24init_0(_S74, globalParams_0.frame_index_0);
+    var _S77 : vec2<f32> = vec2<f32>(0.5f);
     var thread_offset_0 : vec2<f32>;
     if(((globalParams_0.settings_0 & (i32(2)))) != i32(0))
     {
-        var _S81 : vec2<f32> = sampleNext2D_0(&(rng_3));
-        thread_offset_0 = _S81;
+        var _S78 : vec2<f32> = sampleNext2D_0(&(rng_3));
+        thread_offset_0 = _S78;
     }
     else
     {
-        thread_offset_0 = _S80;
+        thread_offset_0 = _S77;
     }
-    var _S82 : vec2<f32> = (_S78 + thread_offset_0) / vec2<f32>(globalParams_0.resolution_0);
-    var TexCoords_0 : vec2<f32> = _S82;
-    TexCoords_0[i32(1)] = 1.0f - _S82.y;
+    var _S79 : vec2<f32> = (_S75 + thread_offset_0) / vec2<f32>(globalParams_0.resolution_0);
+    var TexCoords_0 : vec2<f32> = _S79;
+    TexCoords_0[i32(1)] = 1.0f - _S79.y;
     var ray_7 : Ray3f_0;
     ray_7.mOrigin_0 = globalParams_0.cameraPos_0;
-    var _S83 : mat4x4<f32> = unpackStorage_0(globalParams_0.VInv_0);
-    var dirEye_0 : vec4<f32> = (((vec4<f32>(vec3<f32>(TexCoords_0 * vec2<f32>(2.0f) - vec2<f32>(1.0f), -1.0f), 1.0f)) * (unpackStorage_0(globalParams_0.PInv_0))));
-    dirEye_0[i32(3)] = 0.0f;
-    ray_7.mDir_0 = normalize((((dirEye_0) * (_S83))).xyz);
+    ray_7.mDir_0 = createRay_0(TexCoords_0, unpackStorage_0(globalParams_0.PInv_0), unpackStorage_0(globalParams_0.VInv_0));
     var sample_1 : vec3<f32> = trace_0(ray_7, &(rng_3));
     var sample_2 : vec3<f32>;
     if(((globalParams_0.settings_0 & (i32(2)))) != i32(0) && globalParams_0.accumulated_frame_index_0 > u32(0))
     {
-        sample_2 = sample_1 + (textureSampleLevel((entryPointParams_previous_0), (entryPointParams_sampler_0), (_S79), (0.0f)).xyz);
+        sample_2 = sample_1 + (textureSampleLevel((entryPointParams_previous_0), (entryPointParams_sampler_0), (_S76), (0.0f)).xyz);
     }
     else
     {
         sample_2 = sample_1;
     }
-    textureStore((entryPointParams_current_0), (_S77), vec4<f32>((sample_2), 1));
+    textureStore((entryPointParams_current_0), (_S74), vec4<f32>((sample_2), 1));
     return;
 }
 

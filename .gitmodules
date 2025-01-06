@@ -7,3 +7,6 @@
 [submodule "voxviewer/Falcor"]
 	path = voxviewer/Falcor
 	url = https://github.com/NVIDIAGameWorks/Falcor/
+[submodule "voxviewer/tony-mc-mapface"]
+	path = voxviewer/tony-mc-mapface
+	url = https://github.com/h3r2tic/tony-mc-mapface

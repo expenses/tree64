@@ -41,6 +41,13 @@ struct Uniforms {
     padding: [u32; 1],
 }
 
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+struct Material {
+    base_colour: glam::Vec3,
+    emission_factor: f32,
+}
+
 struct Pipelines {
     blit_srgb: wgpu::RenderPipeline,
     bgl: wgpu::BindGroupLayout,
@@ -50,10 +57,16 @@ struct Pipelines {
     uniform_buffer: wgpu::Buffer,
     dag_data: wgpu::Buffer,
     blit_uniform_buffer: wgpu::Buffer,
+    materials: wgpu::Buffer,
+    tonemapping_lut: wgpu::Texture,
 }
 
 impl Pipelines {
-    async fn new(device: &wgpu::Device, swapchain_format: wgpu::TextureFormat) -> Self {
+    async fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        swapchain_format: wgpu::TextureFormat,
+    ) -> Self {
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[
@@ -79,6 +92,16 @@ impl Pipelines {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
@@ -112,6 +135,16 @@ impl Pipelines {
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
                         format: wgpu::TextureFormat::Rgba16Float,
@@ -120,7 +153,7 @@ impl Pipelines {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 3,
+                    binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
@@ -130,7 +163,7 @@ impl Pipelines {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 4,
+                    binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
@@ -148,6 +181,11 @@ impl Pipelines {
             [1, 1, 1, 259, 1, 259, 259, 0],
             [1, 1, 1, 260, 1, 260, 260, 0],
         ];
+
+        let dds = ddsfile::Dds::read(std::io::Cursor::new(
+            load_resource_bytes("tony_mc_mapface.dds").await,
+        ))
+        .unwrap();
 
         Self {
             sampler,
@@ -226,12 +264,63 @@ impl Pipelines {
                 contents: bytemuck::cast_slice(&dag_data),
                 usage: wgpu::BufferUsages::STORAGE,
             }),
+            materials: device.create_buffer_init(&BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&[
+                    Material {
+                        base_colour: glam::Vec3::splat(1.0),
+                        emission_factor: 0.0,
+                    },
+                    Material {
+                        base_colour: glam::Vec3::new(1.0, 0.0, 0.0),
+                        emission_factor: 5.0,
+                    },
+                ]),
+                usage: wgpu::BufferUsages::STORAGE,
+            }),
+            tonemapping_lut: device.create_texture_with_data(
+                &queue,
+                &wgpu::TextureDescriptor {
+                    label: None,
+                    mip_level_count: 1,
+                    size: wgpu::Extent3d {
+                        width: 48,
+                        height: 48,
+                        depth_or_array_layers: 48,
+                    },
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D3,
+                    format: wgpu::TextureFormat::Rgb9e5Ufloat,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                },
+                wgpu::util::TextureDataOrder::LayerMajor,
+                &dds.data,
+            ),
         }
     }
 }
 
 async fn load_resource_bytes(filename: &str) -> Vec<u8> {
-    std::fs::read(std::path::Path::new("assets").join(filename)).expect(filename)
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::fs::read(std::path::Path::new("assets").join(filename)).expect(filename)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::JsCast;
+        use wgpu::web_sys;
+        let window = web_sys::window().unwrap();
+        let resp_value = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(filename))
+            .await
+            .unwrap();
+        let resp: web_sys::Response = resp_value.dyn_into().unwrap();
+        let resp_array_buffer = wasm_bindgen_futures::JsFuture::from(resp.array_buffer().unwrap())
+            .await
+            .unwrap();
+        let array = wasm_bindgen_futures::js_sys::Uint8Array::new(&resp_array_buffer);
+        array.to_vec()
+    }
 }
 
 async fn load_resource_str(filename: &str) -> String {
@@ -298,18 +387,22 @@ impl Resizables {
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
+                        resource: pipelines.materials.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
                         resource: wgpu::BindingResource::TextureView(
                             &a.create_view(&Default::default()),
                         ),
                     },
                     wgpu::BindGroupEntry {
-                        binding: 3,
+                        binding: 4,
                         resource: wgpu::BindingResource::TextureView(
                             &b.create_view(&Default::default()),
                         ),
                     },
                     wgpu::BindGroupEntry {
-                        binding: 4,
+                        binding: 5,
                         resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
                     },
                 ],
@@ -333,6 +426,12 @@ impl Resizables {
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
+                        resource: wgpu::BindingResource::TextureView(
+                            &pipelines.tonemapping_lut.create_view(&Default::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
                         resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
                     },
                 ],
@@ -400,7 +499,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 
     log::info!("{:?}\n{:?}", &config, &swapchain_capabilities.formats);
 
-    let pipelines = Pipelines::new(&device, swapchain_format).await;
+    let pipelines = Pipelines::new(&device, &queue, swapchain_format).await;
     let mut resizables = Resizables::new(size.width, size.height, &device, &pipelines);
 
     let mut egui_renderer = egui_wgpu::Renderer::new(&device, swapchain_format, None, 1, false);
@@ -446,7 +545,6 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
             // `event_loop.run` never returns, therefore we must do this to ensure
             // the resources are properly cleaned up.
             let _ = (&instance, &adapter);
-
 
             match event {
                 Event::WindowEvent { event, .. } => {

@@ -39,7 +39,6 @@ enum Settings {
     AccumulateSamples
 };
 
-[ForceInline]
 SubDAG initial_subdag() {
     SubDAG subDAG;
     subDAG.lowerBound = uint3(0);
@@ -50,7 +49,6 @@ SubDAG initial_subdag() {
 
 ShadingData create_shading_data_from_intersection(RayVolumeIntersection intersection, Ray3f ray) {
     ShadingData shading_data;
-    shading_data.frame = ShadingFrame.createIdentity();
     shading_data.frame.N = intersection.normal;
     shading_data.frame.T = intersection.normal.yzx;
     shading_data.frame.B = intersection.normal.zxy;
@@ -62,15 +60,21 @@ ShadingData create_shading_data_from_intersection(RayVolumeIntersection intersec
     return shading_data;
 }
 
-static float3[] PALETTE = {float3(1.), float3(1.,0.,0.)};
+struct Material {
+    float3 base_colour;
+    float emission_factor;
+};
+
+StructuredBuffer<Material> materials;
 
 struct MaterialAndShadingData {
     PBRTDiffuseMaterialInstance material;
     ShadingData shading_data;
+    float3 emission;
 
     float3 get_direct_lighting<S: ISampleGenerator>(inout S sampler) {
         float lighting = float(!shoot_shadow_ray(Ray3f(shading_data.computeRayOrigin(), sample_light(sampler))));
-        return material.eval(shading_data, sun_direction, sampler) * lighting * sun_colour;
+        return material.eval(shading_data, sun_direction, sampler) * lighting * sun_colour + emission;
     }
 };
 
@@ -78,13 +82,13 @@ MaterialAndShadingData create_material_from_intersection(RayVolumeIntersection i
     MaterialAndShadingData output;
     output.shading_data = create_shading_data_from_intersection(intersection, ray);
 
-    let base_colour = PALETTE[intersection.material - 1u];
+    let material = materials[intersection.material - 1u];
 
     output.material = PBRTDiffuseMaterialInstance(
         output.shading_data.frame,
-        {base_colour},
-        //float3(.01)
+        {material.base_colour},
     );
+    output.emission = material.base_colour * material.emission_factor;
 
     return output;
 }
