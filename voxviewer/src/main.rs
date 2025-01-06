@@ -409,11 +409,11 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 
     let mut mouse_down = false;
 
-    let mut sun_long = 1.0_f32;
-    let mut sun_lat = 1.0_f32;
+    let mut sun_long = -45.0_f32;
+    let mut sun_lat = 45.0_f32;
     let mut enable_shadows = false;
     let mut frame_index = 0;
-    let mut sun_apparent_size = 0.0_f32;
+    let mut sun_apparent_size = 5.0_f32;
     let mut accumulate_samples = false;
     let mut accumulated_frame_index = 0;
     let mut num_bounces = 0;
@@ -480,7 +480,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                 ).inverse(),
                                 resolution: glam::UVec2::new(config.width, config.height),
                                 camera_pos: transform.position.into(),
-                                sun_direction: glam::Vec3::new(sun_long.sin() * sun_lat.cos(), sun_lat.sin(), sun_long.cos() * sun_lat.cos()),
+                                sun_direction: glam::Vec3::new(sun_long.to_radians().sin() * sun_lat.to_radians().cos(), sun_lat.to_radians().sin(), sun_long.to_radians().cos() * sun_lat.to_radians().cos()),
                                 settings: (enable_shadows as i32) | (accumulate_samples as i32) << 1,
                                 frame_index,
                                 accumulated_frame_index, num_bounces,
@@ -526,10 +526,10 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                     ui.checkbox(&mut enable_shadows, "Enable shadows");
                                     egui::CollapsingHeader::new("Sun").default_open(true).show(ui, |ui| {
                                         ui.label("Latitude");
-                                        ui.add(egui::Slider::new(&mut sun_lat, 0.0..=std::f32::consts::FRAC_PI_2));
+                                        ui.add(egui::Slider::new(&mut sun_lat, 0.0..=90.0));
                                         ui.label("Longitude");
-                                        ui.add(egui::Slider::new(&mut sun_long, -std::f32::consts::PI..=std::f32::consts::PI));
-                                        ui.label("Apparent size (degrees)");
+                                        ui.add(egui::Slider::new(&mut sun_long, -180.0..=180.0));
+                                        ui.label("Apparent size");
                                         ui.add(egui::Slider::new(&mut sun_apparent_size, 0.0..=90.0));
                                     });
                                 });
