@@ -196,6 +196,10 @@ impl Pipelines {
     }
 }
 
+async fn load_resource_bytes(filename: &str) -> Vec<u8> {
+    std::fs::read(std::path::Path::new("assets").join(filename)).expect(filename)
+}
+
 async fn load_resource_str(filename: &str) -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {

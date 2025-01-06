@@ -5,6 +5,7 @@ import Rendering.Materials.BSDFs.SimpleBTDF;
 import Rendering.Materials.BSDFs.DisneyDiffuseBRDF;
 import Scene.Material.MaterialData;
 import Utils.Sampling.TinyUniformSampleGenerator;
+import Utils.Sampling.UniformSampleGenerator;
 
 import Utils.Math.ShadingFrame;
 import Utils.Math.MathHelpers;
@@ -56,6 +57,33 @@ ShadingData create_shading_data_from_intersection(RayVolumeIntersection intersec
     return shading_data;
 }
 
+static float3[] PALETTE = {float3(1.), float3(1.,0.,0.)};
+
+struct MaterialAndShadingData {
+    PBRTDiffuseMaterialInstance material;
+    ShadingData shading_data;
+
+    float3 get_direct_lighting<S: ISampleGenerator>(inout S sampler) {
+        float lighting = 3.0 * float(!shoot_shadow_ray(Ray3f(shading_data.computeRayOrigin(), sample_light(sampler))));
+        return material.eval(shading_data, sun_direction, sampler) * lighting;
+    }
+};
+
+MaterialAndShadingData create_material_from_intersection(RayVolumeIntersection intersection, Ray3f ray) {
+    MaterialAndShadingData output;
+    output.shading_data = create_shading_data_from_intersection(intersection, ray);
+
+    let base_colour = PALETTE[intersection.material - 1u];
+
+    output.material = PBRTDiffuseMaterialInstance(
+        output.shading_data.frame,
+        {base_colour},
+        //float3(.01)
+    );
+
+    return output;
+}
+
 float3x3 create_rotation_matrix(float3 dir) {
     // Choose an arbitrary vector for T
     var T = float3(1.0, 0.0, 0.0);
@@ -68,53 +96,50 @@ float3x3 create_rotation_matrix(float3 dir) {
     let V = cross(dir, U);
 
     // Construct the rotation matrix
-    return float3x3(U, V, dir);
+    return transpose(float3x3(U, V, dir));
 }
 
 float3 sample_light<S: ISampleGenerator>(inout S sampler) {
     float3 dir = sample_cone(sampleNext2D(sampler), cos_sun_aparent_size);
-    return mul(transpose(create_rotation_matrix(sun_direction)), dir);
+    return mul(create_rotation_matrix(sun_direction), dir);
 }
 
-float3 compute_shading<S: ISampleGenerator>(RayVolumeIntersection intersection, Ray3f ray, inout S sampler) {
-    SubDAG subDAG = initial_subdag();
-
-    float3[] palette = {float3(1.), float3(1.,0.,0.)};
-
-    float3 base_colour = palette[intersection.material - 1u];
-
-    float lighting = 3.0;
-
+bool shoot_shadow_ray(Ray3f ray) {
     if (settings & Settings::EnableShadows) {
-        Ray3f shadow_ray;
-        shadow_ray.mOrigin = intersection.position + intersection.normal * 0.0001;
-        shadow_ray.mDir = normalize(sample_light(sampler));
-        let shadow_intersection = intersect_subdag(shadow_ray, initial_subdag(), false, gMaxFootprint);
-        lighting *= float(!shadow_intersection.hit);
+        return intersect_subdag(ray, initial_subdag(), false, gMaxFootprint).hit;
     }
 
-    let shading_data = create_shading_data_from_intersection(intersection, ray);
+    return false;
+}
 
-    StandardBSDFData data;
-    data.diffuse = base_colour;
-    data.specular = float3(1.0);
-    data.roughness = 1.0;
-    data.metallic = 0.0;
-    data.eta = 1.0;
-    data.transmission = 0.;
-    data.diffuseTransmission = 0.0;
-    data.specularTransmission = 0.0;
-    data.volumeScattering = 0.0;
-    data.volumeAnsiotropy = 0.0;
-    data.hasEntryPointVolumeProperties = false;
+static float3 BG = float3(.1);
 
-    let material = PBRTDiffuseMaterialInstance(
-        shading_data.frame,
-        {base_colour},
-        //float3(.01)
-    );
+float3 compute_shading<S: ISampleGenerator>(RayVolumeIntersection intersection, Ray3f ray, inout S sampler) {
+    float3 offset_position = intersection.position + intersection.normal * 0.00001;
 
-    return material.eval(shading_data, sun_direction, sampler) * lighting;// + material.emission;
+    let material = create_material_from_intersection(intersection, ray);
+
+    var throughput = float3(1.0);
+
+    var radiance = float3(0.);
+
+    radiance += material.get_direct_lighting(sampler) * throughput;
+
+    BSDFSample sample_result;
+    if (material.material.sample(material.shading_data, sampler, sample_result)) {
+        throughput *= sample_result.weight;
+
+        let ray = Ray3f(material.shading_data.computeRayOrigin(), sample_result.wo);
+	    let intersection = intersect_subdag(ray, initial_subdag(), true, gMaxFootprint);
+	    if (intersection.hit) {
+	  	    let material = create_material_from_intersection(intersection, ray);
+			radiance += material.get_direct_lighting(sampler) * throughput;
+		} else {
+		  radiance += BG * throughput;
+		}
+    }
+
+    return radiance;
 }
 
 float3 trace<S: ISampleGenerator>(Ray3f ray, inout S sampler) {
@@ -124,7 +149,7 @@ float3 trace<S: ISampleGenerator>(Ray3f ray, inout S sampler) {
         return compute_shading(intersection, ray, sampler);
     }
 
-    return float3(abs(sin(ray.mDir.y*10)));
+    return BG;
 }
 
 [shader("compute")]
@@ -137,11 +162,19 @@ void main(
     Texture2D<float3> previous,
     SamplerState sampler,
 ) {
-    var TexCoords = (float2(dispatch_thread_id.xy) + .5) /  resolution;
-    var original_tex_coords = TexCoords;
-    TexCoords.y = 1.0 - TexCoords.y;
+    let original_tex_coords = (float2(dispatch_thread_id.xy) + .5) /  resolution;
 
     var rng = TinyUniformSampleGenerator(dispatch_thread_id.xy, frame_index);
+
+    var thread_offset = float2(.5);
+
+    if (settings & Settings::AccumulateSamples) {
+        thread_offset = sampleNext2D(rng);
+    }
+
+    var TexCoords = (float2(dispatch_thread_id.xy) + thread_offset) /  resolution;
+    TexCoords.y = 1.0 - TexCoords.y;
+
 
 	Ray3f ray;
 	ray.mOrigin = cameraPos;
