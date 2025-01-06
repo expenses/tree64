@@ -14,8 +14,8 @@ StructuredBuffer<uint[8]> svo_dag;
 
 uint GET_NODE_FN(uint node, uint childId)
 {
-	//return dagData[node * 8 + childId];
-	return svo_dag[node - MaterialCount][childId];
+    //return dagData[node * 8 + childId];
+    return svo_dag[node - MaterialCount][childId];
 }
 
 #include "../../cubiquity/src/application/commands/view/glsl/pathtracing.h"
@@ -24,6 +24,8 @@ uniform float4x4 VInv;
 uniform float4x4 PInv;
 uniform float3 cameraPos;
 uniform float3 sun_direction;
+uniform float3 sun_colour;
+uniform float3 background_colour;
 uniform uint2 resolution;
 uniform Settings settings;
 uniform uint frame_index;
@@ -50,6 +52,8 @@ ShadingData create_shading_data_from_intersection(RayVolumeIntersection intersec
     ShadingData shading_data;
     shading_data.frame = ShadingFrame.createIdentity();
     shading_data.frame.N = intersection.normal;
+    shading_data.frame.T = intersection.normal.yzx;
+    shading_data.frame.B = intersection.normal.zxy;
     shading_data.posW = intersection.position;
     shading_data.faceN = shading_data.frame.N;
     shading_data.V = -ray.mDir;
@@ -65,8 +69,8 @@ struct MaterialAndShadingData {
     ShadingData shading_data;
 
     float3 get_direct_lighting<S: ISampleGenerator>(inout S sampler) {
-        float lighting = 3.0 * float(!shoot_shadow_ray(Ray3f(shading_data.computeRayOrigin(), sample_light(sampler))));
-        return material.eval(shading_data, sun_direction, sampler) * lighting;
+        float lighting = float(!shoot_shadow_ray(Ray3f(shading_data.computeRayOrigin(), sample_light(sampler))));
+        return material.eval(shading_data, sun_direction, sampler) * lighting * sun_colour;
     }
 };
 
@@ -113,21 +117,13 @@ bool shoot_shadow_ray(Ray3f ray) {
     return false;
 }
 
-static float3 BG = float3(.1);
-
 float3 compute_shading<S: ISampleGenerator>(RayVolumeIntersection intersection, Ray3f ray, inout S sampler) {
-    float3 offset_position = intersection.position + intersection.normal * 0.00001;
-
-    let material = create_material_from_intersection(intersection, ray);
-
+    var material = create_material_from_intersection(intersection, ray);
+    var radiance = material.get_direct_lighting(sampler);
     var throughput = float3(1.0);
 
-    var radiance = float3(0.);
-
-    radiance += material.get_direct_lighting(sampler) * throughput;
-
-    BSDFSample sample_result;
     for (uint i = 0; i < num_bounces; i++) {
+        BSDFSample sample_result;
         if (!material.material.sample(material.shading_data, sampler, sample_result)) {
             break;
         }
@@ -135,26 +131,26 @@ float3 compute_shading<S: ISampleGenerator>(RayVolumeIntersection intersection, 
         throughput *= sample_result.weight;
 
         let ray = Ray3f(material.shading_data.computeRayOrigin(), sample_result.wo);
-	    let intersection = intersect_subdag(ray, initial_subdag(), true, gMaxFootprint);
-	    if (intersection.hit) {
-	  	    let material = create_material_from_intersection(intersection, ray);
-			radiance += material.get_direct_lighting(sampler) * throughput;
-		} else {
-		  radiance += BG * throughput;
-		}
+        intersection = intersect_subdag(ray, initial_subdag(), true, gMaxFootprint);
+        if (intersection.hit) {
+            material = create_material_from_intersection(intersection, ray);
+            radiance += material.get_direct_lighting(sampler) * throughput;
+        } else {
+            radiance += background_colour * throughput;
+            break;
+        }
     }
 
     return radiance;
 }
 
 float3 trace<S: ISampleGenerator>(Ray3f ray, inout S sampler) {
-	RayVolumeIntersection intersection = intersect_subdag(ray, initial_subdag(), true, gMaxFootprint);
-
+    RayVolumeIntersection intersection = intersect_subdag(ray, initial_subdag(), true, gMaxFootprint);
     if (intersection.hit) {
         return compute_shading(intersection, ray, sampler);
     }
 
-    return BG;
+    return background_colour;
 }
 
 [shader("compute")]
@@ -181,9 +177,9 @@ void main(
     TexCoords.y = 1.0 - TexCoords.y;
 
 
-	Ray3f ray;
-	ray.mOrigin = cameraPos;
-	ray.mDir = createRay(TexCoords, PInv, VInv);
+    Ray3f ray;
+    ray.mOrigin = cameraPos;
+    ray.mDir = createRay(TexCoords, PInv, VInv);
 
     var sample = trace(ray, rng);
 

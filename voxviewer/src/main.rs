@@ -9,20 +9,36 @@ use winit::{
 
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
+struct Vec3A {
+    inner: glam::Vec3,
+    padding: u32,
+}
+
+impl From<glam::Vec3> for Vec3A {
+    fn from(vec: glam::Vec3) -> Self {
+        Self {
+            inner: vec.into(),
+            padding: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
 struct Uniforms {
     v_inv: glam::Mat4,
     p_inv: glam::Mat4,
-    camera_pos: glam::Vec3,
-    _padding0: u32,
-    sun_direction: glam::Vec3,
-    _padding1: u32,
+    camera_pos: Vec3A,
+    sun_direction: Vec3A,
+    sun_colour: Vec3A,
+    background_colour: Vec3A,
     resolution: glam::UVec2,
     settings: i32,
     frame_index: u32,
     cos_sun_apparent_size: f32,
     accumulated_frame_index: u32,
     num_bounces: u32,
-    _padding2: u32,
+    padding: [u32; 1],
 }
 
 struct Pipelines {
@@ -402,12 +418,14 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 
     // Create a smoothed orbit camera
     let mut camera: CameraRig = CameraRig::builder()
+        .with(Position::new(glam::Vec3::splat((1 << 5) as f32)))
         .with(YawPitch::new().yaw_degrees(45.0).pitch_degrees(-30.0))
         .with(Smooth::new_rotation(0.5))
         .with(Arm::new(glam::Vec3::Z * 250.0))
         .build();
 
-    let mut mouse_down = false;
+    let mut left_mouse_down = false;
+    let mut right_mouse_down = false;
 
     let mut sun_long = -45.0_f32;
     let mut sun_lat = 45.0_f32;
@@ -417,6 +435,8 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     let mut accumulate_samples = false;
     let mut accumulated_frame_index = 0;
     let mut num_bounces = 0;
+    let mut background_colour = [0.01; 3];
+    let mut sun_colour = [1.0; 3];
 
     let window = &window;
     event_loop
@@ -430,9 +450,13 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
             match event {
                 Event::WindowEvent { event, .. } => {
                     let egui_response = egui_state.on_window_event(window, &event);
+                    if egui_response.consumed {
+                        return;
+                    }
 
                     match event {
-                    WindowEvent::MouseInput { state, button: MouseButton::Left, .. } if !egui_response.consumed => mouse_down = state == ElementState::Pressed,
+                    WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => left_mouse_down = state == ElementState::Pressed,
+                    WindowEvent::MouseInput { state, button: MouseButton::Right, .. } => right_mouse_down = state == ElementState::Pressed,
                     WindowEvent::Resized(new_size) => {
                         // Reconfigure the surface with the new size
                         config.width = new_size.width.max(1);
@@ -479,15 +503,19 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                     1000.0,
                                 ).inverse(),
                                 resolution: glam::UVec2::new(config.width, config.height),
-                                camera_pos: transform.position.into(),
-                                sun_direction: glam::Vec3::new(sun_long.to_radians().sin() * sun_lat.to_radians().cos(), sun_lat.to_radians().sin(), sun_long.to_radians().cos() * sun_lat.to_radians().cos()),
+                                camera_pos: glam::Vec3::from(transform.position).into(),
+                                sun_colour: glam::Vec3::from(sun_colour).into(),
+                                sun_direction: glam::Vec3::new(sun_long.to_radians().sin() * sun_lat.to_radians().cos(), sun_lat.to_radians().sin(), sun_long.to_radians().cos() * sun_lat.to_radians().cos()).into(),
                                 settings: (enable_shadows as i32) | (accumulate_samples as i32) << 1,
                                 frame_index,
                                 accumulated_frame_index, num_bounces,
                                 cos_sun_apparent_size: sun_apparent_size.to_radians().cos(),
-                                _padding0: Default::default(),
-                                _padding1: Default::default(),
-                                _padding2: Default::default()
+                                background_colour: glam::Vec3::from(background_colour).into(),
+                                padding: Default::default()
+                                //_padding0: Default::default(),
+                                //_padding1: Default::default(),
+                                //_padding2: Default::default(),
+                                //_padding3: Default::default()
                             }),
                         );
                         queue.write_buffer(&pipelines.blit_uniform_buffer, 0, bytemuck::bytes_of(&accumulated_frame_index));;
@@ -531,7 +559,11 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                         ui.add(egui::Slider::new(&mut sun_long, -180.0..=180.0));
                                         ui.label("Apparent size");
                                         ui.add(egui::Slider::new(&mut sun_apparent_size, 0.0..=90.0));
+                                        ui.label("Sun colour");
+                                        egui::widgets::color_picker::color_edit_button_rgb(ui, &mut sun_colour);
                                     });
+                                    ui.label("Background colour");
+                                    egui::widgets::color_picker::color_edit_button_rgb(ui, &mut background_colour);
                                 });
                             });
                         });
@@ -603,9 +635,17 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                     _ => {}
                 }},
                 Event::DeviceEvent { event, .. } => match event {
-                    DeviceEvent::MouseMotion { delta: (x, y) } if mouse_down => {
+                    DeviceEvent::MouseMotion { delta: (x, y) } if left_mouse_down => {
                         camera.driver_mut::<YawPitch>().rotate_yaw_pitch((-x/2.0) as f32, (-y/2.0) as f32);
                     },
+                    DeviceEvent::MouseMotion { delta: (x, y) } if right_mouse_down => {
+                        let transform = camera.final_transform;
+                        let arm_distance = camera.driver::<Arm>().offset.z / 500.0;
+                        camera.driver_mut::<Position>().translate((
+                            transform.up::<glam::Vec3>() * y as f32 +
+                            transform.right::<glam::Vec3>() * -x as f32
+                        ) * arm_distance);
+                    }
                     _ => {}
                 },
                 Event::AboutToWait => {
