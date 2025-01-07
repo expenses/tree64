@@ -31,7 +31,7 @@ uniform Settings settings;
 uniform uint frame_index;
 uniform float cos_sun_aparent_size;
 uniform uint accumulated_frame_index;
-uniform uint num_bounces;
+uniform uint max_bounces;
 
 [Flags]
 enum Settings {
@@ -126,13 +126,17 @@ float3 compute_shading<S: ISampleGenerator>(RayVolumeIntersection intersection, 
     var radiance = material.get_direct_lighting(sampler);
     var throughput = float3(1.0);
 
-    for (uint i = 0; i < num_bounces; i++) {
+    for (uint i = 0; i < max_bounces; i++) {
         BSDFSample sample_result;
         if (!material.material.sample(material.shading_data, sampler, sample_result)) {
             break;
         }
 
         throughput *= sample_result.weight;
+
+        if (all(throughput < 0.01)) {
+            break;
+        }
 
         let ray = Ray3f(material.shading_data.computeRayOrigin(), sample_result.wo);
         intersection = intersect_subdag(ray, initial_subdag(), true, gMaxFootprint);

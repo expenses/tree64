@@ -2408,6 +2408,7 @@ dependencies = [
  "glam 0.28.0",
  "log",
  "pollster",
+ "rayon",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

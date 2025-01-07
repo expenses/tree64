@@ -21,3 +21,4 @@ egui-wgpu = "0.30"
 egui = { version = "0.30.0", features = ["default_fonts"] }
 egui-winit = { version = "0.30.0", default-features = false }
 ddsfile = "0.5.2"
+rayon = "1.10.0"

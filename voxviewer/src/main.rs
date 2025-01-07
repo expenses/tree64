@@ -44,9 +44,9 @@ impl<'a> App<'a> {
                 egui::CollapsingHeader::new("Rendering")
                     .default_open(true)
                     .show(ui, |ui| {
-                        ui.label("Number of bounces");
+                        ui.label("Max bounces");
                         reset_accumulation |= ui
-                            .add(egui::Slider::new(&mut settings.num_bounces, 0..=5))
+                            .add(egui::Slider::new(&mut settings.max_bounces, 0..=10))
                             .changed();
                         reset_accumulation |= ui
                             .checkbox(&mut settings.accumulate_samples, "Accumulate Samples")
@@ -214,7 +214,7 @@ impl<'a> App<'a> {
                 sun_direction: glam::Vec3::new(settings.sun_long.to_radians().sin() * settings.sun_lat.to_radians().cos(), settings.sun_lat.to_radians().sin(), settings.sun_long.to_radians().cos() * settings.sun_lat.to_radians().cos()).into(),
                 settings: (settings.enable_shadows as i32) | (settings.accumulate_samples as i32) << 1,
                 frame_index: self.frame_index,
-                accumulated_frame_index: self.accumulated_frame_index, num_bounces: settings.num_bounces,
+                accumulated_frame_index: self.accumulated_frame_index, max_bounces: settings.max_bounces,
                 cos_sun_apparent_size: settings.sun_apparent_size.to_radians().cos(),
                 background_colour: glam::Vec3::from(settings.background_colour).into(),
                 padding: Default::default()
@@ -357,54 +357,74 @@ impl<'a> winit::application::ApplicationHandler for App<'a> {
                     .device
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
                 let (tessellated, screen_descriptor) = self.get_egui_render_state(&mut encoder);
+                let egui_cmd_buf = encoder.finish();
 
-                {
-                    let mut compute_pass =
-                        encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+                let (cmd_buf_a, cmd_buf_b) =
+                    rayon::join(
+                        || {
+                            let mut encoder = self.device.create_command_encoder(
+                                &wgpu::CommandEncoderDescriptor { label: None },
+                            );
 
-                    compute_pass.set_pipeline(&self.pipelines.trace);
-                    compute_pass.set_bind_group(
-                        0,
-                        &self.resizables.trace_bind_groups
-                            [self.accumulated_frame_index as usize % 2],
-                        &[],
-                    );
-                    compute_pass.dispatch_workgroups(
-                        ((self.config.width - 1) / 8) + 1,
-                        ((self.config.height - 1) / 8) + 1,
-                        1,
-                    );
-                }
-                {
-                    let mut rpass = encoder
-                        .begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: None,
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &view,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                        })
-                        .forget_lifetime();
-                    rpass.set_pipeline(&self.pipelines.blit_srgb);
-                    rpass.set_bind_group(
-                        0,
-                        &self.resizables.blit_bind_groups
-                            [(self.accumulated_frame_index) as usize % 2],
-                        &[],
-                    );
-                    rpass.draw(0..3, 0..1);
-                    self.egui_renderer
-                        .render(&mut rpass, &tessellated, &screen_descriptor);
-                }
+                            let mut compute_pass =
+                                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
 
-                self.queue.submit(Some(encoder.finish()));
+                            compute_pass.set_pipeline(&self.pipelines.trace);
+                            compute_pass.set_bind_group(
+                                0,
+                                &self.resizables.trace_bind_groups
+                                    [self.accumulated_frame_index as usize % 2],
+                                &[],
+                            );
+                            compute_pass.dispatch_workgroups(
+                                ((self.config.width - 1) / 8) + 1,
+                                ((self.config.height - 1) / 8) + 1,
+                                1,
+                            );
+
+                            drop(compute_pass);
+
+                            encoder.finish()
+                        },
+                        || {
+                            let mut encoder = self.device.create_command_encoder(
+                                &wgpu::CommandEncoderDescriptor { label: None },
+                            );
+
+                            let mut rpass = encoder
+                                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                                    label: None,
+                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                        view: &view,
+                                        resolve_target: None,
+                                        ops: wgpu::Operations {
+                                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                            store: wgpu::StoreOp::Store,
+                                        },
+                                    })],
+                                    depth_stencil_attachment: None,
+                                    timestamp_writes: None,
+                                    occlusion_query_set: None,
+                                })
+                                .forget_lifetime();
+                            rpass.set_pipeline(&self.pipelines.blit_srgb);
+                            rpass.set_bind_group(
+                                0,
+                                &self.resizables.blit_bind_groups
+                                    [(self.accumulated_frame_index) as usize % 2],
+                                &[],
+                            );
+                            rpass.draw(0..3, 0..1);
+                            self.egui_renderer
+                                .render(&mut rpass, &tessellated, &screen_descriptor);
+
+                            drop(rpass);
+
+                            encoder.finish()
+                        },
+                    );
+
+                self.queue.submit([egui_cmd_buf, cmd_buf_a, cmd_buf_b]);
                 frame.present();
             }
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -501,7 +521,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
             .with(Position::new(glam::Vec3::splat((1 << 5) as f32)))
             .with(YawPitch::new().yaw_degrees(45.0).pitch_degrees(-30.0))
             .with(Smooth::new_position_rotation(0.25, 0.25))
-            .with(Arm::new(glam::Vec3::Z * 250.0))
+            .with(Arm::new(glam::Vec3::Z * 125.0))
             .build(),
         pipelines,
         materials,
@@ -549,7 +569,7 @@ struct Settings {
     enable_shadows: bool,
     sun_apparent_size: f32,
     accumulate_samples: bool,
-    num_bounces: u32,
+    max_bounces: u32,
     background_colour: [f32; 3],
     sun_colour: [f32; 3],
     vertical_fov: f32,
@@ -563,7 +583,7 @@ impl Default for Settings {
             enable_shadows: false,
             sun_apparent_size: 5.0_f32,
             accumulate_samples: false,
-            num_bounces: 0,
+            max_bounces: 0,
             background_colour: [0.01; 3],
             sun_colour: [1.0; 3],
             vertical_fov: 45.0_f32,
@@ -575,9 +595,8 @@ impl Settings {
     fn pretty() -> Self {
         Self {
             enable_shadows: true,
-            num_bounces: 2,
+            max_bounces: 2,
             accumulate_samples: true,
-            vertical_fov: 22.5,
             ..Default::default()
         }
     }
@@ -613,7 +632,7 @@ struct Uniforms {
     frame_index: u32,
     cos_sun_apparent_size: f32,
     accumulated_frame_index: u32,
-    num_bounces: u32,
+    max_bounces: u32,
     padding: [u32; 1],
 }
 

@@ -32,7 +32,7 @@ struct GlobalParams_std140_0
     @align(4) frame_index_0 : u32,
     @align(16) cos_sun_aparent_size_0 : f32,
     @align(4) accumulated_frame_index_0 : u32,
-    @align(8) num_bounces_0 : u32,
+    @align(8) max_bounces_0 : u32,
 };
 
 @binding(0) @group(0) var<uniform> globalParams_0 : GlobalParams_std140_0;
@@ -761,44 +761,49 @@ fn compute_shading_0( intersection_4 : RayVolumeIntersection_0,  ray_5 : Ray3f_0
     var i_1 : u32 = u32(0);
     var throughput_0 : vec3<f32> = _S63;
     var radiance_0 : vec3<f32> = _S62;
+    var _S65 : vec3<f32> = vec3<f32>(0.00999999977648258f);
     for(;;)
     {
-        if(i_1 < globalParams_0.num_bounces_0)
+        if(i_1 < globalParams_0.max_bounces_0)
         {
         }
         else
         {
             break;
         }
-        var _S65 : MaterialAndShadingData_0 = material_3;
+        var _S66 : MaterialAndShadingData_0 = material_3;
         var sample_result_0 : BSDFSample_0;
-        var _S66 : bool = PBRTDiffuseMaterialInstance_sample_0(material_3.material_1, material_3.shading_data_0, &((*sampler_2)), &(sample_result_0), true);
-        if(!_S66)
+        var _S67 : bool = PBRTDiffuseMaterialInstance_sample_0(material_3.material_1, material_3.shading_data_0, &((*sampler_2)), &(sample_result_0), true);
+        if(!_S67)
         {
             break;
         }
-        var _S67 : vec3<f32>;
-        var _S68 : MaterialAndShadingData_0;
         var throughput_1 : vec3<f32> = throughput_0 * sample_result_0.weight_1;
-        var _S69 : Ray3f_0 = Ray3f_0( ShadingData_computeRayOrigin_0(_S65.shading_data_0, true), sample_result_0.wo_2 );
-        var _S70 : RayVolumeIntersection_0 = intersect_subdag_0(_S69, _S64, true, 0.00350000010803342f);
-        if(_S70.hit_0)
+        if(all(throughput_1 < _S65))
         {
-            var material_4 : MaterialAndShadingData_0 = create_material_from_intersection_0(_S70, _S69);
-            _S68 = material_4;
-            var _S71 : vec3<f32> = MaterialAndShadingData_get_direct_lighting_0(material_4, &((*sampler_2)));
-            _S67 = radiance_0 + _S71 * throughput_1;
+            break;
+        }
+        var _S68 : vec3<f32>;
+        var _S69 : MaterialAndShadingData_0;
+        var _S70 : Ray3f_0 = Ray3f_0( ShadingData_computeRayOrigin_0(_S66.shading_data_0, true), sample_result_0.wo_2 );
+        var _S71 : RayVolumeIntersection_0 = intersect_subdag_0(_S70, _S64, true, 0.00350000010803342f);
+        if(_S71.hit_0)
+        {
+            var material_4 : MaterialAndShadingData_0 = create_material_from_intersection_0(_S71, _S70);
+            _S69 = material_4;
+            var _S72 : vec3<f32> = MaterialAndShadingData_get_direct_lighting_0(material_4, &((*sampler_2)));
+            _S68 = radiance_0 + _S72 * throughput_1;
         }
         else
         {
             radiance_0 = radiance_0 + globalParams_0.background_colour_0 * throughput_1;
             break;
         }
-        var _S72 : u32 = i_1 + u32(1);
-        material_3 = _S68;
-        i_1 = _S72;
+        var _S73 : u32 = i_1 + u32(1);
+        material_3 = _S69;
+        i_1 = _S73;
         throughput_0 = throughput_1;
-        radiance_0 = _S67;
+        radiance_0 = _S68;
     }
     return radiance_0;
 }
@@ -808,8 +813,8 @@ fn trace_0( ray_6 : Ray3f_0,  sampler_3 : ptr<function, TinyUniformSampleGenerat
     var intersection_5 : RayVolumeIntersection_0 = intersect_subdag_0(ray_6, initial_subdag_0(), true, 0.00350000010803342f);
     if(intersection_5.hit_0)
     {
-        var _S73 : vec3<f32> = compute_shading_0(intersection_5, ray_6, &((*sampler_3)));
-        return _S73;
+        var _S74 : vec3<f32> = compute_shading_0(intersection_5, ray_6, &((*sampler_3)));
+        return _S74;
     }
     return globalParams_0.background_colour_0;
 }
@@ -818,24 +823,24 @@ fn trace_0( ray_6 : Ray3f_0,  sampler_3 : ptr<function, TinyUniformSampleGenerat
 @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) dispatch_thread_id_0 : vec3<u32>)
 {
-    var _S74 : vec2<u32> = dispatch_thread_id_0.xy;
-    var _S75 : vec2<f32> = vec2<f32>(_S74);
-    var _S76 : vec2<f32> = (_S75 + vec2<f32>(0.5f)) / vec2<f32>(globalParams_0.resolution_0);
-    var rng_3 : TinyUniformSampleGenerator_0 = TinyUniformSampleGenerator_x24init_0(_S74, globalParams_0.frame_index_0);
-    var _S77 : vec2<f32> = vec2<f32>(0.5f);
+    var _S75 : vec2<u32> = dispatch_thread_id_0.xy;
+    var _S76 : vec2<f32> = vec2<f32>(_S75);
+    var _S77 : vec2<f32> = (_S76 + vec2<f32>(0.5f)) / vec2<f32>(globalParams_0.resolution_0);
+    var rng_3 : TinyUniformSampleGenerator_0 = TinyUniformSampleGenerator_x24init_0(_S75, globalParams_0.frame_index_0);
+    var _S78 : vec2<f32> = vec2<f32>(0.5f);
     var thread_offset_0 : vec2<f32>;
     if(((globalParams_0.settings_0 & (i32(2)))) != i32(0))
     {
-        var _S78 : vec2<f32> = sampleNext2D_0(&(rng_3));
-        thread_offset_0 = _S78;
+        var _S79 : vec2<f32> = sampleNext2D_0(&(rng_3));
+        thread_offset_0 = _S79;
     }
     else
     {
-        thread_offset_0 = _S77;
+        thread_offset_0 = _S78;
     }
-    var _S79 : vec2<f32> = (_S75 + thread_offset_0) / vec2<f32>(globalParams_0.resolution_0);
-    var TexCoords_0 : vec2<f32> = _S79;
-    TexCoords_0[i32(1)] = 1.0f - _S79.y;
+    var _S80 : vec2<f32> = (_S76 + thread_offset_0) / vec2<f32>(globalParams_0.resolution_0);
+    var TexCoords_0 : vec2<f32> = _S80;
+    TexCoords_0[i32(1)] = 1.0f - _S80.y;
     var ray_7 : Ray3f_0;
     ray_7.mOrigin_0 = globalParams_0.cameraPos_0;
     ray_7.mDir_0 = createRay_0(TexCoords_0, unpackStorage_0(globalParams_0.PInv_0), unpackStorage_0(globalParams_0.VInv_0));
@@ -843,13 +848,13 @@ fn main(@builtin(global_invocation_id) dispatch_thread_id_0 : vec3<u32>)
     var sample_2 : vec3<f32>;
     if(((globalParams_0.settings_0 & (i32(2)))) != i32(0) && globalParams_0.accumulated_frame_index_0 > u32(0))
     {
-        sample_2 = sample_1 + (textureSampleLevel((entryPointParams_previous_0), (entryPointParams_sampler_0), (_S76), (0.0f)).xyz);
+        sample_2 = sample_1 + (textureSampleLevel((entryPointParams_previous_0), (entryPointParams_sampler_0), (_S77), (0.0f)).xyz);
     }
     else
     {
         sample_2 = sample_1;
     }
-    textureStore((entryPointParams_current_0), (_S74), vec4<f32>((sample_2), 1));
+    textureStore((entryPointParams_current_0), (_S75), vec4<f32>((sample_2), 1));
     return;
 }
 
