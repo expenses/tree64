@@ -1,48 +1,15 @@
 use std::fmt::Debug;
 use std::hash::BuildHasher;
 use std::io::{self, Read, Write};
-use std::ops::{Add, Sub};
 
-pub trait NodeValue:
-    PartialOrd
-    + Add<Output = Self>
-    + Sub<Output = Self>
-    + TryInto<usize, Error: Debug>
-    + TryFrom<usize, Error: Debug>
-    + From<u8>
-    + Copy
-    + std::hash::Hash
-    + Eq
-    + bytemuck::Pod
-    + bytemuck::Zeroable
-    + Debug
-{
+pub struct EditableSvoDag {
+    inner: SvoDag,
+    #[allow(dead_code)]
+    indices: hashbrown::HashTable<u32>,
 }
 
-impl<
-        T: PartialOrd
-            + Add<Output = Self>
-            + Sub<Output = T>
-            + TryInto<usize, Error: Debug>
-            + TryFrom<usize, Error: Debug>
-            + From<u8>
-            + Copy
-            + std::hash::Hash
-            + Eq
-            + bytemuck::Pod
-            + bytemuck::Zeroable
-            + Debug,
-    > NodeValue for T
-{
-}
-
-pub struct EditableSvoDag<T> {
-    inner: SvoDag<T>,
-    indices: hashbrown::HashTable<T>,
-}
-
-impl<T: NodeValue> EditableSvoDag<T> {
-    pub fn into_read_only(self) -> SvoDag<T> {
+impl EditableSvoDag {
+    pub fn into_read_only(self) -> SvoDag {
         self.inner
     }
 
@@ -51,36 +18,34 @@ impl<T: NodeValue> EditableSvoDag<T> {
         width: usize,
         height: usize,
         depth: usize,
-        reserved_indices: T,
+        reserved_indices: u32,
     ) -> Self {
         let size = width.max(height).max(depth).next_power_of_two();
 
-        let access = |x, y, z| {
-            T::from(match slice.get(x + y * width + z * width * height) {
-                Some(&value) if x < width && y < height => value,
-                _ => 0,
-            })
+        let access = |x, y, z| match slice.get(x + y * width + z * width * height) {
+            Some(&value) if x < width && y < height => value as u32,
+            _ => 0,
         };
 
-        let mut cached_indices: hashbrown::HashTable<T> = hashbrown::HashTable::new();
+        let mut cached_indices: hashbrown::HashTable<u32> = hashbrown::HashTable::new();
 
         let hasher = fnv::FnvBuildHasher::default();
 
-        let mut layer: Vec<T> = Vec::with_capacity((size * size * size) / 8);
+        let mut layer: Vec<u32> = Vec::with_capacity((size * size * size) / 8);
 
-        let mut nodes: Vec<Node<T>> = Vec::new();
+        let mut nodes: Vec<Node<u32>> = Vec::new();
 
-        let mut insert_node = |node: Node<T>, level_size: usize| match node.uniform_value() {
+        let mut insert_node = |node: Node<u32>, level_size: usize| match node.uniform_value() {
             Some(value) if value < reserved_indices && level_size > 2 => value,
             _ => {
                 *cached_indices
                     .entry(
-                        hasher.hash_one(&node),
-                        |&other| nodes[other.try_into().unwrap()] == node,
-                        |&index| hasher.hash_one(&nodes[index.try_into().unwrap()]),
+                        hasher.hash_one(node),
+                        |&other| nodes[other as usize] == node,
+                        |&index| hasher.hash_one(nodes[index as usize]),
                     )
                     .or_insert_with(|| {
-                        let next_index = T::try_from(nodes.len()).unwrap();
+                        let next_index = nodes.len() as u32;
                         nodes.push(node);
                         next_index
                     })
@@ -154,19 +119,19 @@ impl<T: NodeValue> EditableSvoDag<T> {
     }
 }
 
-pub struct SvoDag<T> {
+pub struct SvoDag {
     size: u32,
-    nodes: Vec<Node<T>>,
-    reserved_indices: T,
+    nodes: Vec<Node<u32>>,
+    reserved_indices: u32,
 }
 
-impl<T: NodeValue> SvoDag<T> {
+impl SvoDag {
     pub fn new(
         slice: &[u8],
         width: usize,
         height: usize,
         depth: usize,
-        reserved_indices: T,
+        reserved_indices: u32,
     ) -> Self {
         EditableSvoDag::new(slice, width, height, depth, reserved_indices).into_read_only()
     }
@@ -187,7 +152,7 @@ impl<T: NodeValue> SvoDag<T> {
             for y in 0..size {
                 for x in 0..size {
                     array[x + y * size + z * size * size] =
-                        (self.index(x as _, y as _, z as _)).try_into().unwrap() as u8;
+                        self.index(x as _, y as _, z as _) as u8;
                 }
             }
         }
@@ -195,18 +160,18 @@ impl<T: NodeValue> SvoDag<T> {
         array
     }
 
-    fn root(&self) -> Node<T> {
+    fn root(&self) -> Node<u32> {
         *self.nodes.last().unwrap()
     }
 
     #[allow(dead_code)]
-    fn add_node(&mut self, node: Node<T>) -> T {
-        let next_index = T::try_from(self.nodes.len()).unwrap();
+    fn add_node(&mut self, node: Node<u32>) -> u32 {
+        let next_index = self.nodes.len() as u32;
         self.nodes.push(node);
         next_index + self.reserved_indices
     }
 
-    pub fn index(&self, mut x: u32, mut y: u32, mut z: u32) -> T {
+    pub fn index(&self, mut x: u32, mut y: u32, mut z: u32) -> u32 {
         let mut node = self.root();
         let mut node_size = self.size;
 
@@ -219,7 +184,7 @@ impl<T: NodeValue> SvoDag<T> {
             }
 
             node_size /= 2;
-            node = self.nodes[(child - self.reserved_indices).try_into().unwrap()];
+            node = self.nodes[(child - self.reserved_indices) as usize];
             x %= node_size;
             y %= node_size;
             z %= node_size;
@@ -228,8 +193,8 @@ impl<T: NodeValue> SvoDag<T> {
 
     pub fn serialize<W: Write>(&self, mut writer: W) -> io::Result<()> {
         writer.write_all(b"DAG")?;
-        writer.write_all(&(std::mem::size_of::<T>() as u8).to_le_bytes())?;
-        writer.write_all(&(self.reserved_indices.try_into().unwrap() as u32).to_le_bytes())?;
+        writer.write_all(&(std::mem::size_of::<u32>() as u8).to_le_bytes())?;
+        writer.write_all(&(self.reserved_indices).to_le_bytes())?;
         writer.write_all(&self.size.to_le_bytes())?;
         writer.write_all(&(self.nodes.len() as u32).to_le_bytes())?;
         writer.write_all(bytemuck::cast_slice(&self.nodes))?;
@@ -242,25 +207,25 @@ impl<T: NodeValue> SvoDag<T> {
         assert_eq!(&buffer, b"DAG");
         let mut size = 0_u8;
         reader.read_exact(bytemuck::bytes_of_mut(&mut size))?;
-        assert_eq!(size as usize, std::mem::size_of::<T>());
+        assert_eq!(size as usize, std::mem::size_of::<u32>());
         let mut reserved_indices = 0_u32;
         let mut size = 0_u32;
         let mut num_nodes = 0_u32;
         reader.read_exact(bytemuck::bytes_of_mut(&mut reserved_indices))?;
         reader.read_exact(bytemuck::bytes_of_mut(&mut size))?;
         reader.read_exact(bytemuck::bytes_of_mut(&mut num_nodes))?;
-        let mut nodes = vec![Node([T::from(0_u8); 8]); num_nodes as usize];
+        let mut nodes = vec![Node([0; 8]); num_nodes as usize];
         reader.read_exact(bytemuck::cast_slice_mut(&mut nodes))?;
         Ok(Self {
             size,
             nodes,
-            reserved_indices: T::try_from(reserved_indices as usize).unwrap(),
+            reserved_indices,
         })
     }
 
-    pub fn cubes(&self) -> (Vec<[f32; 3]>, Vec<u32>, Vec<T>) {
+    pub fn cubes(&self) -> (Vec<[f32; 3]>, Vec<u32>, Vec<u32>) {
         let mut stack = vec![(
-            T::try_from(self.nodes.len() - 1).unwrap() + self.reserved_indices,
+            self.nodes.len() as u32 - 1 + self.reserved_indices,
             self.size,
             0,
         )];
@@ -270,7 +235,7 @@ impl<T: NodeValue> SvoDag<T> {
         let mut values = Vec::with_capacity(self.nodes.len() / 2);
 
         while let Some((value, size, index)) = stack.pop() {
-            if value == T::from(0) {
+            if value == 0 {
                 continue;
             }
 
@@ -284,7 +249,7 @@ impl<T: NodeValue> SvoDag<T> {
                 positions.push([x as _, y as _, z as _]);
             } else {
                 let size = size / 2;
-                let node = self.nodes[(value - self.reserved_indices).try_into().unwrap()];
+                let node = self.nodes[(value - self.reserved_indices) as usize];
                 for (i, value) in node.0.iter().copied().enumerate() {
                     let x = x + (i % 2 == 1) as u32 * size;
                     let y = y + (i % 4 > 1) as u32 * size;
@@ -324,7 +289,7 @@ fn get_child_index(size: u32, x: u32, y: u32, z: u32) -> usize {
 #[repr(transparent)]
 struct Node<T>([T; 8]);
 
-impl<T: NodeValue> Node<T> {
+impl<T: PartialEq + Copy> Node<T> {
     fn uniform_value(self) -> Option<T> {
         if self.0[0] == self.0[1]
             && self.0[0] == self.0[2]
@@ -421,8 +386,7 @@ fn cubes() {
     let mut array = [1; 4 * 4 * 4];
     array[0] = 0;
     let svo_dag = SvoDag::new(&array, 4, 4, 4, 256);
-    dbg!(&svo_dag.nodes);
-    assert_eq!(svo_dag.cubes(), (vec![], vec![], vec![]));
+    assert_eq!(svo_dag.cubes().0.len(), 7 + 7);
 }
 
 #[test]
