@@ -86,6 +86,19 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     let mut frame_index = 0;
     let mut accumulated_frame_index = 0;
 
+    let mut materials = [
+        Material {
+            base_colour: [1.0; 3],
+            emission_factor: 0.0,
+        },
+        Material {
+            base_colour: [1.0, 0.0, 0.0],
+            emission_factor: 0.0,
+        },
+    ];
+
+    queue.write_buffer(&pipelines.materials, 0, bytemuck::cast_slice(&materials));
+
     let window = &window;
     event_loop
         .run(move |event, target| {
@@ -161,7 +174,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                 padding: Default::default()
                             }),
                         );
-                        queue.write_buffer(&pipelines.blit_uniform_buffer, 0, bytemuck::bytes_of(&accumulated_frame_index));;
+                        queue.write_buffer(&pipelines.blit_uniform_buffer, 0, bytemuck::bytes_of(&accumulated_frame_index));
 
                         if settings.accumulate_samples {
                             accumulated_frame_index += 1;
@@ -217,6 +230,18 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                 if ui.button("Reset Settings").clicked() {
                                     settings = Settings::default();
                                 }
+                                egui::CollapsingHeader::new("Materials").default_open(true).show(ui, |ui| {
+                                    for (i, material) in materials.iter_mut().enumerate() {
+                                        let mut changed = false;
+                                        ui.label("Base Colour");
+                                        changed |= egui::widgets::color_picker::color_edit_button_rgb(ui, &mut material.base_colour).changed();
+                                        ui.label("Emission Factor");
+                                        changed |= ui.add(egui::Slider::new(&mut material.emission_factor, 0.0..=10_000.0)).changed();
+                                        if changed {
+                                            queue.write_buffer(&pipelines.materials, (i * std::mem::size_of::<Material>()) as _, bytemuck::bytes_of(&*material))};
+                                    }
+
+                                });
                             });
                         });
 
@@ -421,7 +446,7 @@ struct Uniforms {
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
 struct Material {
-    base_colour: glam::Vec3,
+    base_colour: [f32; 3],
     emission_factor: f32,
 }
 
@@ -619,19 +644,11 @@ impl Pipelines {
                 contents: bytemuck::cast_slice(&dag_data),
                 usage: wgpu::BufferUsages::STORAGE,
             }),
-            materials: device.create_buffer_init(&BufferInitDescriptor {
+            materials: device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,
-                contents: bytemuck::cast_slice(&[
-                    Material {
-                        base_colour: glam::Vec3::splat(1.0),
-                        emission_factor: 0.0,
-                    },
-                    Material {
-                        base_colour: glam::Vec3::new(1.0, 0.0, 0.0),
-                        emission_factor: 5.0,
-                    },
-                ]),
-                usage: wgpu::BufferUsages::STORAGE,
+                size: std::mem::size_of::<[Material; 256]>() as _,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
             }),
             tonemapping_lut: device.create_texture_with_data(
                 &queue,
