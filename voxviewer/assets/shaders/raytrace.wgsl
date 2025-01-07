@@ -8,7 +8,7 @@ struct Material_std430_0
 
 @binding(2) @group(0) var<storage, read> materials_0 : array<Material_std430_0>;
 
-@binding(3) @group(0) var entryPointParams_current_0 : texture_storage_2d<rgba16float, write>;
+@binding(3) @group(0) var entryPointParams_current_0 : texture_storage_2d<rgba32float, write>;
 
 @binding(4) @group(0) var entryPointParams_previous_0 : texture_2d<f32>;
 

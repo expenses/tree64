@@ -161,9 +161,9 @@ float3 trace<S: ISampleGenerator>(Ray3f ray, inout S sampler) {
 [NumThreads(8, 8, 1)]
 void main(
     uint3 dispatch_thread_id : SV_DispatchThreadID,
-    [[vk::image_format("rgba16f")]]
+    [[vk::image_format("rgba32f")]]
     WTexture2D<float3> current,
-    [[vk::image_format("rgba16f")]]
+    [[vk::image_format("rgba32f")]]
     Texture2D<float3> previous,
     SamplerState sampler,
 ) {

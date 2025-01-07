@@ -8,6 +8,7 @@ struct V2P
 #include "../../tony-mc-mapface/shader/tony_mc_mapface.hlsl"
 
 uniform uint accumulated_frame_index;
+[[vk::image_format("rgba32f")]]
 Texture2D<float3> hdr;
 SamplerState non_filtering_sampler;
 
