@@ -203,16 +203,14 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 
                         let egui_output = egui_state.egui_ctx().run(raw_input, |ctx| {
                             egui::Window::new("Controls").show(ctx, |ui| {
-                                if ui.button("Make Pretty").clicked() {
-                                    settings = Settings::pretty();
-                                }
-
-                                ui.checkbox(&mut settings.accumulate_samples, "Accumulate Samples");
-                                egui::CollapsingHeader::new("Lighting").default_open(true).show(ui, |ui| {
+                                egui::CollapsingHeader::new("Rendering").default_open(true).show(ui, |ui| {
                                     ui.label("Number of bounces");
                                     ui.add(egui::Slider::new(&mut settings.num_bounces, 0..=5));
-                                    ui.checkbox(&mut settings.enable_shadows, "Enable shadows");
+                                    ui.checkbox(&mut settings.accumulate_samples, "Accumulate Samples");
+                                });
+                                egui::CollapsingHeader::new("Lighting").default_open(true).show(ui, |ui| {
                                     egui::CollapsingHeader::new("Sun").default_open(true).show(ui, |ui| {
+                                        ui.checkbox(&mut settings.enable_shadows, "Enable shadows");
                                         ui.label("Latitude");
                                         ui.add(egui::Slider::new(&mut settings.sun_lat, 0.0..=90.0));
                                         ui.label("Longitude");
@@ -225,11 +223,18 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                     ui.label("Background colour");
                                     egui::widgets::color_picker::color_edit_button_rgb(ui, &mut settings.background_colour);
                                 });
-                                ui.label("Field of view (vertical)");
-                                ui.add(egui::Slider::new(&mut settings.vertical_fov, 1.0..=120.0));
-                                if ui.button("Reset Settings").clicked() {
-                                    settings = Settings::default();
-                                }
+                                egui::CollapsingHeader::new("Camera").default_open(true).show(ui, |ui| {
+                                    ui.label("Field of view (vertical)");
+                                    ui.add(egui::Slider::new(&mut settings.vertical_fov, 1.0..=120.0));
+                                });
+                                egui::CollapsingHeader::new("Settings").default_open(true).show(ui, |ui| {
+                                    if ui.button("Reset").clicked() {
+                                        settings = Settings::default();
+                                    }
+                                    if ui.button("Make Pretty").clicked() {
+                                        settings = Settings::pretty();
+                                    }
+                                });
                                 egui::CollapsingHeader::new("Materials").default_open(true).show(ui, |ui| {
                                     for (i, material) in materials.iter_mut().enumerate() {
                                         let mut changed = false;
