@@ -10,3 +10,6 @@
 [submodule "voxviewer/tony-mc-mapface"]
 	path = voxviewer/tony-mc-mapface
 	url = https://github.com/h3r2tic/tony-mc-mapface
+[submodule "voxviewer/VoxelRT"]
+	path = voxviewer/VoxelRT
+	url = https://github.com/dubiousconst282/VoxelRT/

@@ -32,6 +32,8 @@ uniform uint frame_index;
 uniform float cos_sun_aparent_size;
 uniform uint accumulated_frame_index;
 uniform uint max_bounces;
+uniform uint node_height;
+uniform uint root_node_index;
 
 [Flags]
 enum Settings {
@@ -42,16 +44,16 @@ enum Settings {
 SubDAG initial_subdag() {
     SubDAG subDAG;
     subDAG.lowerBound = uint3(0);
-    subDAG.nodeHeight = 6;
-    subDAG.nodeIndex = MaterialCount + 5u;
+    subDAG.nodeHeight = node_height;
+    subDAG.nodeIndex = MaterialCount + root_node_index;
     return subDAG;
 }
 
 ShadingData create_shading_data_from_intersection(RayVolumeIntersection intersection, Ray3f ray) {
     ShadingData shading_data;
     shading_data.frame.N = intersection.normal;
-    shading_data.frame.T = intersection.normal.yzx;
-    shading_data.frame.B = intersection.normal.zxy;
+    shading_data.frame.T = shading_data.frame.N.yzx;
+    shading_data.frame.B = shading_data.frame.N.zxy;
     shading_data.posW = intersection.position;
     shading_data.faceN = shading_data.frame.N;
     shading_data.V = -ray.mDir;
@@ -68,9 +70,9 @@ struct Material {
 StructuredBuffer<Material> materials;
 
 struct MaterialAndShadingData {
-    PBRTDiffuseMaterialInstance material;
+    PBRTDiffuseMaterialInstance material = {};
     ShadingData shading_data;
-    float3 emission;
+    float3 emission = 0;
 
     float3 get_direct_lighting<S: ISampleGenerator>(inout S sampler) {
         float lighting = float(!shoot_shadow_ray(Ray3f(shading_data.computeRayOrigin(), sample_light(sampler))));
@@ -93,7 +95,7 @@ MaterialAndShadingData create_material_from_intersection(RayVolumeIntersection i
     return output;
 }
 
-float3x3 create_rotation_matrix(float3 dir) {
+float3x3 create_rotation_matrix(dynamic_uniform float3 dir) {
     // Choose an arbitrary vector for T
     var T = float3(1.0, 0.0, 0.0);
     if (abs(dir.x) > 0.99) { // Avoid parallel case
@@ -171,6 +173,10 @@ void main(
     Texture2D<float3> previous,
     SamplerState sampler,
 ) {
+    if (any(dispatch_thread_id.xy >= resolution)) {
+        return;
+    }
+
     let original_tex_coords = (float2(dispatch_thread_id.xy) + .5) /  resolution;
 
     var rng = TinyUniformSampleGenerator(dispatch_thread_id.xy, frame_index);

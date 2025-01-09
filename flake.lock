@@ -105,6 +105,22 @@
         "type": "github"
       }
     },
+    "nixpkgs-slang": {
+      "locked": {
+        "lastModified": 1736402824,
+        "narHash": "sha256-s67YHaBdG//29EujvTKKMLxAJlpkHdP41htC7DygnMs=",
+        "owner": "expenses",
+        "repo": "nixpkgs",
+        "rev": "b917f7d6f7ec377c42580c8a11b4023e560e4d42",
+        "type": "github"
+      },
+      "original": {
+        "owner": "expenses",
+        "ref": "shader-slang",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "nixpkgs_2": {
       "locked": {
         "lastModified": 1733759999,
@@ -127,7 +143,8 @@
         "erosanix": "erosanix",
         "fenix": "fenix",
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs_2"
+        "nixpkgs": "nixpkgs_2",
+        "nixpkgs-slang": "nixpkgs-slang"
       }
     },
     "rust-analyzer-src": {

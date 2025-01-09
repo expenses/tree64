@@ -267,6 +267,10 @@ impl SvoDag {
         bytemuck::cast_slice(&self.nodes)
     }
 
+    pub fn nodes(&self) -> &[Node<u32>] {
+        &self.nodes
+    }
+
     pub fn num_nodes(&self) -> usize {
         self.nodes.len()
     }
@@ -287,7 +291,7 @@ fn get_child_index(size: u32, x: u32, y: u32, z: u32) -> usize {
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(transparent)]
-struct Node<T>([T; 8]);
+pub struct Node<T>([T; 8]);
 
 impl<T: PartialEq + Copy> Node<T> {
     fn uniform_value(self) -> Option<T> {

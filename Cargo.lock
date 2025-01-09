@@ -2409,6 +2409,7 @@ dependencies = [
  "log",
  "pollster",
  "rayon",
+ "svo_dag",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

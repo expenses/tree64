@@ -1,11 +1,13 @@
 use dolly::prelude::*;
 use egui_winit::egui;
-use wgpu::util::{BufferInitDescriptor, DeviceExt};
+use wgpu::util::DeviceExt;
 use winit::{
     event::{DeviceEvent, ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     window::{Window, WindowId},
 };
+
+const USE_SPIRV_SHADER: bool = false;
 
 struct App<'a> {
     egui_state: egui_winit::State,
@@ -24,6 +26,7 @@ struct App<'a> {
     pipelines: Pipelines,
     materials: Vec<Material>,
     egui_renderer: egui_wgpu::Renderer,
+    svo_dag: svo_dag::SvoDag,
 }
 
 impl<'a> App<'a> {
@@ -104,38 +107,42 @@ impl<'a> App<'a> {
                     .show(ui, |ui| {
                         if ui.button("Reset").clicked() {
                             *settings = Settings::default();
+                            reset_accumulation = true;
                         }
                         if ui.button("Make Pretty").clicked() {
                             *settings = Settings::pretty();
+                            reset_accumulation = true;
                         }
                     });
                 egui::CollapsingHeader::new("Materials")
                     .default_open(true)
                     .show(ui, |ui| {
-                        for (i, material) in materials.iter_mut().enumerate() {
-                            let mut changed = false;
-                            ui.label("Base Colour");
-                            changed |= egui::widgets::color_picker::color_edit_button_rgb(
-                                ui,
-                                &mut material.base_colour,
-                            )
-                            .changed();
-                            ui.label("Emission Factor");
-                            changed |= ui
-                                .add(egui::Slider::new(
-                                    &mut material.emission_factor,
-                                    0.0..=10_000.0,
-                                ))
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            for (i, material) in materials.iter_mut().enumerate() {
+                                let mut changed = false;
+                                ui.label("Base Colour");
+                                changed |= egui::widgets::color_picker::color_edit_button_rgb(
+                                    ui,
+                                    &mut material.base_colour,
+                                )
                                 .changed();
-                            if changed {
-                                queue.write_buffer(
-                                    &pipelines.materials,
-                                    (i * std::mem::size_of::<Material>()) as _,
-                                    bytemuck::bytes_of(&*material),
-                                );
-                                reset_accumulation = true;
-                            };
-                        }
+                                ui.label("Emission Factor");
+                                changed |= ui
+                                    .add(egui::Slider::new(
+                                        &mut material.emission_factor,
+                                        0.0..=10_000.0,
+                                    ))
+                                    .changed();
+                                if changed {
+                                    queue.write_buffer(
+                                        &pipelines.materials,
+                                        (i * std::mem::size_of::<Material>()) as _,
+                                        bytemuck::bytes_of(&*material),
+                                    );
+                                    reset_accumulation = true;
+                                };
+                            }
+                        });
                     });
             });
         });
@@ -217,7 +224,9 @@ impl<'a> App<'a> {
                 accumulated_frame_index: self.accumulated_frame_index, max_bounces: settings.max_bounces,
                 cos_sun_apparent_size: settings.sun_apparent_size.to_radians().cos(),
                 background_colour: glam::Vec3::from(settings.background_colour).into(),
-                padding: Default::default()
+                node_height: self.svo_dag.num_levels() as _,
+                root_node_index: self.svo_dag.num_nodes() as u32 - 1,
+                _padding: Default::default()
             }),
         );
         self.queue.write_buffer(
@@ -294,6 +303,7 @@ impl<'a> winit::application::ApplicationHandler for App<'a> {
                 ..
             } => self.right_mouse_down = state == ElementState::Pressed,
             WindowEvent::Resized(new_size) => {
+                self.accumulated_frame_index = 0;
                 // Reconfigure the surface with the new size
                 self.config.width = new_size.width.max(1);
                 self.config.height = new_size.height.max(1);
@@ -376,9 +386,12 @@ impl<'a> winit::application::ApplicationHandler for App<'a> {
                                     [self.accumulated_frame_index as usize % 2],
                                 &[],
                             );
+
+                            let workgroup_size = 8;
+
                             compute_pass.dispatch_workgroups(
-                                ((self.config.width - 1) / 8) + 1,
-                                ((self.config.height - 1) / 8) + 1,
+                                (self.config.width + workgroup_size - 1) / workgroup_size,
+                                (self.config.height + workgroup_size - 1) / workgroup_size,
                                 1,
                             );
 
@@ -459,7 +472,11 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         .request_device(
             &wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::default(),
+                required_features: if USE_SPIRV_SHADER {
+                    wgpu::Features::SPIRV_SHADER_PASSTHROUGH
+                } else {
+                    Default::default()
+                },
                 // Make sure we use the texture resolution limits from the adapter, so we can support images the size of the swapchain.
                 required_limits: wgpu::Limits::default(),
                 memory_hints: wgpu::MemoryHints::Performance,
@@ -483,18 +500,36 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 
     let pipelines = Pipelines::new(&device, &queue, swapchain_format).await;
 
-    let materials = vec![
+    let mut materials = vec![
         Material {
             base_colour: [1.0; 3],
-            emission_factor: 0.0,
-        },
-        Material {
-            base_colour: [1.0, 0.0, 0.0],
-            emission_factor: 0.0,
-        },
+            emission_factor: 0.0
+        };
+        32
     ];
 
+    materials[1] = Material {
+        base_colour: [1.0, 0.1, 0.1],
+        emission_factor: 0.0,
+    };
+    materials[31] = Material {
+        base_colour: [0.0, 0.0, 1.0],
+        emission_factor: 10.0,
+    };
+
+    let svo_dag = svo_dag::SvoDag::read(std::io::Cursor::new(
+        load_resource_bytes("stairs_20.dag").await,
+    ))
+    .unwrap();
+
+    //dbg!(svo_dag.nodes().len(), svo_dag.num_levels(), svo_dag.size());
+
     queue.write_buffer(&pipelines.materials, 0, bytemuck::cast_slice(&materials));
+    queue.write_buffer(
+        &pipelines.dag_data,
+        0,
+        bytemuck::cast_slice(&svo_dag.nodes()),
+    );
 
     let mut app = App {
         egui_renderer: egui_wgpu::Renderer::new(&device, swapchain_format, None, 1, false),
@@ -518,13 +553,14 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         frame_index: 0,
         settings: Settings::default(),
         camera: CameraRig::builder()
-            .with(Position::new(glam::Vec3::splat((1 << 5) as f32)))
-            .with(YawPitch::new().yaw_degrees(45.0).pitch_degrees(-30.0))
+            .with(Position::new(glam::Vec3::splat(50.0)))
+            .with(YawPitch::new().yaw_degrees(30.0).pitch_degrees(-30.0))
             .with(Smooth::new_position_rotation(0.25, 0.25))
-            .with(Arm::new(glam::Vec3::Z * 125.0))
+            .with(Arm::new(glam::Vec3::Z * 175.0))
             .build(),
         pipelines,
         materials,
+        svo_dag,
     };
 
     event_loop.run_app(&mut app).unwrap()
@@ -580,9 +616,9 @@ impl Default for Settings {
         Self {
             sun_long: -45.0_f32,
             sun_lat: 45.0_f32,
-            enable_shadows: false,
+            enable_shadows: true,
             sun_apparent_size: 5.0_f32,
-            accumulate_samples: false,
+            accumulate_samples: true,
             max_bounces: 0,
             background_colour: [0.01; 3],
             sun_colour: [1.0; 3],
@@ -594,9 +630,7 @@ impl Default for Settings {
 impl Settings {
     fn pretty() -> Self {
         Self {
-            enable_shadows: true,
             max_bounces: 2,
-            accumulate_samples: true,
             ..Default::default()
         }
     }
@@ -633,7 +667,9 @@ struct Uniforms {
     cos_sun_apparent_size: f32,
     accumulated_frame_index: u32,
     max_bounces: u32,
-    padding: [u32; 1],
+    node_height: u32,
+    root_node_index: u32,
+    _padding: [u32; 3],
 }
 
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -745,15 +781,6 @@ impl Pipelines {
             ],
         });
 
-        let dag_data = [
-            [1, 1, 1, 0, 2, 0, 0, 0],
-            [1, 1, 1, 256, 1, 256, 256, 0],
-            [1, 1, 1, 257, 1, 257, 257, 0],
-            [1, 1, 1, 258, 1, 258, 258, 0],
-            [1, 1, 1, 259, 1, 259, 259, 0],
-            [1, 1, 1, 260, 1, 260, 260, 0],
-        ];
-
         Self {
             non_filtering_sampler: device.create_sampler(&wgpu::SamplerDescriptor::default()),
             filtering_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
@@ -771,12 +798,23 @@ impl Pipelines {
                         push_constant_ranges: &[],
                     }),
                 ),
-                module: &device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: None,
-                    source: wgpu::ShaderSource::Wgsl(
-                        load_resource_str("shaders/raytrace.wgsl").await.into(),
-                    ),
-                }),
+                module: &if USE_SPIRV_SHADER {
+                    unsafe {
+                        device.create_shader_module_spirv(&wgpu::ShaderModuleDescriptorSpirV {
+                            label: None,
+                            source: std::borrow::Cow::Borrowed(bytemuck::cast_slice(
+                                &load_resource_bytes("shaders/raytrace.spv").await,
+                            )),
+                        })
+                    }
+                } else {
+                    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: None,
+                        source: wgpu::ShaderSource::Wgsl(
+                            load_resource_str("shaders/raytrace.wgsl").await.into(),
+                        ),
+                    })
+                },
                 entry_point: Some("main"),
                 compilation_options: Default::default(),
                 cache: Default::default(),
@@ -832,10 +870,11 @@ impl Pipelines {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
-            dag_data: device.create_buffer_init(&BufferInitDescriptor {
+            dag_data: device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,
-                contents: bytemuck::cast_slice(&dag_data),
-                usage: wgpu::BufferUsages::STORAGE,
+                size: 1_000_000,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
             }),
             materials: device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,
