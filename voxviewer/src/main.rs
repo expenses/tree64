@@ -114,6 +114,16 @@ impl<'a> App<'a> {
                             reset_accumulation = true;
                         }
                     });
+                egui::CollapsingHeader::new("Debugging")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            reset_accumulation |= ui
+                                .checkbox(&mut settings.show_heatmap, "Show Heatmap")
+                                .changed();
+                        }
+                    });
                 egui::CollapsingHeader::new("Materials")
                     .default_open(true)
                     .show(ui, |ui| {
@@ -219,7 +229,7 @@ impl<'a> App<'a> {
                 camera_pos: glam::Vec3::from(transform.position).into(),
                 sun_colour: glam::Vec3::from(settings.sun_colour).into(),
                 sun_direction: glam::Vec3::new(settings.sun_long.to_radians().sin() * settings.sun_lat.to_radians().cos(), settings.sun_lat.to_radians().sin(), settings.sun_long.to_radians().cos() * settings.sun_lat.to_radians().cos()).into(),
-                settings: (settings.enable_shadows as i32) | (settings.accumulate_samples as i32) << 1,
+                settings: (settings.enable_shadows as i32) | (settings.accumulate_samples as i32) << 1 | (settings.show_heatmap as i32) << 2,
                 frame_index: self.frame_index,
                 accumulated_frame_index: self.accumulated_frame_index, max_bounces: settings.max_bounces,
                 cos_sun_apparent_size: settings.sun_apparent_size.to_radians().cos(),
@@ -344,7 +354,7 @@ impl<'a> winit::application::ApplicationHandler for App<'a> {
 
                 let settings = &self.settings;
 
-                if !settings.accumulate_samples {
+                if !settings.accumulate_samples || settings.show_heatmap {
                     self.accumulated_frame_index = 0;
                 }
 
@@ -505,9 +515,10 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
             base_colour: [1.0; 3],
             emission_factor: 0.0
         };
-        32
+        256
     ];
 
+    /*
     materials[1] = Material {
         base_colour: [1.0, 0.1, 0.1],
         emission_factor: 0.0,
@@ -516,9 +527,10 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         base_colour: [0.0, 0.0, 1.0],
         emission_factor: 10.0,
     };
+    */
 
     let svo_dag = svo_dag::SvoDag::read(std::io::Cursor::new(
-        load_resource_bytes("stairs_20.dag").await,
+        load_resource_bytes("sponza.dag").await,
     ))
     .unwrap();
 
@@ -609,6 +621,7 @@ struct Settings {
     background_colour: [f32; 3],
     sun_colour: [f32; 3],
     vertical_fov: f32,
+    show_heatmap: bool,
 }
 
 impl Default for Settings {
@@ -623,6 +636,7 @@ impl Default for Settings {
             background_colour: [0.01; 3],
             sun_colour: [1.0; 3],
             vertical_fov: 45.0_f32,
+            show_heatmap: false,
         }
     }
 }
@@ -872,7 +886,7 @@ impl Pipelines {
             }),
             dag_data: device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,
-                size: 1_000_000,
+                size: 20_000_000,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),

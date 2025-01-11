@@ -38,7 +38,8 @@ uniform uint root_node_index;
 [Flags]
 enum Settings {
     EnableShadows,
-    AccumulateSamples
+    AccumulateSamples,
+    ShowHeatmap
 };
 
 SubDAG initial_subdag() {
@@ -163,6 +164,18 @@ float3 trace<S: ISampleGenerator>(Ray3f ray, inout S sampler) {
     return background_colour;
 }
 
+#include "gradients.slang"
+
+uint get_clock_portable() {
+    __target_switch
+    {
+        case spirv:
+            return getRealtimeClockLow();
+        default:
+            return 0;
+    }
+}
+
 [shader("compute")]
 [NumThreads(8, 8, 1)]
 void main(
@@ -173,6 +186,8 @@ void main(
     Texture2D<float3> previous,
     SamplerState sampler,
 ) {
+    let start = get_clock_portable();
+
     if (any(dispatch_thread_id.xy >= resolution)) {
         return;
     }
@@ -197,10 +212,17 @@ void main(
 
     var sample = trace(ray, rng);
 
+
     if ((settings & Settings::AccumulateSamples) && (accumulated_frame_index > 0)) {
         float3 past_samples = previous.SampleLevel(sampler, original_tex_coords, 0);
         sample += past_samples;
     }
 
     current.Store(dispatch_thread_id.xy, sample);
+
+    if (settings & Settings::ShowHeatmap) {
+        let end = get_clock_portable();
+
+        current.Store(dispatch_thread_id.xy, viridis(float(end.x - start.x) / 50000.0));
+    }
 }
