@@ -9,7 +9,7 @@ from markov.wfc import (
 )
 from pprint import pprint
 
-dims = (40, 40, 40)
+dims = (100, 100, 100)
 
 tileset = TaggingTileset()
 
@@ -100,8 +100,6 @@ output = map_3d(wfc.values(), output, tiles)
 output[0, :, :] = index_for_colour("N")
 output[1, :, :] = index_for_colour("E")
 
-writer = UsdWriter("pipes.usdc")
-
 # writer.write(output)
 
 
@@ -181,4 +179,11 @@ rep(
         ),
     ),
 )
-writer.write(output)
+
+print("About to pad")
+padded = np.pad(output, 1)
+print("Done padding")
+#write_dag(np.ascontiguousarray(np.rot90(output)), "stairs.dag")
+write_zvox(padded, "stairs.zvox")
+write_tree64(padded, "stairs.tree64")
+write_dag(padded, "stairs.dag")

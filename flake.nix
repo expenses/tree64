@@ -195,7 +195,15 @@
         devShells.bevy = with pkgs;
           mkShell rec {
             nativeBuildInputs = [
-              pkgs-slang.shader-slang
+              (pkgs-slang.shader-slang.overrideAttrs (attrs: {
+                src = fetchFromGitHub {
+                    owner = "shader-slang";
+                    repo = "slang";
+                    rev = "a985e240a6d9edb1545e357d20805bf81fba975a";
+                    hash = "sha256-H/ePYu6o926M22zussW1f15iYRJCq29TeNJzBD0eAao=";
+                    fetchSubmodules = true;
+                  };
+              }))
               pkg-config
               renderdoc
               spirv-tools

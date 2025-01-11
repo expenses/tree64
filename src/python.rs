@@ -46,11 +46,23 @@ pub fn write_dag(array: numpy::borrow::PyReadonlyArray3<u8>, filename: &str) -> 
 }
 
 #[pyfunction]
+pub fn write_tree64(array: numpy::borrow::PyReadonlyArray3<u8>, filename: &str) -> PyResult<()> {
+    let dims = array.dims();
+    let w = dims[2];
+    let h = dims[1];
+    let d = dims[0];
+    let slice = array.as_slice()?;
+    let dag = svo_dag::Tree64::new(slice, [w, h, d]);
+    dag.serialize(std::fs::File::create(filename)?)?;
+    Ok(())
+}
+
+#[pyfunction]
 pub fn read_dag<'a>(
     py: Python<'a>,
     filename: &str,
 ) -> PyResult<Bound<'a, numpy::array::PyArray3<u8>>> {
-    let dag = svo_dag::SvoDag::<u32>::read(std::fs::File::open(filename)?)?;
+    let dag = svo_dag::SvoDag::read(std::fs::File::open(filename)?)?;
     let arr = numpy::array::PyArray1::from_vec(py, dag.as_array()).reshape((
         dag.size() as _,
         dag.size() as _,
@@ -68,7 +80,7 @@ pub fn dag_to_cubes(
     let h = dims[1];
     let d = dims[0];
     let slice = array.as_slice()?;
-    let dag = svo_dag::SvoDag::<u32>::new(slice, w, h, d, 256);
+    let dag = svo_dag::SvoDag::new(slice, w, h, d, 256);
     Ok(dag.cubes())
 }
 
