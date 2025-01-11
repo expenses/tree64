@@ -102,6 +102,71 @@ pub fn read_zvox<'a>(
     Ok((arr, palette))
 }
 
+#[pyfunction]
+pub fn read_vox<'a>(
+    py: Python<'a>,
+    filename: &str,
+) -> PyResult<Vec<((i32, i32, i32), Bound<'a, numpy::array::PyArray3<u8>>)>> {
+    let vox = dot_vox::load(filename).unwrap();
+    dbg!(vox.models.len());
+
+    let root_transform = &vox.scenes[0];
+    let root_group = &vox.scenes[match root_transform {
+        dot_vox::SceneNode::Transform { child, .. } => *child as usize,
+        _ => panic!(),
+    }];
+    let children = match root_group {
+        dot_vox::SceneNode::Group { children, .. } => children,
+        _ => panic!(),
+    };
+
+    let mut min = glam::IVec3::splat(i32::MAX);
+    let mut max = glam::IVec3::splat(i32::MIN);
+
+    let mut models_and_positions = Vec::new();
+
+    for child in children {
+        let (child, frames) = match &vox.scenes[*child as usize] {
+            dot_vox::SceneNode::Transform { frames, child, .. } => (child, frames),
+            _ => panic!(),
+        };
+
+        let translation = &frames[0].attributes["_t"];
+
+        let mut splits = translation.split(' ');
+
+        let x = splits.next().unwrap().parse::<i32>().unwrap();
+        let y = splits.next().unwrap().parse::<i32>().unwrap();
+        let z = splits.next().unwrap().parse::<i32>().unwrap();
+
+        let model = match &vox.scenes[*child as usize] {
+            dot_vox::SceneNode::Shape { models, .. } => models[0].model_id,
+            _ => panic!(),
+        };
+
+        let model = &vox.models[model as usize];
+
+        let mut array =
+            vec![0; model.size.x as usize * model.size.y as usize * model.size.z as usize];
+
+        for voxel in &model.voxels {
+            array[voxel.x as usize
+                + model.size.x as usize * voxel.y as usize
+                + voxel.z as usize * model.size.x as usize * model.size.y as usize] = voxel.i;
+        }
+
+        let array = numpy::array::PyArray1::from_vec(py, array).reshape((
+            model.size.z as _,
+            model.size.y as _,
+            model.size.x as _,
+        ))?;
+
+        models_and_positions.push(((x, y, z), array));
+    }
+
+    Ok(models_and_positions)
+}
+
 #[pyclass]
 pub struct TevClient {
     inner: tev_client::TevClient,

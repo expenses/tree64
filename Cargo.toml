@@ -25,6 +25,8 @@ hashbrown = "0.15.2"
 wfc = { path = "wfc" }
 svo_dag = { path = "svo_dag" }
 zstd = "0.13.2"
+dot_vox = "5.1.1"
+glam = "0.29.2"
 
 [build-dependencies]
 xml = "0.8.20"

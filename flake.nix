@@ -29,6 +29,23 @@
         python-deps = ps: [ps.ipython ps.numpy ps.pillow ps.scikit-image ps.ffmpeg-python ps.zstandard ps.openusd];
       in rec {
         packages = rec {
+          rga = with pkgs;
+            stdenv.mkDerivation {
+              name = "rga";
+              src = fetchzip {
+                url = "https://gpuopen.com/download/radeon-developer-tool-suite/RadeonDeveloperToolSuite-2024-09-26-1411.tgz";
+                hash = "sha256-e1nu0afKdxUZDyQn7OHD+8IQhw+nIedud7LlIs52F1M=";
+              };
+              installPhase = ''
+                mkdir $out
+                cp -r $src $out/bin
+              '';
+              buildInputs = [libGL stdenv.cc.cc zlib libxml2 libxkbcommon libpng fontconfig xorg.libSM libdrm wayland];
+              nativeBuildInputs = [
+                autoPatchelfHook
+              ];
+            };
+
           magicavoxel = pkgs.callPackage ./nix/magicavoxel.nix {
             inherit (erosanix.lib.${system}) mkWindowsApp;
           };
@@ -197,12 +214,12 @@
             nativeBuildInputs = [
               (pkgs-slang.shader-slang.overrideAttrs (attrs: {
                 src = fetchFromGitHub {
-                    owner = "shader-slang";
-                    repo = "slang";
-                    rev = "a985e240a6d9edb1545e357d20805bf81fba975a";
-                    hash = "sha256-H/ePYu6o926M22zussW1f15iYRJCq29TeNJzBD0eAao=";
-                    fetchSubmodules = true;
-                  };
+                  owner = "shader-slang";
+                  repo = "slang";
+                  rev = "a985e240a6d9edb1545e357d20805bf81fba975a";
+                  hash = "sha256-H/ePYu6o926M22zussW1f15iYRJCq29TeNJzBD0eAao=";
+                  fetchSubmodules = true;
+                };
               }))
               pkg-config
               renderdoc

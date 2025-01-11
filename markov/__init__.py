@@ -348,3 +348,28 @@ def load_mkjr_vox(filename, limited_palette=None):
         load_vox(filename, limited_palette=limited_palette),
         axes=(0, 2),
     )
+
+
+def join_split_vox(filename):
+    vox = read_vox(filename)
+    max_v = np.array(vox[0][0])
+    min_v = np.array(vox[0][0])
+    for size, model in vox:
+        min_v = np.minimum(min_v, size)
+        max_v = np.maximum(
+            max_v, np.array(size) + (model.shape[2], model.shape[1], model.shape[0])
+        )
+
+    size = max_v - min_v
+    arr = np.zeros((size[2], size[1], size[0]), dtype=np.uint8)
+
+    for size, model in vox:
+        pos = size - min_v
+        shape = model.shape
+        arr[
+            pos[2] : pos[2] + shape[0],
+            pos[1] : pos[1] + shape[1],
+            pos[0] : pos[0] + shape[2],
+        ] = model
+
+    return arr

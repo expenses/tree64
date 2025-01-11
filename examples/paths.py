@@ -183,7 +183,7 @@ rep(
 print("About to pad")
 padded = np.pad(output, 1)
 print("Done padding")
-#write_dag(np.ascontiguousarray(np.rot90(output)), "stairs.dag")
+# write_dag(np.ascontiguousarray(np.rot90(output)), "stairs.dag")
 write_zvox(padded, "stairs.zvox")
 write_tree64(padded, "stairs.tree64")
 write_dag(padded, "stairs.dag")

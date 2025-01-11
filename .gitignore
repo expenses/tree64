@@ -12,3 +12,7 @@ markov/*.so
 perf.*
 voxviewer/*.cap
 voxviewer/voxviewer
+*.tree64
+*.vox
+*.dag
+*.zvox
