@@ -494,32 +494,92 @@ fn advanced_indexing() {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, Eq, PartialEq)]
+struct CompactRange {
+    start: u32,
+    length: u8,
+}
+
+impl CompactRange {
+    fn end(&self) -> u32 {
+        self.start + self.length as u32
+    }
+
+    fn as_range(&self) -> std::ops::Range<usize> {
+        self.start as usize..self.start as usize + self.length as usize
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct VecWithCaching<T> {
+    inner: Vec<T>,
+    cache: hashbrown::HashTable<CompactRange>,
+}
+
+impl<T: std::hash::Hash + Clone + PartialEq> VecWithCaching<T> {
+    fn from_vec(vec: Vec<T>) -> Self {
+        Self {
+            inner: vec,
+            cache: Default::default(),
+        }
+    }
+
+    fn insert<F: FnMut(&[T]) -> Option<u32>>(&mut self, slice: &[T], mut try_find: F) -> u32 {
+        let hasher = fnv::FnvBuildHasher::default();
+
+        self.cache
+            .entry(
+                hasher.hash_one(slice),
+                |compact_range| &self.inner[compact_range.as_range()] == slice,
+                |compact_range| hasher.hash_one(&self.inner[compact_range.as_range()]),
+            )
+            .or_insert_with(|| CompactRange {
+                start: try_find(&self.inner)
+                    .unwrap_or_else(|| extend_overlapping(&mut self.inner, slice) as u32),
+                length: slice.len() as u8,
+            })
+            .get()
+            .start
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct VecStats {
+    cache_hits: usize,
+    cache_bytes_saved: usize,
+    search_hits: usize,
+    search_bytes_saved: usize,
+    overlapping_saved: usize,
+}
+
 #[derive(Default, Debug)]
 pub struct Tree64Stats {
-    value_cache_hits: usize,
-    value_cache_bytes_saved: usize,
-    value_search_hits: usize,
-    value_search_bytes_saved: usize,
-    value_overlapping_saved: usize,
-    node_search_hits: usize,
-    node_search_bytes_saved: usize,
-    nodes_overlapping_saved: usize,
+    value: VecStats,
+    nodes: VecStats,
 }
 
 #[repr(C, packed)]
-#[derive(Default, Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(
+    Default, Debug, Clone, Copy, std::hash::Hash, PartialEq, bytemuck::Pod, bytemuck::Zeroable,
+)]
 pub struct Tree64Node {
     pub is_leaf_and_ptr: u32,
     pub pop_mask: u64,
 }
 
+#[derive(Default, Debug)]
+struct Tree64GC {
+    touched_nodes: fnv::FnvHashSet<u32>,
+    data_spans: Vec<CompactRange>,
+    node_spans: Vec<CompactRange>,
+}
+
 #[derive(Debug)]
 pub struct Tree64 {
-    pub nodes: Vec<Tree64Node>,
-    pub data: Vec<u8>,
+    pub nodes: VecWithCaching<Tree64Node>,
+    pub data: VecWithCaching<u8>,
     pub scale: u8,
     stats: Tree64Stats,
-    indices: hashbrown::HashTable<std::ops::Range<u32>>,
 }
 
 #[test]
@@ -528,47 +588,93 @@ fn test_tree_node_size() {
 }
 
 impl Tree64 {
+    fn collect_garbage(&self, root_node_index: u32) {
+        let mut gc = Tree64GC::default();
+        let mut stack = vec![root_node_index];
+
+        while let Some(node_index) = stack.pop() {
+            if !gc.touched_nodes.insert(node_index) {
+                continue;
+            }
+
+            let node = &self.nodes.inner[node_index as usize];
+
+            if node.pop_mask == 0 {
+                continue;
+            }
+
+            let range = CompactRange {
+                start: node.is_leaf_and_ptr >> 1,
+                length: node.pop_mask.count_ones() as u8,
+            };
+
+            let is_leaf = node.is_leaf_and_ptr & 1 == 1;
+
+            if is_leaf {
+                gc.data_spans.push(range);
+            } else {
+                gc.node_spans.push(range);
+
+                for i in 0..range.length {
+                    stack.push(range.start + i as u32);
+                }
+            }
+        }
+
+        gc.data_spans.sort_unstable();
+        gc.node_spans.sort_unstable();
+
+        let mut previous = 0;
+
+        for range in &gc.data_spans {
+            if range.start > previous {
+                todo!("{:?}", previous..range.start);
+            }
+
+            previous = range.start + range.end();
+        }
+
+        let mut previous = 0;
+
+        for range in &gc.node_spans {
+            if range.start > previous && previous != root_node_index {
+                todo!("{:?}", previous..range.start);
+            }
+
+            previous = range.end();
+        }
+    }
+
     fn insert_values(&mut self, values: &[u8]) -> u32 {
         if values.is_empty() {
             return 0;
         }
 
-        let hasher = fnv::FnvBuildHasher::default();
-
         let mut hit_cache = true;
+        let old_length = self.data.inner.len();
 
-        let index = self
-            .indices
-            .entry(
-                hasher.hash_one(values),
-                |range| &self.data[range.start as usize..range.end as usize] == values,
-                |range| hasher.hash_one(&self.data[range.start as usize..range.end as usize]),
-            )
-            .or_insert_with(|| {
-                hit_cache = false;
+        let index = self.data.insert(values, |_data| {
+            hit_cache = false;
 
-                let start = /*if let Some(index) = memchr::memmem::find(&self.data, values) {
-                    self.stats.value_search_hits += 1;
-                    self.stats.value_search_bytes_saved += values.len();
-                    index
-                } else*/ {
-                    let old_index = self.data.len();
-                    let index = extend_overlapping(&mut self.data, values);
+            //if let Some(index) = memchr::memmem::find(_data, values) {
+            //    self.stats.value.search_hits += 1;
+            //    self.stats.value.search_bytes_saved += values.len();
+            //    return Some(index as u32);
+            //}
 
-                    self.stats.value_overlapping_saved +=
-                        values.len() - (self.data.len() - old_index);
-
-                    index
-                } as u32;
-
-                start..start + values.len() as u32
-            })
-            .get()
-            .start;
+            None
+        });
 
         if hit_cache {
-            self.stats.value_cache_hits += 1;
-            self.stats.value_cache_bytes_saved += values.len();
+            self.stats.value.cache_hits += 1;
+            self.stats.value.cache_bytes_saved += values.len();
+        }
+
+        let new_length = self.data.inner.len();
+
+        if old_length != new_length {
+            let added = new_length - old_length;
+            self.stats.value.overlapping_saved += values.len() - added;
         }
 
         index
@@ -579,25 +685,42 @@ impl Tree64 {
             return 0;
         }
 
-        /*if let Some(index) = memchr::memmem::find(
-            bytemuck::cast_slice(&self.nodes),
-            bytemuck::cast_slice(nodes),
-        ) {
-            self.stats.node_search_hits += 1;
-            self.stats.node_search_bytes_saved += nodes.len() * std::mem::size_of::<Tree64Node>();
+        let mut hit_cache = true;
+        let old_length = self.nodes.inner.len();
 
-            //dbg!(index, index % std::mem::size_of::<Tree64Node>());
-            if index % std::mem::size_of::<Tree64Node>() == 0 {
-                return (index / std::mem::size_of::<Tree64Node>()) as u32;
+        let index = self.nodes.insert(nodes, |_data| {
+            hit_cache = false;
+
+            /*
+            if let Some(index) =
+                memchr::memmem::find(bytemuck::cast_slice(_data), bytemuck::cast_slice(nodes))
+            {
+                if index % std::mem::size_of::<Tree64Node>() != 0 {
+                    panic!()
+                }
+                let node_index = index / std::mem::size_of::<Tree64Node>();
+
+                self.stats.nodes.search_hits += 1;
+                self.stats.nodes.search_bytes_saved += nodes.len() * std::mem::size_of::<Tree64Node>();
+                return Some(node_index as u32);
             }
-            panic!();
-            //return index as u32;
-        }*/
+            */
 
-        let old_index = self.nodes.len();
-        let index = extend_overlapping(&mut self.nodes, nodes) as u32;
+            None
+        });
 
-        self.stats.nodes_overlapping_saved += nodes.len() - (self.nodes.len() - old_index);
+        if hit_cache {
+            self.stats.nodes.cache_hits += 1;
+            self.stats.nodes.cache_bytes_saved += nodes.len();
+        }
+
+        let new_length = self.nodes.inner.len();
+
+        if old_length != new_length {
+            let added = new_length - old_length;
+            self.stats.nodes.overlapping_saved += nodes.len() - added;
+        }
+
         index
     }
 
@@ -611,13 +734,11 @@ impl Tree64 {
             nodes: Default::default(),
             data: Default::default(),
             stats: Default::default(),
-            indices: Default::default(),
         };
         this.scale = scale as _;
         let root = this.insert(array, dims, [0; 3], scale);
-        this.nodes.insert(0, root);
+        this.nodes.inner.insert(0, root);
         dbg!(&this.stats);
-        println!("{:?}", this.stats);
         this
     }
 
@@ -695,10 +816,10 @@ impl Tree64 {
 
     pub fn serialize<W: io::Write>(&self, mut writer: W) -> io::Result<()> {
         writer.write_all(&[self.scale])?;
-        writer.write_all(&(self.nodes.len() as u32).to_le_bytes())?;
-        writer.write_all(&(self.data.len() as u32).to_le_bytes())?;
-        writer.write_all(bytemuck::cast_slice(&self.nodes))?;
-        writer.write_all(bytemuck::cast_slice(&self.data))?;
+        writer.write_all(&(self.nodes.inner.len() as u32).to_le_bytes())?;
+        writer.write_all(&(self.data.inner.len() as u32).to_le_bytes())?;
+        writer.write_all(bytemuck::cast_slice(&self.nodes.inner))?;
+        writer.write_all(bytemuck::cast_slice(&self.data.inner))?;
         Ok(())
     }
 
@@ -711,13 +832,12 @@ impl Tree64 {
         reader.read_exact(bytemuck::bytes_of_mut(&mut num_data))?;
         let mut this = Self {
             scale,
-            nodes: vec![Tree64Node::default(); num_nodes as usize],
-            data: vec![0; num_data as usize],
+            nodes: VecWithCaching::from_vec(vec![Tree64Node::default(); num_nodes as usize]),
+            data: VecWithCaching::from_vec(vec![0; num_data as usize]),
             stats: Default::default(),
-            indices: Default::default(),
         };
-        reader.read_exact(bytemuck::cast_slice_mut(&mut this.nodes))?;
-        reader.read_exact(bytemuck::cast_slice_mut(&mut this.data))?;
+        reader.read_exact(bytemuck::cast_slice_mut(&mut this.nodes.inner))?;
+        reader.read_exact(bytemuck::cast_slice_mut(&mut this.data.inner))?;
         Ok(this)
     }
 }
@@ -746,20 +866,20 @@ fn extend_overlapping<T: PartialEq + Clone>(vec: &mut Vec<T>, data: &[T]) -> usi
 fn test_tree() {
     {
         let tree = Tree64::new(&[1, 1, 1, 1], [2, 2, 1]);
-        assert_eq!(tree.data, &[1; 4]);
-        assert_eq!({ tree.nodes[0].is_leaf_and_ptr }, 1);
-        assert_eq!({ tree.nodes[0].pop_mask }, 0b00110011);
+        assert_eq!(tree.data.inner, &[1; 4]);
+        assert_eq!({ tree.nodes.inner[0].is_leaf_and_ptr }, 1);
+        assert_eq!({ tree.nodes.inner[0].pop_mask }, 0b00110011);
     }
 
     {
         let tree = Tree64::new(&[1, 1, 1, 1, 1, 0, 1, 1], [2, 2, 2]);
-        assert_eq!(tree.data, &[1; 7]);
-        assert_eq!({ tree.nodes[0].is_leaf_and_ptr }, 1);
+        assert_eq!(tree.data.inner, &[1; 7]);
+        assert_eq!({ tree.nodes.inner[0].is_leaf_and_ptr }, 1);
         assert_eq!(
-            { tree.nodes[0].pop_mask },
-            0b0000000000000000000000000000000000000000001100010000000000110011,
+            { tree.nodes.inner[0].pop_mask },
+            0b00000000001100010000000000110011,
             "{:064b}",
-            { tree.nodes[0].pop_mask }
+            { tree.nodes.inner[0].pop_mask }
         );
     }
 
@@ -768,9 +888,9 @@ fn test_tree() {
         values[63] = 0;
 
         let tree = Tree64::new(&values, [4, 4, 4]);
-        assert_eq!(tree.data, &[1; 63]);
-        assert_eq!({ tree.nodes[0].is_leaf_and_ptr }, 1);
-        assert_eq!({ tree.nodes[0].pop_mask }, (!0 & !(1 << 63)));
+        assert_eq!(tree.data.inner, &[1; 63]);
+        assert_eq!({ tree.nodes.inner[0].is_leaf_and_ptr }, 1);
+        assert_eq!({ tree.nodes.inner[0].pop_mask }, (!0 & !(1 << 63)));
     }
 
     {
@@ -781,19 +901,14 @@ fn test_tree() {
         let mut data = Vec::new();
         tree.serialize(&mut data).unwrap();
         let tree2 = Tree64::deserialize(io::Cursor::new(&data)).unwrap();
-        assert_eq!(tree.data, tree2.data);
-        assert_eq!(tree.nodes, tree2.nodes);
+        assert_eq!(tree.data.inner, tree2.data.inner);
+        assert_eq!(tree.nodes.inner, tree2.nodes.inner);
         assert_eq!(tree.scale, tree2.scale);
-
-        std::fs::write("out.tree64", &data).unwrap();
     }
 
     {
-        let mut values = [1; 5 * 5 * 5];
-        values[5 * 5 * 5 - 1] = 0;
-        let mut tree = Tree64::new(&values, [5, 5, 5]);
-        dbg!(tree.data.len());
-        tree.serialize(std::fs::File::create("out.tree64").unwrap())
-            .unwrap();
+        let values = [1; 100 * 100 * 100];
+        let tree = Tree64::new(&values, [100, 100, 100]);
+        tree.collect_garbage(0);
     }
 }

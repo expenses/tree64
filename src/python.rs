@@ -120,9 +120,6 @@ pub fn read_vox<'a>(
         _ => panic!(),
     };
 
-    let mut min = glam::IVec3::splat(i32::MAX);
-    let mut max = glam::IVec3::splat(i32::MIN);
-
     let mut models_and_positions = Vec::new();
 
     for child in children {
