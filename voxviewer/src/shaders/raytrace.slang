@@ -1,14 +1,13 @@
-import Rendering.Materials.StandardMaterialInstance;
-import Rendering.Materials.PBRT.PBRTDiffuseMaterialInstance;
-import Rendering.Materials.BSDFs.StandardBSDF;
-import Rendering.Materials.BSDFs.SimpleBTDF;
 import Rendering.Materials.BSDFs.DisneyDiffuseBRDF;
-import Scene.Material.MaterialData;
+import Rendering.Materials.BSDFs.SpecularMicrofacet;
+import Rendering.Materials.IMaterialInstance;
+import Rendering.Materials.Fresnel;
 import Utils.Sampling.TinyUniformSampleGenerator;
 import Utils.Sampling.UniformSampleGenerator;
-
+import Utils.Color.ColorHelpers;
 import Utils.Math.ShadingFrame;
 import Utils.Math.MathHelpers;
+import Scene.ShadingData;
 
 StructuredBuffer<uint[8]> svo_dag;
 
@@ -19,6 +18,7 @@ uint GET_NODE_FN(uint node, uint childId)
 }
 
 #include "../../cubiquity/src/application/commands/view/glsl/pathtracing.h"
+#include "materials.slang"
 
 uniform float4x4 VInv;
 uniform float4x4 PInv;
@@ -63,21 +63,86 @@ ShadingData create_shading_data_from_intersection(RayVolumeIntersection intersec
     return shading_data;
 }
 
-struct Material {
-    float3 base_colour;
-    float emission_factor;
-};
+struct MaterialInstance {
+    float3 emission;
+    DisneyDiffuseBRDF diffuse_brdf;
+    SpecularMicrofacetBRDF specular_brdf;
+
+    float fresnel;
+
+    __init(Material material, ShadingData sd) {
+        emission = material.base_colour * material.emission_factor;
+
+        float3 wiLocal = sd.frame.toLocal(sd.V);
+        fresnel = luminance(evalFresnelSchlick(material.f0(), material.f90(), wiLocal.z));
+
+        // Initialize BRDFs
+        diffuse_brdf = DisneyDiffuseBRDF(material.diffuse_colour(), material.linear_roughness);
+        specular_brdf.albedo = material.base_colour;
+        specular_brdf.alpha = material.alpha_roughness();
+        specular_brdf.activeLobes = (uint)LobeType::SpecularReflection;
+    }
+
+    bool is_emissive() {
+        return any(emission > 0.0);
+    }
+
+    float3 eval<S: ISampleGenerator>(const ShadingData sd, const float3 wo, float3 light_intensity, inout S sampler) {
+        if (is_emissive()) {
+            return emission;
+        }
+
+        if (all(light_intensity == 0.0)) {
+            return 0.0;
+        }
+
+        float3 wiLocal = sd.frame.toLocal(sd.V);
+        float3 woLocal = sd.frame.toLocal(wo);
+
+        float3 result = 0.0;
+
+        // Blend the BRDF evaluations
+        result += (1.0 - fresnel) * diffuse_brdf.eval(wiLocal, woLocal, sampler, BSDFContext());
+        result += fresnel * specular_brdf.eval(wiLocal, woLocal, sampler, BSDFContext());
+
+        return result * light_intensity;
+    }
+
+    bool sample<S : ISampleGenerator>(const ShadingData sd, inout S sg, out BSDFSample result) {
+        result = {};
+
+        if (is_emissive()) {
+            return false;
+        }
+
+        float3 wiLocal = sd.frame.toLocal(sd.V);
+        float3 woLocal = {};
+
+        // Sample selection based on probabilities
+        float selection = sampleNext1D(sg);
+
+        bool valid = false;
+
+        if (selection > fresnel) {
+            valid = diffuse_brdf.sample(wiLocal, woLocal, result.pdf, result.weight, result.lobeType, sg, BSDFContext());
+        } else {
+            valid = specular_brdf.sample(wiLocal, woLocal, result.pdf, result.weight, result.lobeType, sg, BSDFContext());
+        }
+
+        result.wo = sd.frame.fromLocal(woLocal);
+        return valid;
+    }
+}
 
 StructuredBuffer<Material> materials;
 
 struct MaterialAndShadingData {
-    PBRTDiffuseMaterialInstance material = {};
+    MaterialInstance material = {};
     ShadingData shading_data;
-    float3 emission = 0;
 
     float3 get_direct_lighting<S: ISampleGenerator>(inout S sampler) {
         float lighting = float(!shoot_shadow_ray(Ray3f(shading_data.computeRayOrigin(), sample_light(sampler))));
-        return material.eval(shading_data, sun_direction, sampler) * lighting * sun_colour + emission;
+        return material.eval(shading_data, sun_direction, lighting * sun_colour, sampler);
     }
 };
 
@@ -87,11 +152,9 @@ MaterialAndShadingData create_material_from_intersection(RayVolumeIntersection i
 
     let material = materials[intersection.material - 1u];
 
-    output.material = PBRTDiffuseMaterialInstance(
-        output.shading_data.frame,
-        {material.base_colour},
+    output.material = MaterialInstance(
+        material, output.shading_data
     );
-    output.emission = material.base_colour * material.emission_factor;
 
     return output;
 }

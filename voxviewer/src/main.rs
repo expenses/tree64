@@ -143,6 +143,17 @@ impl<'a> App<'a> {
                                         0.0..=10_000.0,
                                     ))
                                     .changed();
+                                ui.label("Linear Roughness");
+                                changed |= ui
+                                    .add(egui::Slider::new(
+                                        &mut material.linear_roughness,
+                                        0.000..=1.0,
+                                    ))
+                                    .changed();
+                                ui.label("Metallic Factor");
+                                changed |= ui
+                                    .add(egui::Slider::new(&mut material.metallic, 0.0..=1.0))
+                                    .changed();
                                 if changed {
                                     queue.write_buffer(
                                         &pipelines.materials,
@@ -513,7 +524,9 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     let mut materials = vec![
         Material {
             base_colour: [1.0; 3],
-            emission_factor: 0.0
+            linear_roughness: 1.0,
+            metallic: 0.0,
+            ..Default::default()
         };
         256
     ];
@@ -565,8 +578,8 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         frame_index: 0,
         settings: Settings::default(),
         camera: CameraRig::builder()
-            .with(Position::new(glam::Vec3::splat(50.0)))
-            .with(YawPitch::new().yaw_degrees(30.0).pitch_degrees(-30.0))
+            .with(Position::new(glam::Vec3::new(350.0, 150.0, 230.0)))
+            .with(YawPitch::new().yaw_degrees(-90.).pitch_degrees(-25.0))
             .with(Smooth::new_position_rotation(0.25, 0.25))
             .with(Arm::new(glam::Vec3::Z * 175.0))
             .build(),
@@ -627,12 +640,12 @@ struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            sun_long: -45.0_f32,
-            sun_lat: 45.0_f32,
+            sun_long: -90.0_f32,
+            sun_lat: 35.0_f32,
             enable_shadows: true,
-            sun_apparent_size: 5.0_f32,
+            sun_apparent_size: 0.5_f32,
             accumulate_samples: true,
-            max_bounces: 0,
+            max_bounces: 1,
             background_colour: [0.01; 3],
             sun_colour: [1.0; 3],
             vertical_fov: 45.0_f32,
@@ -686,11 +699,14 @@ struct Uniforms {
     _padding: [u32; 3],
 }
 
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod, Default)]
 #[repr(C)]
 struct Material {
     base_colour: [f32; 3],
     emission_factor: f32,
+    linear_roughness: f32,
+    metallic: f32,
+    _padding: [u32; 2],
 }
 
 struct Pipelines {
