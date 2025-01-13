@@ -9,18 +9,45 @@ import Utils.Math.ShadingFrame;
 import Utils.Math.MathHelpers;
 import Scene.ShadingData;
 
-StructuredBuffer<uint[8]> svo_dag;
+#include "materials.slang"
+#include "gradients.slang"
+#include "../../VoxelRT/src/VoxelRT/Shaders/Backends/Tree64/Map.slang"
 
-uint GET_NODE_FN(uint node, uint childId)
-{
-    //return dagData[node * 8 + childId];
-    return svo_dag[node - MaterialCount][childId];
+struct Ray3f {
+    float3 mOrigin;
+    float3 mDir;
 }
 
-#include "../../cubiquity/src/application/commands/view/glsl/pathtracing.h"
-#include "materials.slang"
+float3 GetPrimaryRay<S: ISampleGenerator>(int2 screenPos, inout S rng) {
+    var thread_offset = float2(.5);
 
-uniform float4x4 VInv;
+    if (settings & Settings::AccumulateSamples) {
+        thread_offset = sampleNext2D(rng);
+    }
+
+    // nit: UV re-scaling and anti-alias jitter can be pre-baked in the matrix.
+    float2 uv = (screenPos + thread_offset) / resolution;
+    uv = uv * 2 - 1;
+    uv.y = -uv.y;
+    float4 far = mul(PInv, float4(uv, 1, 1));
+
+    return normalize(far.xyz / far.w);
+}
+
+
+StructuredBuffer<backend::tree64::Node> tree_nodes;
+StructuredBuffer<uint> leaf_data;
+
+HitInfo ray_cast(Ray3f ray, bool coarse) {
+    backend::tree64::VoxelMap voxel_map;
+    voxel_map.TreeNodes = tree_nodes;
+    voxel_map.LeafData = leaf_data;
+    voxel_map.TreeScale = tree_scale;
+    voxel_map.RootNodeIndex = root_node_index;
+
+    return voxel_map.RayCast(int3(0), ray.mOrigin, ray.mDir, coarse);
+}
+
 uniform float4x4 PInv;
 uniform float3 cameraPos;
 uniform float3 sun_direction;
@@ -32,7 +59,7 @@ uniform uint frame_index;
 uniform float cos_sun_aparent_size;
 uniform uint accumulated_frame_index;
 uniform uint max_bounces;
-uniform uint node_height;
+uniform uint tree_scale;
 uniform uint root_node_index;
 
 [Flags]
@@ -42,24 +69,16 @@ enum Settings {
     ShowHeatmap
 };
 
-SubDAG initial_subdag() {
-    SubDAG subDAG;
-    subDAG.lowerBound = uint3(0);
-    subDAG.nodeHeight = node_height;
-    subDAG.nodeIndex = MaterialCount + root_node_index;
-    return subDAG;
-}
-
-ShadingData create_shading_data_from_intersection(RayVolumeIntersection intersection, Ray3f ray) {
+ShadingData create_shading_data_from_hit(HitInfo hit, float3 ray_dir) {
     ShadingData shading_data;
-    shading_data.frame.N = intersection.normal;
+    shading_data.frame.N = hit.Normal;
     shading_data.frame.T = shading_data.frame.N.yzx;
     shading_data.frame.B = shading_data.frame.N.zxy;
-    shading_data.posW = intersection.position;
+    shading_data.posW = hit.Pos;
     shading_data.faceN = shading_data.frame.N;
-    shading_data.V = -ray.mDir;
+    shading_data.V = -ray_dir;
     shading_data.frontFacing = true;
-    shading_data.IoR = 1.;
+    shading_data.IoR = 1.5;
     return shading_data;
 }
 
@@ -146,11 +165,11 @@ struct MaterialAndShadingData {
     }
 };
 
-MaterialAndShadingData create_material_from_intersection(RayVolumeIntersection intersection, Ray3f ray) {
+MaterialAndShadingData create_material_from_hit(HitInfo hit, float3 ray_dir) {
     MaterialAndShadingData output;
-    output.shading_data = create_shading_data_from_intersection(intersection, ray);
+    output.shading_data = create_shading_data_from_hit(hit, ray_dir);
 
-    let material = materials[intersection.material - 1u];
+    let material = materials[hit.MaterialId - 1u];
 
     output.material = MaterialInstance(
         material, output.shading_data
@@ -181,14 +200,14 @@ float3 sample_light<S: ISampleGenerator>(inout S sampler) {
 
 bool shoot_shadow_ray(Ray3f ray) {
     if (settings & Settings::EnableShadows) {
-        return intersect_subdag(ray, initial_subdag(), false, gMaxFootprint).hit;
+        return !ray_cast(ray, true).Miss;
     }
 
     return false;
 }
 
-float3 compute_shading<S: ISampleGenerator>(RayVolumeIntersection intersection, Ray3f ray, inout S sampler) {
-    var material = create_material_from_intersection(intersection, ray);
+float3 compute_shading<S: ISampleGenerator>(HitInfo hit, float3 ray_dir, inout S sampler) {
+    var material = create_material_from_hit(hit, ray_dir);
     var radiance = material.get_direct_lighting(sampler);
     var throughput = float3(1.0);
 
@@ -205,9 +224,9 @@ float3 compute_shading<S: ISampleGenerator>(RayVolumeIntersection intersection, 
         }
 
         let ray = Ray3f(material.shading_data.computeRayOrigin(), sample_result.wo);
-        intersection = intersect_subdag(ray, initial_subdag(), true, gMaxFootprint);
-        if (intersection.hit) {
-            material = create_material_from_intersection(intersection, ray);
+        hit = ray_cast(ray, true);
+        if (!hit.Miss) {
+            material = create_material_from_hit(hit, ray.mDir);
             radiance += material.get_direct_lighting(sampler) * throughput;
         } else {
             radiance += background_colour * throughput;
@@ -218,16 +237,14 @@ float3 compute_shading<S: ISampleGenerator>(RayVolumeIntersection intersection, 
     return radiance;
 }
 
-float3 trace<S: ISampleGenerator>(Ray3f ray, inout S sampler) {
-    RayVolumeIntersection intersection = intersect_subdag(ray, initial_subdag(), true, gMaxFootprint);
-    if (intersection.hit) {
-        return compute_shading(intersection, ray, sampler);
+float3 trace<S: ISampleGenerator>(float3 direction, inout S sampler) {
+    HitInfo hit = ray_cast({cameraPos, direction}, false);
+    if (!hit.Miss) {
+        return compute_shading(hit, direction, sampler);
     }
 
     return background_colour;
 }
-
-#include "gradients.slang"
 
 uint get_clock_portable() {
     __target_switch
@@ -268,13 +285,7 @@ void main(
     var TexCoords = (float2(dispatch_thread_id.xy) + thread_offset) /  resolution;
     TexCoords.y = 1.0 - TexCoords.y;
 
-
-    Ray3f ray;
-    ray.mOrigin = cameraPos;
-    ray.mDir = createRay(TexCoords, PInv, VInv);
-
-    var sample = trace(ray, rng);
-
+    var sample = trace(GetPrimaryRay(dispatch_thread_id.xy, rng), rng);
 
     if ((settings & Settings::AccumulateSamples) && (accumulated_frame_index > 0)) {
         float3 past_samples = previous.SampleLevel(sampler, original_tex_coords, 0);

@@ -512,7 +512,7 @@ impl CompactRange {
 
 #[derive(Default, Debug)]
 pub struct VecWithCaching<T> {
-    inner: Vec<T>,
+    pub inner: Vec<T>,
     cache: hashbrown::HashTable<CompactRange>,
 }
 

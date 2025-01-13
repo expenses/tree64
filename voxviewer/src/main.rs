@@ -26,7 +26,7 @@ struct App<'a> {
     pipelines: Pipelines,
     materials: Vec<Material>,
     egui_renderer: egui_wgpu::Renderer,
-    svo_dag: svo_dag::SvoDag,
+    tree64: svo_dag::Tree64,
 }
 
 impl<'a> App<'a> {
@@ -79,7 +79,14 @@ impl<'a> App<'a> {
                                         0.0..=90.0,
                                     ))
                                     .changed();
-                                ui.label("Sun colour");
+                                ui.label("Factor");
+                                reset_accumulation |= ui
+                                    .add(egui::Slider::new(
+                                        &mut settings.sun_factor,
+                                        0.0..=10_000.0,
+                                    ))
+                                    .changed();
+                                ui.label("Colour");
                                 reset_accumulation |=
                                     egui::widgets::color_picker::color_edit_button_rgb(
                                         ui,
@@ -109,10 +116,6 @@ impl<'a> App<'a> {
                             *settings = Settings::default();
                             reset_accumulation = true;
                         }
-                        if ui.button("Make Pretty").clicked() {
-                            *settings = Settings::pretty();
-                            reset_accumulation = true;
-                        }
                     });
                 egui::CollapsingHeader::new("Debugging")
                     .default_open(true)
@@ -124,47 +127,45 @@ impl<'a> App<'a> {
                                 .changed();
                         }
                     });
-                egui::CollapsingHeader::new("Materials")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            for (i, material) in materials.iter_mut().enumerate() {
-                                let mut changed = false;
-                                ui.label("Base Colour");
-                                changed |= egui::widgets::color_picker::color_edit_button_rgb(
-                                    ui,
-                                    &mut material.base_colour,
-                                )
+                egui::CollapsingHeader::new("Materials").show(ui, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for (i, material) in materials.iter_mut().enumerate() {
+                            let mut changed = false;
+                            ui.label("Base Colour");
+                            changed |= egui::widgets::color_picker::color_edit_button_rgb(
+                                ui,
+                                &mut material.base_colour,
+                            )
+                            .changed();
+                            ui.label("Emission Factor");
+                            changed |= ui
+                                .add(egui::Slider::new(
+                                    &mut material.emission_factor,
+                                    0.0..=10_000.0,
+                                ))
                                 .changed();
-                                ui.label("Emission Factor");
-                                changed |= ui
-                                    .add(egui::Slider::new(
-                                        &mut material.emission_factor,
-                                        0.0..=10_000.0,
-                                    ))
-                                    .changed();
-                                ui.label("Linear Roughness");
-                                changed |= ui
-                                    .add(egui::Slider::new(
-                                        &mut material.linear_roughness,
-                                        0.000..=1.0,
-                                    ))
-                                    .changed();
-                                ui.label("Metallic Factor");
-                                changed |= ui
-                                    .add(egui::Slider::new(&mut material.metallic, 0.0..=1.0))
-                                    .changed();
-                                if changed {
-                                    queue.write_buffer(
-                                        &pipelines.materials,
-                                        (i * std::mem::size_of::<Material>()) as _,
-                                        bytemuck::bytes_of(&*material),
-                                    );
-                                    reset_accumulation = true;
-                                };
-                            }
-                        });
+                            ui.label("Linear Roughness");
+                            changed |= ui
+                                .add(egui::Slider::new(
+                                    &mut material.linear_roughness,
+                                    0.000..=1.0,
+                                ))
+                                .changed();
+                            ui.label("Metallic Factor");
+                            changed |= ui
+                                .add(egui::Slider::new(&mut material.metallic, 0.0..=1.0))
+                                .changed();
+                            if changed {
+                                queue.write_buffer(
+                                    &pipelines.materials,
+                                    (i * std::mem::size_of::<Material>()) as _,
+                                    bytemuck::bytes_of(&*material),
+                                );
+                                reset_accumulation = true;
+                            };
+                        }
                     });
+                });
             });
         });
 
@@ -228,26 +229,36 @@ impl<'a> App<'a> {
             &self.pipelines.uniform_buffer,
             0,
             bytemuck::bytes_of(&Uniforms {
-                #[rustfmt::skip]
-                v_inv: glam::Mat4::look_to_rh(transform.position.into(), transform.forward(), transform.up()).inverse(),
-                p_inv: glam::Mat4::perspective_rh(
+                p_inv: (glam::Mat4::perspective_infinite_reverse_rh(
                     settings.vertical_fov.to_radians(),
                     self.config.width as f32 / self.config.height as f32,
                     0.0001,
-                    1000.0,
-                ).inverse(),
+                ) * glam::Mat4::look_to_rh(
+                    glam::Vec3::ZERO,
+                    transform.forward(),
+                    transform.up(),
+                ))
+                .inverse(),
                 resolution: glam::UVec2::new(self.config.width, self.config.height),
                 camera_pos: glam::Vec3::from(transform.position).into(),
-                sun_colour: glam::Vec3::from(settings.sun_colour).into(),
-                sun_direction: glam::Vec3::new(settings.sun_long.to_radians().sin() * settings.sun_lat.to_radians().cos(), settings.sun_lat.to_radians().sin(), settings.sun_long.to_radians().cos() * settings.sun_lat.to_radians().cos()).into(),
-                settings: (settings.enable_shadows as i32) | (settings.accumulate_samples as i32) << 1 | (settings.show_heatmap as i32) << 2,
+                sun_emission: (glam::Vec3::from(settings.sun_colour) * settings.sun_factor).into(),
+                sun_direction: glam::Vec3::new(
+                    settings.sun_long.to_radians().sin() * settings.sun_lat.to_radians().cos(),
+                    settings.sun_lat.to_radians().sin(),
+                    settings.sun_long.to_radians().cos() * settings.sun_lat.to_radians().cos(),
+                )
+                .into(),
+                settings: (settings.enable_shadows as i32)
+                    | (settings.accumulate_samples as i32) << 1
+                    | (settings.show_heatmap as i32) << 2,
                 frame_index: self.frame_index,
-                accumulated_frame_index: self.accumulated_frame_index, max_bounces: settings.max_bounces,
+                accumulated_frame_index: self.accumulated_frame_index,
+                max_bounces: settings.max_bounces,
                 cos_sun_apparent_size: settings.sun_apparent_size.to_radians().cos(),
                 background_colour: glam::Vec3::from(settings.background_colour).into(),
-                node_height: self.svo_dag.num_levels() as _,
-                root_node_index: self.svo_dag.num_nodes() as u32 - 1,
-                _padding: Default::default()
+                tree_scale: 10,
+                root_node_index: 0,
+                _padding: Default::default(),
             }),
         );
         self.queue.write_buffer(
@@ -521,7 +532,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 
     let pipelines = Pipelines::new(&device, &queue, swapchain_format).await;
 
-    let mut materials = vec![
+    /*let mut materials = vec![
         Material {
             base_colour: [1.0; 3],
             linear_roughness: 1.0,
@@ -529,7 +540,167 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
             ..Default::default()
         };
         256
+    ];*/
+
+    let palette = [
+        (65, 59, 47, 255),
+        (113, 99, 77, 255),
+        (146, 129, 95, 255),
+        (156, 142, 113, 255),
+        (175, 159, 130, 255),
+        (174, 154, 116, 255),
+        (192, 174, 135, 255),
+        (203, 187, 154, 255),
+        (104, 86, 60, 255),
+        (114, 99, 77, 255),
+        (125, 107, 81, 255),
+        (134, 119, 95, 255),
+        (153, 135, 107, 255),
+        (172, 156, 131, 255),
+        (189, 174, 152, 255),
+        (206, 193, 175, 255),
+        (38, 38, 38, 255),
+        (85, 76, 76, 255),
+        (107, 100, 97, 255),
+        (115, 114, 119, 255),
+        (148, 138, 138, 255),
+        (147, 118, 107, 255),
+        (157, 163, 173, 255),
+        (192, 191, 198, 255),
+        (77, 68, 59, 255),
+        (111, 97, 81, 255),
+        (134, 120, 101, 255),
+        (155, 139, 116, 255),
+        (168, 150, 125, 255),
+        (178, 162, 136, 255),
+        (190, 172, 140, 255),
+        (196, 181, 158, 255),
+        (85, 80, 72, 255),
+        (117, 110, 95, 255),
+        (136, 126, 109, 255),
+        (148, 141, 123, 255),
+        (162, 152, 132, 255),
+        (169, 161, 144, 255),
+        (176, 170, 151, 255),
+        (188, 180, 158, 255),
+        (78, 73, 66, 255),
+        (95, 90, 82, 255),
+        (117, 107, 92, 255),
+        (140, 131, 117, 255),
+        (172, 157, 133, 255),
+        (184, 173, 156, 255),
+        (201, 188, 169, 255),
+        (210, 200, 186, 255),
+        (29, 31, 32, 255),
+        (43, 44, 45, 255),
+        (53, 54, 56, 255),
+        (83, 78, 69, 255),
+        (98, 94, 86, 255),
+        (119, 110, 98, 255),
+        (141, 133, 123, 255),
+        (162, 157, 150, 255),
+        (23, 25, 25, 255),
+        (35, 39, 39, 255),
+        (44, 48, 47, 255),
+        (51, 57, 56, 255),
+        (58, 63, 63, 255),
+        (66, 73, 72, 255),
+        (104, 106, 105, 255),
+        (173, 173, 173, 255),
+        (51, 57, 56, 255),
+        (62, 71, 70, 255),
+        (69, 76, 75, 255),
+        (73, 82, 82, 255),
+        (79, 86, 85, 255),
+        (82, 92, 92, 255),
+        (89, 96, 95, 255),
+        (102, 110, 110, 255),
+        (9, 9, 9, 255),
+        (9, 9, 9, 255),
+        (42, 38, 34, 255),
+        (120, 110, 97, 255),
+        (149, 135, 117, 255),
+        (165, 153, 135, 255),
+        (182, 167, 142, 255),
+        (192, 179, 157, 255),
+        (85, 72, 58, 255),
+        (118, 105, 85, 255),
+        (136, 120, 96, 255),
+        (151, 130, 100, 255),
+        (157, 141, 111, 255),
+        (164, 145, 111, 255),
+        (175, 159, 133, 255),
+        (173, 152, 113, 255),
+        (2, 86, 10, 255),
+        (18, 100, 39, 255),
+        (104, 117, 57, 255),
+        (6, 102, 17, 255),
+        (113, 91, 25, 255),
+        (36, 118, 58, 255),
+        (22, 115, 43, 255),
+        (167, 131, 50, 255),
+        (98, 99, 98, 255),
+        (125, 97, 30, 255),
+        (8, 65, 116, 255),
+        (26, 64, 130, 255),
+        (45, 81, 146, 255),
+        (12, 75, 135, 255),
+        (30, 77, 147, 255),
+        (167, 131, 50, 255),
+        (44, 41, 29, 255),
+        (60, 71, 40, 255),
+        (78, 81, 63, 255),
+        (86, 81, 42, 255),
+        (106, 94, 86, 255),
+        (108, 93, 66, 255),
+        (124, 115, 89, 255),
+        (136, 128, 120, 255),
+        (53, 44, 48, 255),
+        (83, 71, 75, 255),
+        (108, 92, 95, 255),
+        (138, 123, 121, 255),
+        (164, 157, 157, 255),
+        (179, 165, 161, 255),
+        (183, 175, 170, 255),
+        (206, 194, 188, 255),
+        (36, 89, 10, 255),
+        (71, 129, 44, 255),
+        (94, 144, 65, 255),
+        (102, 149, 46, 255),
+        (100, 135, 14, 255),
+        (137, 172, 78, 255),
+        (167, 66, 7, 255),
+        (234, 165, 0, 255),
+        (2, 2, 1, 255),
+        (30, 26, 21, 255),
+        (65, 59, 47, 255),
+        (108, 97, 77, 255),
+        (138, 124, 100, 255),
+        (149, 136, 114, 255),
+        (164, 149, 120, 255),
+        (172, 159, 136, 255),
     ];
+
+    fn srgb_to_linear(value: u8) -> f32 {
+        let value = value as f32 / 255.0;
+
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    let materials = palette
+        .map(|(r, g, b, _)| Material {
+            // Boost values for brighter bounces.
+            base_colour: [srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b)],
+            linear_roughness: 1.0,
+            metallic: 0.0,
+            emission_factor: 0.0,
+            ..Default::default()
+        })
+        .to_vec();
 
     /*
     materials[1] = Material {
@@ -542,19 +713,27 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     };
     */
 
-    let svo_dag = svo_dag::SvoDag::read(std::io::Cursor::new(
-        load_resource_bytes("sponza.dag").await,
+    let tree64 = svo_dag::Tree64::deserialize(std::io::Cursor::new(
+        load_resource_bytes("sponza.tree64").await,
     ))
     .unwrap();
 
-    //dbg!(svo_dag.nodes().len(), svo_dag.num_levels(), svo_dag.size());
-
     queue.write_buffer(&pipelines.materials, 0, bytemuck::cast_slice(&materials));
     queue.write_buffer(
-        &pipelines.dag_data,
+        &pipelines.tree_nodes,
         0,
-        bytemuck::cast_slice(&svo_dag.nodes()),
+        bytemuck::cast_slice(&tree64.nodes.inner),
     );
+
+    let leaf_data: &[u8] = bytemuck::cast_slice(&tree64.data.inner);
+    let mut aligned_buffer = vec![
+        0;
+        leaf_data
+            .len()
+            .next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT as _)
+    ];
+    aligned_buffer[..leaf_data.len()].copy_from_slice(&leaf_data);
+    queue.write_buffer(&pipelines.leaf_data, 0, &aligned_buffer);
 
     let mut app = App {
         egui_renderer: egui_wgpu::Renderer::new(&device, swapchain_format, None, 1, false),
@@ -585,7 +764,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
             .build(),
         pipelines,
         materials,
-        svo_dag,
+        tree64,
     };
 
     event_loop.run_app(&mut app).unwrap()
@@ -633,6 +812,7 @@ struct Settings {
     max_bounces: u32,
     background_colour: [f32; 3],
     sun_colour: [f32; 3],
+    sun_factor: f32,
     vertical_fov: f32,
     show_heatmap: bool,
 }
@@ -641,24 +821,16 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             sun_long: -90.0_f32,
-            sun_lat: 35.0_f32,
+            sun_lat: 45.0_f32,
             enable_shadows: true,
-            sun_apparent_size: 0.5_f32,
+            sun_apparent_size: 1.0_f32,
             accumulate_samples: true,
             max_bounces: 1,
             background_colour: [0.01; 3],
             sun_colour: [1.0; 3],
+            sun_factor: 20.0,
             vertical_fov: 45.0_f32,
             show_heatmap: false,
-        }
-    }
-}
-
-impl Settings {
-    fn pretty() -> Self {
-        Self {
-            max_bounces: 2,
-            ..Default::default()
         }
     }
 }
@@ -682,11 +854,10 @@ impl From<glam::Vec3> for Vec3A {
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
 struct Uniforms {
-    v_inv: glam::Mat4,
     p_inv: glam::Mat4,
     camera_pos: Vec3A,
     sun_direction: Vec3A,
-    sun_colour: Vec3A,
+    sun_emission: Vec3A,
     background_colour: Vec3A,
     resolution: glam::UVec2,
     settings: i32,
@@ -694,7 +865,7 @@ struct Uniforms {
     cos_sun_apparent_size: f32,
     accumulated_frame_index: u32,
     max_bounces: u32,
-    node_height: u32,
+    tree_scale: u32,
     root_node_index: u32,
     _padding: [u32; 3],
 }
@@ -717,7 +888,8 @@ struct Pipelines {
     trace: wgpu::ComputePipeline,
     trace_bgl: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
-    dag_data: wgpu::Buffer,
+    tree_nodes: wgpu::Buffer,
+    leaf_data: wgpu::Buffer,
     blit_uniform_buffer: wgpu::Buffer,
     materials: wgpu::Buffer,
     tonemapping_lut: wgpu::Texture,
@@ -796,8 +968,9 @@ impl Pipelines {
                 uniform_entry(0, wgpu::ShaderStages::COMPUTE),
                 compute_buffer(1),
                 compute_buffer(2),
+                compute_buffer(3),
                 wgpu::BindGroupLayoutEntry {
-                    binding: 3,
+                    binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
@@ -806,8 +979,8 @@ impl Pipelines {
                     },
                     count: None,
                 },
-                texture_entry(4, wgpu::ShaderStages::COMPUTE),
-                sampler_entry(5, wgpu::ShaderStages::COMPUTE, false),
+                texture_entry(5, wgpu::ShaderStages::COMPUTE),
+                sampler_entry(6, wgpu::ShaderStages::COMPUTE, false),
             ],
         });
 
@@ -900,9 +1073,15 @@ impl Pipelines {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
-            dag_data: device.create_buffer(&wgpu::BufferDescriptor {
+            tree_nodes: device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,
-                size: 20_000_000,
+                size: 5_000_000,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            leaf_data: device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: 5_000_000,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
@@ -1021,26 +1200,30 @@ impl Resizables {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: pipelines.dag_data.as_entire_binding(),
+                        resource: pipelines.tree_nodes.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: pipelines.materials.as_entire_binding(),
+                        resource: pipelines.leaf_data.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 3,
+                        resource: pipelines.materials.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
                         resource: wgpu::BindingResource::TextureView(
                             &a.create_view(&Default::default()),
                         ),
                     },
                     wgpu::BindGroupEntry {
-                        binding: 4,
+                        binding: 5,
                         resource: wgpu::BindingResource::TextureView(
                             &b.create_view(&Default::default()),
                         ),
                     },
                     wgpu::BindGroupEntry {
-                        binding: 5,
+                        binding: 6,
                         resource: wgpu::BindingResource::Sampler(&pipelines.non_filtering_sampler),
                     },
                 ],
