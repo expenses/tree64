@@ -79,10 +79,10 @@ impl<'a> App<'a> {
                                         0.0..=90.0,
                                     ))
                                     .changed();
-                                ui.label("Factor");
+                                ui.label("Sun Strength");
                                 reset_accumulation |= ui
                                     .add(egui::Slider::new(
-                                        &mut settings.sun_factor,
+                                        &mut settings.sun_strength,
                                         0.0..=10_000.0,
                                     ))
                                     .changed();
@@ -100,6 +100,13 @@ impl<'a> App<'a> {
                             &mut settings.background_colour,
                         )
                         .changed();
+                        ui.label("Background Strength");
+                        reset_accumulation |= ui
+                            .add(egui::Slider::new(
+                                &mut settings.background_strength,
+                                0.0..=10_000.0,
+                            ))
+                            .changed();
                     });
                 egui::CollapsingHeader::new("Camera")
                     .default_open(true)
@@ -241,7 +248,8 @@ impl<'a> App<'a> {
                 .inverse(),
                 resolution: glam::UVec2::new(self.config.width, self.config.height),
                 camera_pos: glam::Vec3::from(transform.position).into(),
-                sun_emission: (glam::Vec3::from(settings.sun_colour) * settings.sun_factor).into(),
+                sun_emission: (glam::Vec3::from(settings.sun_colour) * settings.sun_strength)
+                    .into(),
                 sun_direction: glam::Vec3::new(
                     settings.sun_long.to_radians().sin() * settings.sun_lat.to_radians().cos(),
                     settings.sun_lat.to_radians().sin(),
@@ -255,7 +263,9 @@ impl<'a> App<'a> {
                 accumulated_frame_index: self.accumulated_frame_index,
                 max_bounces: settings.max_bounces,
                 cos_sun_apparent_size: settings.sun_apparent_size.to_radians().cos(),
-                background_colour: glam::Vec3::from(settings.background_colour).into(),
+                background_colour: (glam::Vec3::from(settings.background_colour)
+                    * settings.background_strength)
+                    .into(),
                 tree_scale: 10,
                 root_node_index: 0,
                 _padding: Default::default(),
@@ -758,7 +768,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         settings: Settings::default(),
         camera: CameraRig::builder()
             .with(Position::new(glam::Vec3::new(350.0, 150.0, 230.0)))
-            .with(YawPitch::new().yaw_degrees(-90.).pitch_degrees(-25.0))
+            .with(YawPitch::new().yaw_degrees(90.).pitch_degrees(-25.0))
             .with(Smooth::new_position_rotation(0.25, 0.25))
             .with(Arm::new(glam::Vec3::Z * 175.0))
             .build(),
@@ -812,7 +822,8 @@ struct Settings {
     max_bounces: u32,
     background_colour: [f32; 3],
     sun_colour: [f32; 3],
-    sun_factor: f32,
+    sun_strength: f32,
+    background_strength: f32,
     vertical_fov: f32,
     show_heatmap: bool,
 }
@@ -820,7 +831,7 @@ struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            sun_long: -90.0_f32,
+            sun_long: 90.0_f32,
             sun_lat: 45.0_f32,
             enable_shadows: true,
             sun_apparent_size: 1.0_f32,
@@ -828,7 +839,8 @@ impl Default for Settings {
             max_bounces: 1,
             background_colour: [0.01; 3],
             sun_colour: [1.0; 3],
-            sun_factor: 20.0,
+            sun_strength: 20.0,
+            background_strength: 1.0,
             vertical_fov: 45.0_f32,
             show_heatmap: false,
         }

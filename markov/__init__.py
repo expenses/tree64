@@ -355,9 +355,12 @@ def join_split_vox(filename):
     max_v = np.array(vox[0][0])
     min_v = np.array(vox[0][0])
     for pos, model in vox:
-        min_v = np.minimum(min_v, pos)
+        pos = np.array(pos)
+        shape = np.array((model.shape[2], model.shape[1], model.shape[0]))
+
+        min_v = np.minimum(min_v, pos - shape // 2)
         max_v = np.maximum(
-            max_v, np.array(pos) + (model.shape[2], model.shape[1], model.shape[0])
+            max_v, pos + shape // 2
         )
 
     size = max_v - min_v + 1
@@ -365,20 +368,12 @@ def join_split_vox(filename):
 
     for pos, model in vox:
         pos = np.array(pos)
+        shape = np.array((model.shape[2], model.shape[1], model.shape[0]))
+        pos = pos - min_v - shape // 2
 
-        if pos[0] < 0:
-            pos[0] += 1
-        if pos[1] < 0:
-            pos[1] += 1
-        if pos[2] < 0:
-            pos[2] += 1
-
-        pos = pos - min_v
-
-        shape = model.shape
         arr[
-            pos[2] : pos[2] + shape[0],
+            pos[2] : pos[2] + shape[2],
             pos[1] : pos[1] + shape[1],
-            pos[0] : pos[0] + shape[2],
+            pos[0] : pos[0] + shape[0],
         ] = model
     return arr
