@@ -463,65 +463,61 @@ impl Tree64 {
 
                         let child_index = x + y * 4 + z * 16;
 
-                        match node_bbox.get_intersection(&bbox) {
+                        let intersection = match node_bbox.get_intersection(&bbox) {
+                            Some(intersection) => intersection,
                             None => continue,
-                            // If the bounding box entirely contains the node then we can just set a value.
-                            Some(intersection) if intersection == node_bbox => {
-                                item.children.set(
-                                    child_index,
-                                    if value > 0 {
-                                        // leaf node for the specific value.
-                                        let mut child_node = Tree64Node::new(
-                                            true,
-                                            self.insert_values(&[value; 64]),
-                                            !0,
-                                        );
-
-                                        // build up a tree for the child if the children for this node are not leaves.
-                                        for _ in 0..item.node_level.saturating_sub(2) {
-                                            child_node = Tree64Node::new(
-                                                false,
-                                                self.insert_nodes(&[child_node; 64]),
-                                                !0,
-                                            );
-                                        }
-
-                                        Some(child_node)
-                                    } else {
-                                        None
-                                    },
-                                );
-                                continue;
-                            }
-                            Some(_) => {}
                         };
 
-                        let corresponding_child_index =
-                            item.corresponding_node_index.and_then(|node_index| {
-                                self.nodes.inner[node_index as usize]
-                                    .get_index_for_child(child_index)
-                            });
-                        let child = if let Some(child_index) = corresponding_child_index {
-                            self.nodes.inner[child_index as usize]
-                        } else {
-                            Tree64Node::empty(children_are_leaves)
-                        };
-
-                        if !children_are_leaves {
-                            any_pushed = true;
-                            stack.push(StackItem {
-                                node_min_pos: node_bbox.min,
-                                node_level: item.node_level - 1,
-                                corresponding_node_index: corresponding_child_index,
-                                children: children_data_for_node(self, child),
-                                parent_and_index: Some((index, child_index as u8)),
-                            });
-                        } else {
+                        if intersection == node_bbox {
                             item.children.set(
                                 child_index,
-                                Some(self.modify_leaf_node(child, bbox, node_bbox.min, value))
-                                    .filter(|node| node.pop_mask != 0),
+                                if value > 0 {
+                                    // leaf node for the specific value.
+                                    let mut child_node =
+                                        Tree64Node::new(true, self.insert_values(&[value; 64]), !0);
+
+                                    // build up a tree for the child if the children for this node are not leaves.
+                                    for _ in 0..item.node_level.saturating_sub(2) {
+                                        child_node = Tree64Node::new(
+                                            false,
+                                            self.insert_nodes(&[child_node; 64]),
+                                            !0,
+                                        );
+                                    }
+
+                                    Some(child_node)
+                                } else {
+                                    None
+                                },
                             );
+                        } else {
+                            let corresponding_child_index =
+                                item.corresponding_node_index.and_then(|node_index| {
+                                    self.nodes.inner[node_index as usize]
+                                        .get_index_for_child(child_index)
+                                });
+                            let child = if let Some(child_index) = corresponding_child_index {
+                                self.nodes.inner[child_index as usize]
+                            } else {
+                                Tree64Node::empty(children_are_leaves)
+                            };
+
+                            if !children_are_leaves {
+                                any_pushed = true;
+                                stack.push(StackItem {
+                                    node_min_pos: node_bbox.min,
+                                    node_level: item.node_level - 1,
+                                    corresponding_node_index: corresponding_child_index,
+                                    children: children_data_for_node(self, child),
+                                    parent_and_index: Some((index, child_index as u8)),
+                                });
+                            } else {
+                                item.children.set(
+                                    child_index,
+                                    Some(self.modify_leaf_node(child, bbox, node_bbox.min, value))
+                                        .filter(|node| node.pop_mask != 0),
+                                );
+                            }
                         }
                     }
                 }
@@ -543,6 +539,9 @@ impl Tree64 {
                 }
 
                 stack.pop();
+            } else {
+                // if we're decending into the node's children, then we need to make sure any updates are retained.
+                stack[index as usize].children = item.children;
             }
         }
 
@@ -693,20 +692,27 @@ impl Tree64 {
         Ok(this)
     }
 
+    #[cfg(test)]
     fn get_value_at(&self, pos: [u32; 3]) -> u8 {
         let pos = glam::UVec3::from(pos);
-        let (root_index, _) = self.root_node_index_and_num_levels();
-        let node = self.nodes.inner[root_index as usize];
+        let (root_index, node_level) = self.root_node_index_and_num_levels();
+        let mut node = self.nodes.inner[root_index as usize];
+        let mut child_size = 4_u32.pow(node_level as u32 - 1);
 
-        if node.is_leaf() {
-            let child = pos.x + pos.y * 4 + pos.z * 16;
-            return node
-                .get_index_for_child(child)
-                .map(|index| self.data.inner[index as usize])
-                .unwrap_or(0);
-        } else {
-            panic!()
+        while !node.is_leaf() {
+            let child_index = ((pos / child_size) % 4).dot(glam::UVec3::new(1, 4, 16));
+            child_size /= 4;
+            if let Some(child_node_index) = node.get_index_for_child(child_index) {
+                node = self.nodes.inner[child_node_index as usize];
+            } else {
+                return 0;
+            }
         }
+
+        let child_index = (pos % 4).dot(glam::UVec3::new(1, 4, 16));
+        node.get_index_for_child(child_index)
+            .map(|index| self.data.inner[index as usize])
+            .unwrap_or(0)
     }
 }
 
@@ -1183,17 +1189,85 @@ fn modifications_on_empty_spaces() {
 
 #[test]
 fn modify_box_wierd_sizes() {
-    let values = [0; 64 * 64 * 64];
-    let mut tree = Tree64::new(&values, [64; 3]);
+    {
+        let values = [0; 64 * 64 * 64];
+        let mut tree = Tree64::new(&values, [64; 3]);
 
-    let ranges = tree.modify_nodes_in_box([10; 3], [30; 3], 1);
-    assert_eq!(
-        ranges,
-        UpdatedRanges {
-            nodes: 1..1 + (3 * 64),
-            data: 0..64
+        tree.modify([10; 3], 1);
+
+        for x in 0..64 {
+            for y in 0..64 {
+                for z in 0..64 {
+                    assert_eq!(
+                        tree.get_value_at([x, y, z]),
+                        if x == 10 && y == 10 && z == 10 { 1 } else { 0 },
+                        "{} {} {}",
+                        x,
+                        y,
+                        z
+                    );
+                }
+            }
         }
-    )
+    }
+
+    {
+        let values = [0; 64 * 64 * 64];
+        let mut tree = Tree64::new(&values, [64; 3]);
+
+        tree.modify_nodes_in_box([0; 3], [20; 3], 1);
+
+        for x in 0..64 {
+            for y in 0..64 {
+                for z in 0..64 {
+                    assert_eq!(
+                        tree.get_value_at([x, y, z]),
+                        if x < 20 && y < 20 && z < 20 { 1 } else { 0 },
+                        "{:?}",
+                        (x, y, z)
+                    );
+                }
+            }
+        }
+    }
+
+    for start_x in 0..44 {
+        for start_y in 0..44 {
+            let start_z = start_y;
+            let values = [0; 64 * 64 * 64];
+            let mut tree = Tree64::new(&values, [64; 3]);
+
+            tree.modify_nodes_in_box(
+                [start_x, start_y, start_z],
+                [start_x + 20, start_y + 20, start_z + 20],
+                1,
+            );
+
+            for x in 0..64 {
+                for y in 0..64 {
+                    for z in 0..64 {
+                        assert_eq!(
+                            tree.get_value_at([x, y, z]),
+                            if x >= start_x
+                                && x < (start_x + 20)
+                                && y >= start_y
+                                && y < (start_y + 20)
+                                && z >= start_z
+                                && z < (start_z + 20)
+                            {
+                                1
+                            } else {
+                                0
+                            },
+                            "{:?} {:?}",
+                            (x, y, z),
+                            (start_x, start_y, start_z)
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
