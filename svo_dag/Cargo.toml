@@ -7,5 +7,6 @@ edition = "2021"
 arrayvec = "0.7.6"
 bytemuck = { version = "1.21.0", features = ["derive"] }
 fnv = "1.0.7"
+glam = "0.29.2"
 hashbrown = "0.15.2"
 memchr = "2.7.4"

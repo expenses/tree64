@@ -1,498 +1,6 @@
 use std::fmt::Debug;
 use std::hash::BuildHasher;
-use std::io::{self, Read, Write};
-
-pub struct EditableSvoDag {
-    inner: SvoDag,
-    #[allow(dead_code)]
-    indices: hashbrown::HashTable<u32>,
-}
-
-impl EditableSvoDag {
-    pub fn into_read_only(self) -> SvoDag {
-        self.inner
-    }
-
-    pub fn new(
-        slice: &[u8],
-        width: usize,
-        height: usize,
-        depth: usize,
-        reserved_indices: u32,
-    ) -> Self {
-        let size = width.max(height).max(depth).next_power_of_two();
-
-        let access = |x, y, z| match slice.get(x + y * width + z * width * height) {
-            Some(&value) if x < width && y < height => value as u32,
-            _ => 0,
-        };
-
-        let mut cached_indices: hashbrown::HashTable<u32> = hashbrown::HashTable::new();
-
-        let hasher = fnv::FnvBuildHasher::default();
-
-        let mut layer: Vec<u32> = Vec::with_capacity((size * size * size) / 8);
-
-        let mut nodes: Vec<Node<u32>> = Vec::new();
-
-        let mut insert_node = |node: Node<u32>, level_size: usize| match node.uniform_value() {
-            Some(value) if value < reserved_indices && level_size > 2 => value,
-            _ => {
-                *cached_indices
-                    .entry(
-                        hasher.hash_one(node),
-                        |&other| nodes[other as usize] == node,
-                        |&index| hasher.hash_one(nodes[index as usize]),
-                    )
-                    .or_insert_with(|| {
-                        let next_index = nodes.len() as u32;
-                        nodes.push(node);
-                        next_index
-                    })
-                    .get()
-                    + reserved_indices
-            }
-        };
-
-        for z in (0..size).step_by(2) {
-            for y in (0..size).step_by(2) {
-                for x in (0..size).step_by(2) {
-                    layer.push(insert_node(
-                        Node([
-                            access(x, y, z),
-                            access(x + 1, y, z),
-                            access(x, y + 1, z),
-                            access(x + 1, y + 1, z),
-                            access(x, y, z + 1),
-                            access(x + 1, y, z + 1),
-                            access(x, y + 1, z + 1),
-                            access(x + 1, y + 1, z + 1),
-                        ]),
-                        size,
-                    ));
-                }
-            }
-        }
-        debug_assert_eq!(layer.capacity(), (size * size * size) / 8);
-
-        let mut level_size = size / 2;
-
-        let mut prev_layer = layer;
-        let mut current_layer = Vec::with_capacity((level_size * level_size * level_size) / 8);
-
-        while level_size > 1 {
-            let access = |x, y, z| prev_layer[x + y * level_size + z * level_size * level_size];
-
-            for z in (0..level_size).step_by(2) {
-                for y in (0..level_size).step_by(2) {
-                    for x in (0..level_size).step_by(2) {
-                        current_layer.push(insert_node(
-                            Node([
-                                access(x, y, z),
-                                access(x + 1, y, z),
-                                access(x, y + 1, z),
-                                access(x + 1, y + 1, z),
-                                access(x, y, z + 1),
-                                access(x + 1, y, z + 1),
-                                access(x, y + 1, z + 1),
-                                access(x + 1, y + 1, z + 1),
-                            ]),
-                            level_size,
-                        ));
-                    }
-                }
-            }
-
-            level_size /= 2;
-            std::mem::swap(&mut prev_layer, &mut current_layer);
-            current_layer.clear();
-        }
-
-        Self {
-            inner: SvoDag {
-                nodes,
-                size: size as _,
-                reserved_indices,
-            },
-            indices: cached_indices,
-        }
-    }
-}
-
-pub struct SvoDag {
-    size: u32,
-    nodes: Vec<Node<u32>>,
-    reserved_indices: u32,
-}
-
-impl SvoDag {
-    pub fn new(
-        slice: &[u8],
-        width: usize,
-        height: usize,
-        depth: usize,
-        reserved_indices: u32,
-    ) -> Self {
-        EditableSvoDag::new(slice, width, height, depth, reserved_indices).into_read_only()
-    }
-
-    // todo: modifications.
-    /*
-    pub fn touch(&mut self, mut x: u32, mut y: u32, mut z: u32) {
-        let old_root = self.nodes.last().copied().unwrap();
-        self.nodes.add_node(old_root);
-
-    }
-    */
-
-    pub fn as_array(&self) -> Vec<u8> {
-        let size = self.size as usize;
-        let mut array = vec![0; size * size * size];
-        for z in 0..size {
-            for y in 0..size {
-                for x in 0..size {
-                    array[x + y * size + z * size * size] =
-                        self.index(x as _, y as _, z as _) as u8;
-                }
-            }
-        }
-
-        array
-    }
-
-    fn root(&self) -> Node<u32> {
-        *self.nodes.last().unwrap()
-    }
-
-    #[allow(dead_code)]
-    fn add_node(&mut self, node: Node<u32>) -> u32 {
-        let next_index = self.nodes.len() as u32;
-        self.nodes.push(node);
-        next_index + self.reserved_indices
-    }
-
-    pub fn index(&self, mut x: u32, mut y: u32, mut z: u32) -> u32 {
-        let mut node = self.root();
-        let mut node_size = self.size;
-
-        loop {
-            let child_index = get_child_index(node_size, x, y, z);
-            let child = node.0[child_index];
-
-            if child < self.reserved_indices {
-                return child;
-            }
-
-            node_size /= 2;
-            node = self.nodes[(child - self.reserved_indices) as usize];
-            x %= node_size;
-            y %= node_size;
-            z %= node_size;
-        }
-    }
-
-    pub fn serialize<W: Write>(&self, mut writer: W) -> io::Result<()> {
-        writer.write_all(b"DAG")?;
-        writer.write_all(&(std::mem::size_of::<u32>() as u8).to_le_bytes())?;
-        writer.write_all(&(self.reserved_indices).to_le_bytes())?;
-        writer.write_all(&self.size.to_le_bytes())?;
-        writer.write_all(&(self.nodes.len() as u32).to_le_bytes())?;
-        writer.write_all(bytemuck::cast_slice(&self.nodes))?;
-        Ok(())
-    }
-
-    pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
-        let mut buffer = [0; 3];
-        reader.read_exact(&mut buffer)?;
-        assert_eq!(&buffer, b"DAG");
-        let mut size = 0_u8;
-        reader.read_exact(bytemuck::bytes_of_mut(&mut size))?;
-        assert_eq!(size as usize, std::mem::size_of::<u32>());
-        let mut reserved_indices = 0_u32;
-        let mut size = 0_u32;
-        let mut num_nodes = 0_u32;
-        reader.read_exact(bytemuck::bytes_of_mut(&mut reserved_indices))?;
-        reader.read_exact(bytemuck::bytes_of_mut(&mut size))?;
-        reader.read_exact(bytemuck::bytes_of_mut(&mut num_nodes))?;
-        let mut nodes = vec![Node([0; 8]); num_nodes as usize];
-        reader.read_exact(bytemuck::cast_slice_mut(&mut nodes))?;
-        Ok(Self {
-            size,
-            nodes,
-            reserved_indices,
-        })
-    }
-
-    pub fn cubes(&self) -> (Vec<[f32; 3]>, Vec<u32>, Vec<u32>) {
-        let mut stack = vec![(
-            self.nodes.len() as u32 - 1 + self.reserved_indices,
-            self.size,
-            0,
-        )];
-
-        let mut positions = Vec::with_capacity(self.nodes.len() / 2);
-        let mut sizes = Vec::with_capacity(self.nodes.len() / 2);
-        let mut values = Vec::with_capacity(self.nodes.len() / 2);
-
-        while let Some((value, size, index)) = stack.pop() {
-            if value == 0 {
-                continue;
-            }
-
-            let x = index % self.size;
-            let y = (index / self.size) % self.size;
-            let z = index / self.size / self.size;
-
-            if value < self.reserved_indices {
-                values.push(value);
-                sizes.push(size);
-                positions.push([x as _, y as _, z as _]);
-            } else {
-                let size = size / 2;
-                let node = self.nodes[(value - self.reserved_indices) as usize];
-                for (i, value) in node.0.iter().copied().enumerate() {
-                    let x = x + (i % 2 == 1) as u32 * size;
-                    let y = y + (i % 4 > 1) as u32 * size;
-                    let z = z + (i > 3) as u32 * size;
-                    let index = z * self.size * self.size + y * self.size + x;
-                    stack.push((value, size, index));
-                }
-            }
-        }
-
-        (positions, sizes, values)
-    }
-
-    pub fn node_bytes(&self) -> &[u8] {
-        bytemuck::cast_slice(&self.nodes)
-    }
-
-    pub fn nodes(&self) -> &[Node<u32>] {
-        &self.nodes
-    }
-
-    pub fn num_nodes(&self) -> usize {
-        self.nodes.len()
-    }
-
-    pub fn num_levels(&self) -> u8 {
-        self.size.ilog2() as u8
-    }
-
-    pub fn size(&self) -> u32 {
-        self.size
-    }
-}
-
-fn get_child_index(size: u32, x: u32, y: u32, z: u32) -> usize {
-    let half_size = size / 2;
-    (z >= half_size) as usize * 4 + (y >= half_size) as usize * 2 + (x >= half_size) as usize
-}
-
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(transparent)]
-pub struct Node<T>([T; 8]);
-
-impl<T: PartialEq + Copy> Node<T> {
-    fn uniform_value(self) -> Option<T> {
-        if self.0[0] == self.0[1]
-            && self.0[0] == self.0[2]
-            && self.0[0] == self.0[3]
-            && self.0[0] == self.0[4]
-            && self.0[0] == self.0[5]
-            && self.0[0] == self.0[6]
-            && self.0[0] == self.0[7]
-        {
-            Some(self.0[0])
-        } else {
-            None
-        }
-    }
-}
-
-#[test]
-fn uniform_cubes() {
-    assert_eq!(
-        SvoDag::new(&[1; 2 * 2 * 2], 2, 2, 2, 256).nodes,
-        vec![Node([1; 8])]
-    );
-    assert_eq!(
-        SvoDag::new(&[1; 4 * 4 * 4], 4, 4, 4, 256).nodes,
-        vec![Node([1; 8])]
-    );
-    assert_eq!(
-        SvoDag::new(&[1; 8 * 8 * 8], 8, 8, 8, 256).nodes,
-        vec![Node([1; 8])]
-    );
-    assert_eq!(
-        SvoDag::new(&[1; 16 * 16 * 16], 16, 16, 16, 256).nodes,
-        vec![Node([1; 8])]
-    );
-    assert_eq!(
-        SvoDag::new(&[2; 16 * 16 * 16], 16, 16, 16, 256).nodes,
-        vec![Node([2; 8])]
-    );
-}
-
-#[test]
-fn non_power_of_2() {
-    assert_eq!(
-        SvoDag::new(&[0; 9 * 9 * 9], 9, 9, 9, 256).nodes,
-        vec![Node([0; 8])]
-    );
-    assert_eq!(
-        SvoDag::new(&[1; 8 * 8 * 7], 8, 8, 7, 256).nodes,
-        vec![
-            Node([1, 1, 1, 1, 0, 0, 0, 0]),
-            Node([1, 1, 1, 1, 256, 256, 256, 256]),
-            Node([1, 1, 1, 1, 257, 257, 257, 257])
-        ]
-    );
-}
-
-#[test]
-fn different_corners() {
-    {
-        let mut array = [1; 2 * 2 * 2];
-        array[0] = 0;
-        assert_eq!(
-            SvoDag::new(&array, 2, 2, 2, 256).nodes,
-            vec![Node(array.map(|v| v as u32))]
-        );
-    }
-    {
-        let mut array = [1; 4 * 4 * 4];
-        array[0] = 0;
-        assert_eq!(
-            SvoDag::new(&array, 4, 4, 4, 256).nodes,
-            vec![
-                Node([0, 1, 1, 1, 1, 1, 1, 1]),
-                Node([256, 1, 1, 1, 1, 1, 1, 1])
-            ]
-        );
-    }
-    {
-        let mut array = [1; 8 * 8 * 8];
-        array[0] = 0;
-        assert_eq!(
-            SvoDag::new(&array, 8, 8, 8, 256).nodes,
-            vec![
-                Node([0, 1, 1, 1, 1, 1, 1, 1]),
-                Node([256, 1, 1, 1, 1, 1, 1, 1]),
-                Node([257, 1, 1, 1, 1, 1, 1, 1])
-            ]
-        );
-    }
-}
-
-#[test]
-fn cubes() {
-    let mut array = [1; 4 * 4 * 4];
-    array[0] = 0;
-    let svo_dag = SvoDag::new(&array, 4, 4, 4, 256);
-    assert_eq!(svo_dag.cubes().0.len(), 7 + 7);
-}
-
-#[test]
-fn no_join_uniform_pointer_nodes() {
-    let mut array = [0; 8 * 8 * 8];
-    for z in (0..8).step_by(2) {
-        dbg!(z);
-        array[z * 8 * 8..(z + 1) * 8 * 8].copy_from_slice(&[1; 8 * 8]);
-    }
-
-    assert_eq!(
-        SvoDag::new(&array, 8, 8, 8, 256).nodes,
-        [
-            Node([1, 1, 1, 1, 0, 0, 0, 0]),
-            Node([256, 256, 256, 256, 256, 256, 256, 256]),
-            Node([257, 257, 257, 257, 257, 257, 257, 257])
-        ]
-    );
-}
-
-#[test]
-fn paper_example() {
-    #[rustfmt::skip]
-    let flat_array = [
-        0,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,0,
-        1,0,0,0,0,0,0,0,
-        1,1,0,0,0,0,0,0,
-        1,1,1,0,0,0,0,0,
-        1,1,1,1,0,0,0,0,
-        1,1,1,1,1,0,0,0,
-    ];
-    let mut full_array = [0; 8 * 8 * 8];
-    for chunk in full_array.chunks_exact_mut(8 * 8) {
-        chunk.copy_from_slice(&flat_array);
-    }
-
-    let dag = SvoDag::new(&full_array, 8, 8, 1, 256);
-    assert_eq!(
-        dag.nodes,
-        [
-            Node([0, 0, 1, 0, 0, 0, 1, 0]),
-            Node([0, 0, 256, 0, 0, 0, 256, 0]),
-            Node([1, 256, 1, 1, 1, 256, 1, 1]),
-            Node([257, 0, 258, 257, 257, 0, 258, 257])
-        ]
-    );
-}
-
-#[test]
-fn basic_indexing() {
-    let mut array = [1; 8 * 8 * 8];
-    array[0] = 0;
-    let dag = SvoDag::new(&array, 8, 8, 8, 256);
-
-    for z in 0..8 {
-        for y in 0..8 {
-            for x in 0..y {
-                assert_eq!(
-                    dag.index(x, y, z),
-                    if (x, y, z) == (0, 0, 0) { 0 } else { 1 }
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn advanced_indexing() {
-    {
-        let mut array = [1; 8 * 8 * 8];
-        array[(8 * 8 * 8) - 1] = 0;
-        let dag = SvoDag::new(&array, 8, 8, 8, 256);
-        for z in 0..8 {
-            for y in 0..8 {
-                for x in 0..8 {
-                    assert_eq!(
-                        dag.index(x, y, z),
-                        if (x, y, z) == (7, 7, 7) { 0 } else { 1 }
-                    );
-                }
-            }
-        }
-    }
-
-    {
-        let mut array = [1; 64 * 64 * 64];
-        array[4 + 5 * 64 + 6 * 64 * 64] = 0;
-        let dag = SvoDag::new(&array, 64, 64, 64, 256);
-        for z in 0..64 {
-            for y in 0..64 {
-                for x in 0..64 {
-                    assert_eq!(
-                        dag.index(x, y, z),
-                        if (x, y, z) == (4, 5, 6) { 0 } else { 1 }
-                    );
-                }
-            }
-        }
-    }
-}
+use std::io;
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, Eq, PartialEq)]
 struct CompactRange {
@@ -516,7 +24,7 @@ pub struct VecWithCaching<T> {
     cache: hashbrown::HashTable<CompactRange>,
 }
 
-impl<T: std::hash::Hash + Clone + PartialEq> VecWithCaching<T> {
+impl<T: std::hash::Hash + Clone + PartialEq + Debug> VecWithCaching<T> {
     fn from_vec(vec: Vec<T>) -> Self {
         Self {
             inner: vec,
@@ -567,6 +75,47 @@ pub struct Tree64Node {
     pub pop_mask: u64,
 }
 
+impl Tree64Node {
+    fn empty(is_leaf: bool) -> Self {
+        Self::new(is_leaf, 0, 0)
+    }
+
+    fn new(is_leaf: bool, ptr: u32, pop_mask: u64) -> Self {
+        Self {
+            is_leaf_and_ptr: (ptr << 1) | (is_leaf as u32),
+            pop_mask,
+        }
+    }
+
+    fn is_leaf(&self) -> bool {
+        (self.is_leaf_and_ptr & 1) == 1
+    }
+
+    fn ptr(&self) -> u32 {
+        self.is_leaf_and_ptr >> 1
+    }
+
+    fn is_occupied(&self, index: u32) -> bool {
+        self.pop_mask >> index & 1 == 1
+    }
+
+    fn get_index_for_child(&self, child: u32) -> Option<usize> {
+        Some(self.ptr() as usize + self.get_index_in_children(child)? as usize)
+    }
+
+    fn get_index_in_children(&self, index: u32) -> Option<u32> {
+        if !self.is_occupied(index) {
+            return None;
+        }
+
+        Some((self.pop_mask & ((1 << index) - 1)).count_ones())
+    }
+
+    fn range(&self) -> std::ops::Range<usize> {
+        self.ptr() as usize..self.ptr() as usize + self.pop_mask.count_ones() as usize
+    }
+}
+
 #[derive(Default, Debug)]
 struct Tree64GC {
     touched_nodes: fnv::FnvHashSet<u32>,
@@ -574,12 +123,60 @@ struct Tree64GC {
     node_spans: Vec<CompactRange>,
 }
 
+#[derive(Debug, Default, PartialEq)]
+pub struct Tree64Edits {
+    roots_and_num_levels: Vec<(u32, u8)>,
+    index: u32,
+}
+
+impl Tree64Edits {
+    fn push(&mut self, index: u32, num_levels: u8) {
+        if !self.roots_and_num_levels.is_empty() {
+            if (index, num_levels) == self.current() {
+                return;
+            }
+
+            // Ensure that history is linear.
+            while self.can_redo() {
+                self.roots_and_num_levels.pop();
+            }
+        }
+
+        self.roots_and_num_levels.push((index, num_levels));
+        self.index = self.roots_and_num_levels.len() as u32 - 1;
+    }
+
+    fn current(&self) -> (u32, u8) {
+        self.roots_and_num_levels[self.index as usize]
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.index > 0
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.index < (self.roots_and_num_levels.len() as u32 - 1)
+    }
+
+    pub fn undo(&mut self) {
+        if self.can_undo() {
+            self.index -= 1;
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if self.can_redo() {
+            self.index += 1;
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Tree64 {
     pub nodes: VecWithCaching<Tree64Node>,
     pub data: VecWithCaching<u8>,
-    pub scale: u8,
     stats: Tree64Stats,
+    pub edits: Tree64Edits,
 }
 
 #[test]
@@ -588,7 +185,8 @@ fn test_tree_node_size() {
 }
 
 impl Tree64 {
-    fn collect_garbage(&self, root_node_index: u32) {
+    pub fn collect_garbage(&self) {
+        let root_node_index = self.root_node_index_and_num_levels().0;
         let mut gc = Tree64GC::default();
         let mut stack = vec![root_node_index];
 
@@ -608,9 +206,7 @@ impl Tree64 {
                 length: node.pop_mask.count_ones() as u8,
             };
 
-            let is_leaf = node.is_leaf_and_ptr & 1 == 1;
-
-            if is_leaf {
+            if node.is_leaf() {
                 gc.data_spans.push(range);
             } else {
                 gc.node_spans.push(range);
@@ -628,7 +224,7 @@ impl Tree64 {
 
         for range in &gc.data_spans {
             if range.start > previous {
-                todo!("{:?}", previous..range.start);
+                dbg!("{:?}", previous..range.start);
             }
 
             previous = range.start + range.end();
@@ -637,8 +233,8 @@ impl Tree64 {
         let mut previous = 0;
 
         for range in &gc.node_spans {
-            if range.start > previous && previous != root_node_index {
-                todo!("{:?}", previous..range.start);
+            if range.start > previous {
+                dbg!("{:?}", previous..range.start);
             }
 
             previous = range.end();
@@ -729,17 +325,283 @@ impl Tree64 {
         if scale.ilog2() % 2 == 1 {
             scale *= 2;
         }
+        let num_levels = scale.ilog(4) as _;
         let mut this = Self {
-            scale: dbg!(scale.ilog2() as _),
             nodes: Default::default(),
             data: Default::default(),
             stats: Default::default(),
+            edits: Tree64Edits::default(),
         };
-        this.scale = scale as _;
         let root = this.insert(array, dims, [0; 3], scale);
-        this.nodes.inner.insert(0, root);
-        dbg!(&this.stats);
+        let root_node_index = this.insert_nodes(&[root]);
+        this.edits.push(root_node_index, num_levels);
+        {
+            dbg!(&this.stats);
+            dbg!(
+                this.nodes.inner.len() * std::mem::size_of::<Tree64Node>(),
+                this.data.inner.len()
+            );
+        }
         this
+    }
+
+    pub fn root_node_index_and_num_levels(&self) -> (u32, u8) {
+        self.edits.current()
+    }
+
+    fn push_new_root_node(&mut self, node: Tree64Node, num_levels: u8) {
+        let index = self.insert_nodes(&[node]);
+        self.edits.push(index, num_levels);
+    }
+
+    pub fn expand(&mut self) -> std::ops::Range<usize> {
+        let (root_node_index, num_levels) = self.root_node_index_and_num_levels();
+        let current_len = self.nodes.inner.len();
+
+        let new_nodes = [self.nodes.inner[root_node_index as usize]; 64];
+        let children = self.insert_nodes(&new_nodes);
+        self.push_new_root_node(Tree64Node::new(false, children, !0), num_levels + 1);
+
+        current_len..self.nodes.inner.len()
+    }
+
+    fn get_leaves_for_node(&self, node: Tree64Node) -> arrayvec::ArrayVec<u8, 64> {
+        debug_assert!(node.is_leaf());
+        let slice = &self.data.inner[node.range()];
+        let mut nodes = arrayvec::ArrayVec::<_, 64>::new();
+        nodes.try_extend_from_slice(&slice).unwrap();
+        nodes
+    }
+
+    fn get_children_for_node(&self, node: Tree64Node) -> arrayvec::ArrayVec<Tree64Node, 64> {
+        debug_assert!(!node.is_leaf());
+        let slice = &self.nodes.inner[node.range()];
+        let mut nodes = arrayvec::ArrayVec::<_, 64>::new();
+        nodes.try_extend_from_slice(&slice).unwrap();
+        nodes
+    }
+
+    fn get_node_coord_at_depth(&self, level: u32, at: glam::UVec3) -> glam::UVec3 {
+        at / 4_u32.pow(level)
+    }
+
+    fn get_index_at_depth(&self, level: u32, at: glam::UVec3) -> u32 {
+        let coord = self.get_node_coord_at_depth(level, at.into());
+        coord.dot(glam::UVec3::new(1, 4, 16))
+    }
+
+    pub fn modify(&mut self, at: [u32; 3], value: u8) -> UpdatedRanges {
+        self.modify_nodes_in_box(at, [at[0] + 1, at[1] + 1, at[2] + 1], value)
+    }
+
+    pub fn modify_nodes_in_box(
+        &mut self,
+        min: [u32; 3],
+        max: [u32; 3],
+        value: u8,
+    ) -> UpdatedRanges {
+        let num_data = self.data.inner.len();
+        let num_nodes = self.nodes.inner.len();
+
+        let (node_index, num_levels) = self.root_node_index_and_num_levels();
+
+        let root = self.nodes.inner[node_index as usize];
+
+        let bbox = BoundingBox {
+            min: min.into(),
+            max: max.into(),
+        };
+
+        let root_bbox = BoundingBox {
+            min: glam::UVec3::splat(0),
+            max: glam::UVec3::splat(4_u32.pow(num_levels as _)),
+        };
+
+        let new_root = if root.is_leaf() {
+            self.modify_leaf_node(root, bbox, root_bbox, value)
+        } else {
+            self.modify_nodes_in_box_inner(
+                root,
+                BoundingBox {
+                    min: min.into(),
+                    max: max.into(),
+                },
+                BoundingBox {
+                    min: glam::UVec3::splat(0),
+                    max: glam::UVec3::splat(4_u32.pow(num_levels as _)),
+                },
+                value,
+            )
+        };
+        self.push_new_root_node(new_root, num_levels);
+
+        UpdatedRanges {
+            data: num_data..self.data.inner.len(),
+            nodes: num_nodes..self.nodes.inner.len(),
+        }
+    }
+
+    /*pub fn modify_nodes_in_box_iterative(
+        &mut self,
+        min: [u32; 3],
+        max: [u32; 3],
+        value: u8,
+    ) -> UpdatedRanges {
+        let num_data = self.data.inner.len();
+        let num_nodes = self.nodes.inner.len();
+
+        let (node_index, num_levels) = self.root_node_index_and_num_levels();
+
+        let bbox = BoundingBox {
+            min: min.into(),
+            max: max.into(),
+        };
+
+        let node = self.nodes.inner[node_index as usize];
+
+        let pop_masked_data = PopMaskedData {
+            array: self.get_children_for_node(node),
+            pop_mask: node.pop_mask,
+        };
+
+        let mut stack: Vec<(BoundingBox, Tree64Node, PopMaskedData<Tree64Node>, Option<(usize, usuize)>)> = vec![
+            (BoundingBox {
+                min: glam::UVec3::splat(0),
+                max: glam::UVec3::splat(4_u32.pow(num_levels as _)),
+            },  node, pop_masked_data, None)
+        ];
+
+        let mut last_parent_index = None;
+
+        while let Some((node_bbox, node, pop_masked_data, parent)) = stack.last_mut() {
+            let mut index = stack.len() - 1;
+
+            let child_size = (node_bbox.max - node_bbox.min) / 4;
+            let children_are_leaves = child_size.x == 4;
+
+            for x in 0..4 {
+                for y in 0..4 {
+                    for z in 0..4 {
+                        let node_bbox = BoundingBox {
+                            min: node_bbox.min + child_size * glam::UVec3::new(x, y, z),
+                            max: node_bbox.min + child_size * (glam::UVec3::new(x, y, z) + 1),
+                        };
+
+                        let child_index = x + y * 4 + z * 16;
+                        let child = if let Some(child_index) = node.get_index_for_child(child_index) {
+                            self.nodes.inner[child_index as usize]
+                        } else {
+                            Tree64Node::empty(children_are_leaves)
+                        };
+                        pop_masked_data.set(
+                            child_index,
+                            Some({
+                                if children_are_leaves {
+                                    self.modify_leaf_node(child, bbox, node_bbox, value)
+                                } else {
+                                    self.modify_nodes_in_box_inner(child, bbox, node_bbox, value)
+                                }
+                            })
+                            .filter(|node| node.pop_mask != 0),
+                        );
+                    }
+                }
+            }
+        }
+
+        UpdatedRanges {
+            data: num_data..self.data.inner.len(),
+            nodes: num_nodes..self.nodes.inner.len(),
+        }
+    }*/
+
+    fn modify_leaf_node(
+        &mut self,
+        node: Tree64Node,
+        bbox: BoundingBox,
+        node_bbox: BoundingBox,
+        value: u8,
+    ) -> Tree64Node {
+        debug_assert!(node.is_leaf());
+
+        let mut intersection = match bbox.get_intersection(&node_bbox) {
+            Some(intersection) => intersection,
+            None => return node,
+        };
+
+        let new_min = intersection.min % 4;
+        intersection.max = new_min + (intersection.max - intersection.min);
+        intersection.min = new_min;
+
+        let mut pop_masked_data = PopMaskedData {
+            array: self.get_leaves_for_node(node),
+            pop_mask: node.pop_mask,
+        };
+        for x in intersection.min.x..intersection.max.x {
+            for y in intersection.min.y..intersection.max.y {
+                for z in intersection.min.z..intersection.max.z {
+                    let index = x + y * 4 + z * 16;
+                    pop_masked_data.set(index, Some(value).filter(|&v| v != 0));
+                }
+            }
+        }
+
+        Tree64Node::new(
+            true,
+            self.insert_values(&pop_masked_data.array),
+            pop_masked_data.pop_mask,
+        )
+    }
+
+    fn modify_nodes_in_box_inner(
+        &mut self,
+        node: Tree64Node,
+        bbox: BoundingBox,
+        node_bbox: BoundingBox,
+        value: u8,
+    ) -> Tree64Node {
+        let mut pop_masked_data = PopMaskedData {
+            array: self.get_children_for_node(node),
+            pop_mask: node.pop_mask,
+        };
+
+        let child_size = (node_bbox.max - node_bbox.min) / 4;
+        let children_are_leaves = child_size.x == 4;
+
+        for x in 0..4 {
+            for y in 0..4 {
+                for z in 0..4 {
+                    let node_bbox = BoundingBox {
+                        min: node_bbox.min + child_size * glam::UVec3::new(x, y, z),
+                        max: node_bbox.min + child_size * (glam::UVec3::new(x, y, z) + 1),
+                    };
+
+                    let child_index = x + y * 4 + z * 16;
+                    let child = if let Some(child_index) = node.get_index_for_child(child_index) {
+                        self.nodes.inner[child_index as usize]
+                    } else {
+                        Tree64Node::empty(children_are_leaves)
+                    };
+                    pop_masked_data.set(
+                        child_index,
+                        Some({
+                            if children_are_leaves {
+                                self.modify_leaf_node(child, bbox, node_bbox, value)
+                            } else {
+                                self.modify_nodes_in_box_inner(child, bbox, node_bbox, value)
+                            }
+                        })
+                        .filter(|node| node.pop_mask != 0),
+                    );
+                }
+            }
+        }
+
+        Tree64Node::new(
+            false,
+            self.insert_nodes(&pop_masked_data.array),
+            pop_masked_data.pop_mask,
+        )
     }
 
     fn insert(
@@ -774,12 +636,7 @@ impl Tree64 {
                 }
             }
 
-            let pointer = self.insert_values(&vec);
-
-            Tree64Node {
-                is_leaf_and_ptr: (pointer << 1) | 1,
-                pop_mask: bitmask,
-            }
+            Tree64Node::new(true, self.insert_values(&vec), bitmask)
         } else {
             let new_scale = scale / 4;
             let mut nodes = arrayvec::ArrayVec::<_, 64>::new();
@@ -805,17 +662,14 @@ impl Tree64 {
                 }
             }
 
-            let pointer = self.insert_nodes(&nodes) + 1;
-
-            Tree64Node {
-                is_leaf_and_ptr: (pointer << 1),
-                pop_mask: bitmask,
-            }
+            Tree64Node::new(false, self.insert_nodes(&nodes), bitmask)
         }
     }
 
     pub fn serialize<W: io::Write>(&self, mut writer: W) -> io::Result<()> {
-        writer.write_all(&[self.scale])?;
+        let (root_node_index, num_levels) = self.root_node_index_and_num_levels();
+        writer.write_all(&[num_levels])?;
+        writer.write_all(&root_node_index.to_le_bytes())?;
         writer.write_all(&(self.nodes.inner.len() as u32).to_le_bytes())?;
         writer.write_all(&(self.data.inner.len() as u32).to_le_bytes())?;
         writer.write_all(bytemuck::cast_slice(&self.nodes.inner))?;
@@ -824,17 +678,22 @@ impl Tree64 {
     }
 
     pub fn deserialize<R: io::Read>(mut reader: R) -> io::Result<Self> {
-        let mut scale = 0;
+        let mut num_levels = 0;
         let mut num_nodes = 0_u32;
         let mut num_data = 0_u32;
-        reader.read_exact(bytemuck::bytes_of_mut(&mut scale))?;
+        let mut root_node_index = 0_u32;
+        reader.read_exact(bytemuck::bytes_of_mut(&mut num_levels))?;
+        reader.read_exact(bytemuck::bytes_of_mut(&mut root_node_index))?;
         reader.read_exact(bytemuck::bytes_of_mut(&mut num_nodes))?;
         reader.read_exact(bytemuck::bytes_of_mut(&mut num_data))?;
         let mut this = Self {
-            scale,
             nodes: VecWithCaching::from_vec(vec![Tree64Node::default(); num_nodes as usize]),
             data: VecWithCaching::from_vec(vec![0; num_data as usize]),
             stats: Default::default(),
+            edits: Tree64Edits {
+                roots_and_num_levels: vec![(root_node_index, num_levels)],
+                index: 0,
+            },
         };
         reader.read_exact(bytemuck::cast_slice_mut(&mut this.nodes.inner))?;
         reader.read_exact(bytemuck::cast_slice_mut(&mut this.data.inner))?;
@@ -842,19 +701,17 @@ impl Tree64 {
     }
 }
 
-fn extend_overlapping<T: PartialEq + Clone>(vec: &mut Vec<T>, data: &[T]) -> usize {
-    for i in (1..data.len()).rev() {
+fn extend_overlapping<T: PartialEq + Clone + Debug>(vec: &mut Vec<T>, data: &[T]) -> usize {
+    for i in (1..=data.len()).rev() {
         let slice_to_match = &data[..i];
 
-        if slice_to_match.len() >= vec.len() {
+        if !vec.ends_with(slice_to_match) {
             continue;
         }
 
         let pointer = vec.len() - slice_to_match.len();
-        if slice_to_match == &vec[pointer..] {
-            vec.extend_from_slice(&data[i..]);
-            return pointer;
-        }
+        vec.extend_from_slice(&data[i..]);
+        return pointer;
     }
 
     let pointer = vec.len();
@@ -862,10 +719,65 @@ fn extend_overlapping<T: PartialEq + Clone>(vec: &mut Vec<T>, data: &[T]) -> usi
     pointer
 }
 
+#[derive(Default, Debug, PartialEq)]
+pub struct UpdatedRanges {
+    pub nodes: std::ops::Range<usize>,
+    pub data: std::ops::Range<usize>,
+}
+
+#[test]
+fn test_pm() {
+    let mut x = PopMaskedData::<u8>::default();
+    for i in (0..64) {
+        x.set(i, Some(1));
+    }
+    assert_eq!(&x.array[..], &[1; 64]);
+    for i in (0..64).rev() {
+        x.set(i, Some(2));
+    }
+    assert_eq!(&x.array[..], &[2; 64]);
+    let mut x = PopMaskedData::<u8>::default();
+    for i in (0..64).rev() {
+        x.set(i, Some(3));
+    }
+    assert_eq!(&x.array[..], &[3; 64]);
+    for i in (0..64).rev() {
+        x.set(i, None);
+    }
+    assert_eq!(&x.array[..], &[]);
+}
+
+#[derive(Default)]
+struct PopMaskedData<T> {
+    array: arrayvec::ArrayVec<T, 64>,
+    pop_mask: u64,
+}
+
+impl<T> PopMaskedData<T> {
+    fn set(&mut self, index: u32, value: Option<T>) {
+        let occupied = (self.pop_mask >> index) & 1 != 0;
+        let array_index = (self.pop_mask & ((1 << index) - 1)).count_ones() as usize;
+
+        match (value, occupied) {
+            (Some(value), true) => self.array[array_index] = value,
+            (Some(value), false) => {
+                self.pop_mask ^= 1 << index;
+                self.array.insert(array_index as usize, value);
+            }
+            (None, true) => {
+                self.pop_mask ^= 1 << index;
+                self.array.remove(array_index as usize);
+            }
+            (None, false) => {}
+        }
+    }
+}
+
 #[test]
 fn test_tree() {
     {
         let tree = Tree64::new(&[1, 1, 1, 1], [2, 2, 1]);
+        dbg!(&tree.data.inner, &tree.nodes.inner);
         assert_eq!(tree.data.inner, &[1; 4]);
         assert_eq!({ tree.nodes.inner[0].is_leaf_and_ptr }, 1);
         assert_eq!({ tree.nodes.inner[0].pop_mask }, 0b00110011);
@@ -903,12 +815,301 @@ fn test_tree() {
         let tree2 = Tree64::deserialize(io::Cursor::new(&data)).unwrap();
         assert_eq!(tree.data.inner, tree2.data.inner);
         assert_eq!(tree.nodes.inner, tree2.nodes.inner);
-        assert_eq!(tree.scale, tree2.scale);
+        assert_eq!(tree.edits, tree2.edits);
+
+        let mut tree = tree;
+        let ranges = tree.modify([2, 2, 3], 0);
+        assert_eq!(ranges.nodes, 1..2);
+        assert!(ranges.data.is_empty(), "{:?}", tree.data.inner);
+
+        let mut tree = tree;
+        let ranges = tree.modify([0, 0, 0], 2);
+        assert_eq!(ranges.nodes, 2..3);
+        assert_eq!(ranges.data.len(), 64 - 2);
+    }
+}
+
+#[test]
+fn single_node_modifications() {
+    {
+        let values = [1; 4 * 4 * 4];
+        let mut tree = Tree64::new(&values, [4; 3]);
+
+        let ranges = tree.modify([3, 3, 3], 0);
+        assert_eq!(ranges.nodes.len(), 1);
+        assert!(ranges.data.is_empty());
     }
 
     {
-        let values = [1; 100 * 100 * 100];
-        let tree = Tree64::new(&values, [100, 100, 100]);
-        tree.collect_garbage(0);
+        let values = [1; 4 * 4 * 4];
+        let mut tree = Tree64::new(&values, [4; 3]);
+
+        let ranges = tree.modify([3, 3, 3], 2);
+        dbg!(&tree.data.inner[ranges.data.clone()]);
+        assert_eq!(ranges.data.len(), 1);
+        assert_eq!(ranges.nodes.len(), 1);
+    }
+
+    {
+        let values = [1; 16 * 16 * 16];
+        let mut tree = Tree64::new(&values, [16; 3]);
+        let updated_nodes = 64 + 1;
+
+        let ranges = tree.modify([5, 5, 5], 0);
+        assert_eq!(ranges.nodes.len(), updated_nodes);
+        assert!(ranges.data.is_empty());
+    }
+
+    {
+        let values = [1; 64 * 64 * 64];
+        let mut tree = Tree64::new(&values, [64; 3]);
+        let updated_nodes = 64 + 64 + 1;
+
+        let ranges = tree.modify([63, 63, 63], 0);
+        assert!(ranges.data.is_empty());
+        assert_eq!(ranges.nodes.len(), updated_nodes);
+    }
+
+    {
+        let values = [1; 64 * 64 * 64];
+        let mut tree = Tree64::new(&values, [64; 3]);
+        let updated_nodes = 64 + 64 + 1;
+
+        let ranges = tree.modify([63, 63, 63], 2);
+        assert_eq!(ranges.data.len(), 1);
+        assert_eq!(ranges.nodes.len(), updated_nodes);
+    }
+
+    {
+        let values = [1; 64 * 64 * 64];
+        let mut tree = Tree64::new(&values, [64; 3]);
+        let updated_nodes = 64 + 64 + 1;
+
+        let ranges = tree.modify([0, 0, 0], 2);
+        assert_eq!(ranges.data.len(), 64);
+        assert_eq!(ranges.nodes.len(), updated_nodes);
+    }
+}
+
+#[test]
+fn modifications_in_box() {
+    {
+        let values = [1; 4 * 4 * 4];
+        let mut tree = Tree64::new(&values, [4; 3]);
+
+        let ranges = tree.modify_nodes_in_box([1; 3], [2; 3], 0);
+        assert_eq!(ranges.nodes.len(), 1);
+        assert!(ranges.data.is_empty());
+    }
+
+    {
+        let values = [1; 16 * 16 * 16];
+        let mut tree = Tree64::new(&values, [16; 3]);
+
+        let ranges = tree.modify_nodes_in_box([1; 3], [3; 3], 0);
+        assert_eq!(ranges.nodes.len(), 64 + 1);
+        assert!(ranges.data.is_empty());
+    }
+
+    {
+        let values = [1; 16 * 16 * 16];
+        let mut tree = Tree64::new(&values, [16; 3]);
+
+        let ranges = tree.modify_nodes_in_box([0; 3], [3; 3], 2);
+        assert_eq!(ranges.nodes.len(), 64 + 1);
+        assert_eq!(ranges.data.len(), 64);
+    }
+
+    {
+        let values = [1; 16 * 16 * 16];
+        let mut tree = Tree64::new(&values, [16; 3]);
+
+        let ranges = tree.modify_nodes_in_box([0; 3], [3; 3], 2);
+
+        assert_eq!(ranges.data.len(), 64);
+        assert_eq!(ranges.nodes.len(), 64 + 1);
+    }
+
+    {
+        let values = [1; 16 * 16 * 16];
+        let mut tree = Tree64::new(&values, [16; 3]);
+
+        let ranges = tree.modify_nodes_in_box([0; 3], [4; 3], 2);
+        assert_eq!(ranges.nodes.len(), 64 + 1);
+    }
+}
+
+#[test]
+fn advanced_modifications_in_box() {
+    {
+        let values = [1; 64 * 64 * 64];
+        let mut tree = Tree64::new(&values, [64; 3]);
+
+        let ranges = tree.modify_nodes_in_box([0; 3], [3; 3], 2);
+        dbg!(tree.data.inner);
+
+        assert_eq!(ranges.data.len(), 64);
+        assert_ne!(ranges.nodes.len(), 64 + 1);
+    }
+
+    {
+        let values = [1; 64 * 64 * 64];
+        let mut tree = Tree64::new(&values, [64; 3]);
+
+        let ranges = tree.modify_nodes_in_box([0; 3], [3; 3], 2);
+        dbg!(tree.data.inner);
+
+        assert_eq!(ranges.data.len(), 64);
+        assert_ne!(ranges.nodes.len(), 64 + 1);
+    }
+}
+
+#[test]
+fn modifications_on_empty_spaces() {
+    {
+        let mut values = [0; 16 * 16 * 16];
+        values[3 * 16 + 3 * 4 + 3] = 1;
+        let mut tree = Tree64::new(&values, [16; 3]);
+
+        let ranges = tree.modify([0; 3], 1);
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                nodes: 2..5,
+                data: 1..1,
+            }
+        );
+    }
+
+    {
+        let values = [0; 16 * 16 * 16];
+        let mut tree = Tree64::new(&values, [16; 3]);
+        dbg!(&tree.nodes.inner);
+
+        let ranges = tree.modify([0; 3], 1);
+        dbg!(&tree.nodes.inner);
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                nodes: 1..3,
+                data: 0..1,
+            }
+        );
+    }
+
+    {
+        let values = [0; 64 * 64 * 64];
+        let mut tree = Tree64::new(&values, [64; 3]);
+        dbg!(&tree.nodes.inner);
+
+        let ranges = tree.modify([0; 3], 1);
+        dbg!(&tree.nodes.inner);
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                nodes: 1..4,
+                data: 0..1,
+            }
+        );
+    }
+
+    {
+        let values = [0; 4 * 4 * 4];
+
+        let mut tree = Tree64::new(&values, [4; 3]);
+        dbg!(&tree.nodes.inner);
+
+        let ranges = tree.modify_nodes_in_box([2; 3], [4; 3], 1);
+        dbg!(&tree.nodes.inner);
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                data: 0..8,
+                nodes: 1..2,
+            }
+        );
+    }
+
+    {
+        let values = [0; 16 * 16 * 16];
+
+        let mut tree = Tree64::new(&values, [16; 3]);
+        dbg!(&tree.nodes.inner);
+
+        let ranges = tree.modify_nodes_in_box([2; 3], [4; 3], 1);
+        dbg!(&tree.nodes.inner);
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                data: 0..8,
+                nodes: 1..3,
+            }
+        );
+    }
+
+    {
+        let values = [0; 16 * 16 * 16];
+
+        let mut tree = Tree64::new(&values, [16; 3]);
+        dbg!(&tree.nodes.inner);
+
+        let ranges = tree.modify_nodes_in_box([6; 3], [8; 3], 1);
+        dbg!(&tree.nodes.inner);
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                data: 0..8,
+                nodes: 1..3,
+            }
+        );
+    }
+
+    {
+        let values = [0; 16 * 16 * 16];
+
+        let mut tree = Tree64::new(&values, [16; 3]);
+
+        let ranges = tree.modify_nodes_in_box([0; 3], [5; 3], 1);
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                data: 0..64,
+                nodes: 1..1 + 8 + 1,
+            }
+        );
+    }
+
+    {
+        let values = [0; 16 * 16 * 16];
+
+        let mut tree = Tree64::new(&values, [16; 3]);
+
+        let ranges = tree.modify_nodes_in_box([4; 3], [12; 3], 1);
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                data: 0..64,
+                nodes: 1..1 + 8 + 1,
+            }
+        );
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BoundingBox {
+    min: glam::UVec3,
+    max: glam::UVec3,
+}
+
+impl BoundingBox {
+    fn get_intersection(&self, other: &Self) -> Option<BoundingBox> {
+        let min = self.min.max(other.min);
+        let max = self.max.min(other.max);
+
+        if min.cmplt(max).all() {
+            Some(BoundingBox { min, max })
+        } else {
+            None
+        }
     }
 }
