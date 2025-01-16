@@ -2244,6 +2244,7 @@ dependencies = [
  "arrayvec",
  "bytemuck",
  "fnv",
+ "glam 0.29.2",
  "hashbrown",
  "memchr",
 ]

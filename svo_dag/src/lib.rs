@@ -402,15 +402,9 @@ impl Tree64 {
         };
 
         let root = self.nodes.inner[root_index as usize];
-        let size = 4_u32.pow(num_levels as _);
-
-        let root_bbox = BoundingBox {
-            min: glam::UVec3::splat(0),
-            max: glam::UVec3::splat(size),
-        };
 
         if root.is_leaf() {
-            let new_root = self.modify_leaf_node(root, bbox, root_bbox.min, value);
+            let new_root = self.modify_leaf_node(root, bbox, glam::UVec3::ZERO, value);
             self.push_new_root_node(new_root, num_levels);
 
             return UpdatedRanges {
@@ -434,7 +428,7 @@ impl Tree64 {
         }
 
         let mut stack: Vec<StackItem> = vec![StackItem {
-            node_min_pos: root_bbox.min,
+            node_min_pos: glam::UVec3::ZERO,
             node_level: num_levels,
             corresponding_node_index: Some(root_index),
             children: children_data_for_node(self, root),
@@ -458,6 +452,10 @@ impl Tree64 {
             for x in 0..4 {
                 for y in 0..4 {
                     for z in 0..4 {
+                        if going_up {
+                            continue;
+                        }
+
                         let node_bbox = BoundingBox {
                             min: item.node_min_pos + child_size * glam::UVec3::new(x, y, z),
                             max: item.node_min_pos + child_size * (glam::UVec3::new(x, y, z) + 1),
@@ -467,20 +465,19 @@ impl Tree64 {
 
                         match node_bbox.get_intersection(&bbox) {
                             None => continue,
-                            Some(intersection)
-                                if intersection == node_bbox && !children_are_leaves =>
-                            {
+                            // If the bounding box entirely contains the node then we can just set a value.
+                            Some(intersection) if intersection == node_bbox => {
                                 item.children.set(
                                     child_index,
-                                    if value == 0 {
-                                        None
-                                    } else {
+                                    if value > 0 {
+                                        // leaf node for the specific value.
                                         let mut child_node = Tree64Node::new(
                                             true,
                                             self.insert_values(&[value; 64]),
                                             !0,
                                         );
 
+                                        // build up a tree for the child if the children for this node are not leaves.
                                         for _ in 0..item.node_level.saturating_sub(2) {
                                             child_node = Tree64Node::new(
                                                 false,
@@ -490,6 +487,8 @@ impl Tree64 {
                                         }
 
                                         Some(child_node)
+                                    } else {
+                                        None
                                     },
                                 );
                                 continue;
@@ -508,7 +507,7 @@ impl Tree64 {
                             Tree64Node::empty(children_are_leaves)
                         };
 
-                        if !children_are_leaves && !going_up {
+                        if !children_are_leaves {
                             any_pushed = true;
                             stack.push(StackItem {
                                 node_min_pos: node_bbox.min,
@@ -517,9 +516,7 @@ impl Tree64 {
                                 children: children_data_for_node(self, child),
                                 parent_and_index: Some((index, child_index as u8)),
                             });
-                        }
-
-                        if children_are_leaves {
+                        } else {
                             item.children.set(
                                 child_index,
                                 Some(self.modify_leaf_node(child, bbox, node_bbox.min, value))
@@ -695,6 +692,22 @@ impl Tree64 {
         reader.read_exact(bytemuck::cast_slice_mut(&mut this.data.inner))?;
         Ok(this)
     }
+
+    fn get_value_at(&self, pos: [u32; 3]) -> u8 {
+        let pos = glam::UVec3::from(pos);
+        let (root_index, _) = self.root_node_index_and_num_levels();
+        let node = self.nodes.inner[root_index as usize];
+
+        if node.is_leaf() {
+            let child = pos.x + pos.y * 4 + pos.z * 16;
+            return node
+                .get_index_for_child(child)
+                .map(|index| self.data.inner[index as usize])
+                .unwrap_or(0);
+        } else {
+            panic!()
+        }
+    }
 }
 
 fn extend_overlapping<T: PartialEq + Clone + Debug>(vec: &mut Vec<T>, data: &[T]) -> usize {
@@ -777,10 +790,19 @@ fn test_tree() {
         assert_eq!(tree.data.inner, &[1; 4]);
         assert_eq!({ tree.nodes.inner[0].is_leaf_and_ptr }, 1);
         assert_eq!({ tree.nodes.inner[0].pop_mask }, 0b00110011);
+
+        for x in 0..2 {
+            for y in 0..2 {
+                for z in 0..2 {
+                    assert_eq!(tree.get_value_at([x, y, z]), if z == 1 { 0 } else { 1 });
+                }
+            }
+        }
     }
 
     {
-        let tree = Tree64::new(&[1, 1, 1, 1, 1, 0, 1, 1], [2, 2, 2]);
+        let array = &[1, 1, 1, 1, 1, 0, 1, 1];
+        let tree = Tree64::new(array, [2, 2, 2]);
         assert_eq!(tree.data.inner, &[1; 7]);
         assert_eq!({ tree.nodes.inner[0].is_leaf_and_ptr }, 1);
         assert_eq!(
@@ -789,6 +811,17 @@ fn test_tree() {
             "{:064b}",
             { tree.nodes.inner[0].pop_mask }
         );
+
+        for x in 0..2 {
+            for y in 0..2 {
+                for z in 0..2 {
+                    assert_eq!(
+                        tree.get_value_at([x, y, z]),
+                        array[x as usize + y as usize * 2 + z as usize * 4]
+                    );
+                }
+            }
+        }
     }
 
     {
@@ -799,6 +832,17 @@ fn test_tree() {
         assert_eq!(tree.data.inner, &[1; 63]);
         assert_eq!({ tree.nodes.inner[0].is_leaf_and_ptr }, 1);
         assert_eq!({ tree.nodes.inner[0].pop_mask }, (!0 & !(1 << 63)));
+
+        for x in 0..4 {
+            for y in 0..4 {
+                for z in 0..4 {
+                    assert_eq!(
+                        tree.get_value_at([x, y, z]),
+                        if x == 3 && y == 3 && z == 3 { 0 } else { 1 }
+                    );
+                }
+            }
+        }
     }
 
     {
@@ -854,6 +898,17 @@ fn single_node_modifications() {
         let ranges = tree.modify([5, 5, 5], 0);
         assert_eq!(ranges.nodes.len(), updated_nodes);
         assert!(ranges.data.is_empty());
+
+        for x in 0..16 {
+            for y in 0..16 {
+                for z in 0..16 {
+                    assert_eq!(
+                        tree.get_value_at([x, y, z]),
+                        if x == 5 && y == 5 && z == 5 { 0 } else { 1 }
+                    );
+                }
+            }
+        }
     }
 
     {
@@ -1124,6 +1179,21 @@ fn modifications_on_empty_spaces() {
         assert_eq!(ranges.nodes.len(), 1);
         assert!(ranges.data.is_empty());
     }
+}
+
+#[test]
+fn modify_box_wierd_sizes() {
+    let values = [0; 64 * 64 * 64];
+    let mut tree = Tree64::new(&values, [64; 3]);
+
+    let ranges = tree.modify_nodes_in_box([10; 3], [30; 3], 1);
+    assert_eq!(
+        ranges,
+        UpdatedRanges {
+            nodes: 1..1 + (3 * 64),
+            data: 0..64
+        }
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
