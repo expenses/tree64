@@ -3,9 +3,8 @@ use egui_winit::egui;
 use glam::swizzles::Vec3Swizzles;
 use wgpu::util::DeviceExt;
 use winit::{
-    event::{DeviceEvent, ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent},
+    event::{DeviceEvent, ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
-    keyboard::PhysicalKey,
     window::{Window, WindowId},
 };
 
@@ -122,10 +121,9 @@ impl<'a> App<'a> {
 
                             let ranges = tree64.modify_nodes_in_box(
                                 (position - settings.edit_size / 2.0)
-                                    .max(glam::Vec3::ZERO)
                                     .xzy()
-                                    .as_uvec3(),
-                                (position + settings.edit_size / 2.0).xzy().as_uvec3(),
+                                    .as_ivec3(),
+                                (position + settings.edit_size / 2.0).xzy().as_ivec3(),
                                 value,
                             );
                             self.accumulated_frame_index = 0;
