@@ -322,6 +322,7 @@ impl Tree64 {
 
     pub fn new(array: &[u8], dims: [usize; 3]) -> Self {
         let mut scale = dims[0].max(dims[1]).max(dims[2]).next_power_of_two() as u32;
+        scale = scale.max(4);
         if scale.ilog2() % 2 == 1 {
             scale *= 2;
         }
@@ -336,11 +337,11 @@ impl Tree64 {
         let root_node_index = this.insert_nodes(&[root]);
         this.edits.push(root_node_index, num_levels);
         {
-            dbg!(&this.stats);
-            dbg!(
-                this.nodes.inner.len() * std::mem::size_of::<Tree64Node>(),
-                this.data.inner.len()
-            );
+            //dbg!(&this.stats);
+            //dbg!(
+            //    this.nodes.inner.len() * std::mem::size_of::<Tree64Node>(),
+            //    this.data.inner.len()
+            //);
         }
         this
     }
@@ -385,10 +386,10 @@ impl Tree64 {
         self.modify_nodes_in_box(at, [at[0] + 1, at[1] + 1, at[2] + 1], value)
     }
 
-    pub fn modify_nodes_in_box(
+    pub fn modify_nodes_in_box<P: Into<glam::UVec3>>(
         &mut self,
-        min: [u32; 3],
-        max: [u32; 3],
+        min: P,
+        max: P,
         value: u8,
     ) -> UpdatedRanges {
         let num_data = self.data.inner.len();
@@ -692,9 +693,8 @@ impl Tree64 {
         Ok(this)
     }
 
-    #[cfg(test)]
-    fn get_value_at(&self, pos: [u32; 3]) -> u8 {
-        let pos = glam::UVec3::from(pos);
+    pub fn get_value_at<P: Into<glam::UVec3>>(&self, pos: P) -> u8 {
+        let pos = pos.into();
         let (root_index, node_level) = self.root_node_index_and_num_levels();
         let mut node = self.nodes.inner[root_index as usize];
         let mut child_size = 4_u32.pow(node_level as u32 - 1);
@@ -708,6 +708,8 @@ impl Tree64 {
                 return 0;
             }
         }
+
+        debug_assert_eq!(child_size, 1);
 
         let child_index = (pos % 4).dot(glam::UVec3::new(1, 4, 16));
         node.get_index_for_child(child_index)
@@ -1231,40 +1233,81 @@ fn modify_box_wierd_sizes() {
         }
     }
 
-    for start_x in 0..44 {
-        for start_y in 0..44 {
-            let start_z = start_y;
-            let values = [0; 64 * 64 * 64];
-            let mut tree = Tree64::new(&values, [64; 3]);
+    for start in 0..44 {
+        let values = [0; 64 * 64 * 64];
+        let mut tree = Tree64::new(&values, [64; 3]);
 
-            tree.modify_nodes_in_box(
-                [start_x, start_y, start_z],
-                [start_x + 20, start_y + 20, start_z + 20],
-                1,
-            );
+        tree.modify_nodes_in_box([start; 3], [start + 20, start + 20, start + 20], 1);
 
-            for x in 0..64 {
-                for y in 0..64 {
-                    for z in 0..64 {
-                        assert_eq!(
-                            tree.get_value_at([x, y, z]),
-                            if x >= start_x
-                                && x < (start_x + 20)
-                                && y >= start_y
-                                && y < (start_y + 20)
-                                && z >= start_z
-                                && z < (start_z + 20)
-                            {
-                                1
-                            } else {
-                                0
-                            },
-                            "{:?} {:?}",
-                            (x, y, z),
-                            (start_x, start_y, start_z)
-                        );
-                    }
+        for x in 0..64 {
+            for y in 0..64 {
+                for z in 0..64 {
+                    assert_eq!(
+                        tree.get_value_at([x, y, z]),
+                        if x >= start
+                            && x < (start + 20)
+                            && y >= start
+                            && y < (start + 20)
+                            && z >= start
+                            && z < (start + 20)
+                        {
+                            1
+                        } else {
+                            0
+                        },
+                        "{:?} {:?}",
+                        (x, y, z),
+                        start
+                    );
                 }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_tiny() {
+    let tree = Tree64::new(&[0], [1; 3]);
+}
+
+#[test]
+fn test_sponza_editing() {
+    let mut tree =
+        Tree64::deserialize(std::fs::File::open("../voxviewer/assets/sponza.tree64").unwrap())
+            .unwrap();
+    let min = glam::UVec3::new(611, 304, 486);
+    let max = min + 40;
+    for x in min.x - 2..max.x + 2 {
+        for y in min.y - 2..max.y + 2 {
+            for z in min.z - 2..max.z + 2 {
+                assert_eq!(tree.get_value_at([x, y, z]), 0);
+            }
+        }
+    }
+    tree.modify_nodes_in_box(min, max, 1);
+    for x in min.x - 3..max.x + 3 {
+        for y in min.y - 3..max.y + 3 {
+            for z in min.z - 3..max.z + 3 {
+                let expected = if z >= min.z
+                    && z < max.z
+                    && x >= min.x
+                    && x < max.x
+                    && y >= min.y
+                    && y < max.y
+                {
+                    1
+                } else {
+                    0
+                };
+                assert_eq!(tree.get_value_at([x, y, z]), expected);
+            }
+        }
+    }
+    tree.edits.undo();
+    for x in min.x - 2..max.x + 2 {
+        for y in min.y - 2..max.y + 2 {
+            for z in min.z - 2..max.z + 2 {
+                assert_eq!(tree.get_value_at([x, y, z]), 0);
             }
         }
     }
