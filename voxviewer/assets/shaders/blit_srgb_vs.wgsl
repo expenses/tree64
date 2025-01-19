@@ -7,7 +7,7 @@ struct V2P_0
 @vertex
 fn VSMain(@builtin(vertex_index) vId_0 : u32) -> V2P_0
 {
-    var _S1 : f32 = f32(((vId_0 << (u32(1))) & (u32(2))));
+    var _S1 : f32 = f32((((vId_0 << (u32(1)))) & (u32(2))));
     var _S2 : f32 = f32((vId_0 & (u32(2))));
     var uv_0 : vec2<f32> = vec2<f32>(_S1, _S2);
     var vsOut_0 : V2P_0;

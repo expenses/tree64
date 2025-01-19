@@ -63,15 +63,15 @@ struct TinyUniformSampleGenerator_0
 
 fn interleave_32bit_0( v_0 : vec2<u32>) -> u32
 {
-    var x_0 : u32 = (v_0.x & (u32(65535)));
-    var x_1 : u32 = (((x_0 | ((x_0 << (u32(8)))))) & (u32(16711935)));
-    var x_2 : u32 = (((x_1 | ((x_1 << (u32(4)))))) & (u32(252645135)));
-    var x_3 : u32 = (((x_2 | ((x_2 << (u32(2)))))) & (u32(858993459)));
-    var y_0 : u32 = (v_0.y & (u32(65535)));
-    var y_1 : u32 = (((y_0 | ((y_0 << (u32(8)))))) & (u32(16711935)));
-    var y_2 : u32 = (((y_1 | ((y_1 << (u32(4)))))) & (u32(252645135)));
-    var y_3 : u32 = (((y_2 | ((y_2 << (u32(2)))))) & (u32(858993459)));
-    return (((((x_3 | ((x_3 << (u32(1)))))) & (u32(1431655765)))) | ((((((y_3 | ((y_3 << (u32(1)))))) & (u32(1431655765)))) << (u32(1)))));
+    var x_0 : u32 = ((v_0.x) & (u32(65535)));
+    var x_1 : u32 = (((x_0 | (((x_0 << (u32(8))))))) & (u32(16711935)));
+    var x_2 : u32 = (((x_1 | (((x_1 << (u32(4))))))) & (u32(252645135)));
+    var x_3 : u32 = (((x_2 | (((x_2 << (u32(2))))))) & (u32(858993459)));
+    var y_0 : u32 = ((v_0.y) & (u32(65535)));
+    var y_1 : u32 = (((y_0 | (((y_0 << (u32(8))))))) & (u32(16711935)));
+    var y_2 : u32 = (((y_1 | (((y_1 << (u32(4))))))) & (u32(252645135)));
+    var y_3 : u32 = (((y_2 | (((y_2 << (u32(2))))))) & (u32(858993459)));
+    return (((((x_3 | (((x_3 << (u32(1))))))) & (u32(1431655765)))) | (((((((y_3 | (((y_3 << (u32(1))))))) & (u32(1431655765)))) << (u32(1))))));
 }
 
 fn blockCipherTEA_0( v0_0 : u32,  v1_0 : u32,  iterations_0 : u32) -> vec2<u32>
@@ -90,8 +90,8 @@ fn blockCipherTEA_0( v0_0 : u32,  v1_0 : u32,  iterations_0 : u32) -> vec2<u32>
             break;
         }
         var sum_1 : u32 = sum_0 + u32(2654435769);
-        var _S4 : u32 = _S3 + ((((((_S2 << (u32(4)))) + u32(2738958700)) ^ ((_S2 + sum_1))) ^ ((((_S2 >> (u32(5)))) + u32(3355524772)))));
-        var _S5 : u32 = _S2 + ((((((_S4 << (u32(4)))) + u32(2911926141)) ^ ((_S4 + sum_1))) ^ ((((_S4 >> (u32(5)))) + u32(2123724318)))));
+        var _S4 : u32 = _S3 + (((((((_S2 << (u32(4)))) + u32(2738958700)) ^ ((_S2 + sum_1)))) ^ ((((_S2 >> (u32(5)))) + u32(3355524772)))));
+        var _S5 : u32 = _S2 + (((((((_S4 << (u32(4)))) + u32(2911926141)) ^ ((_S4 + sum_1)))) ^ ((((_S4 >> (u32(5)))) + u32(2123724318)))));
         i_0 = i_0 + u32(1);
         sum_0 = sum_1;
         _S2 = _S5;
@@ -149,7 +149,7 @@ fn GetPrimaryRay_0( screenPos_0 : vec2<i32>,  rng_3 : ptr<function, TinyUniformS
 {
     var _S12 : vec2<f32> = vec2<f32>(0.5f);
     var thread_offset_0 : vec2<f32>;
-    if(((globalParams_0.settings_0 & (i32(2)))) != i32(0))
+    if((((globalParams_0.settings_0) & (i32(2)))) != i32(0))
     {
         var _S13 : vec2<f32> = sampleNext2D_0(&((*rng_3)));
         thread_offset_0 = _S13;
@@ -174,7 +174,7 @@ struct SpecularMicrofacetBRDF_0
 
 fn SpecularMicrofacetBRDF_hasLobe_0( this_1 : SpecularMicrofacetBRDF_0,  lobeType_0 : i32) -> bool
 {
-    return ((this_1.activeLobes_0 & (u32(lobeType_0)))) != u32(0);
+    return (((this_1.activeLobes_0) & (u32(lobeType_0)))) != u32(0);
 }
 
 fn evalFresnelSchlick_0( f0_0 : vec3<f32>,  f90_0 : vec3<f32>,  cosTheta_0 : f32) -> vec3<f32>
@@ -257,7 +257,7 @@ fn SpecularMicrofacetBRDF_sample_0( this_2 : SpecularMicrofacetBRDF_0,  wi_2 : v
     {
         return false;
     }
-    if(this_2.alpha_0 == 0.0f)
+    if((this_2.alpha_0) == 0.0f)
     {
         if(!SpecularMicrofacetBRDF_hasLobe_0(this_2, i32(4)))
         {
@@ -278,7 +278,7 @@ fn SpecularMicrofacetBRDF_sample_0( this_2 : SpecularMicrofacetBRDF_0,  wi_2 : v
     var wiDotH_0 : f32 = dot(wi_2, h_2);
     var _S20 : vec3<f32> = vec3<f32>((2.0f * wiDotH_0)) * h_2 - wi_2;
     (*wo_0) = _S20;
-    if(_S20.z < 9.99999997475242708e-07f)
+    if((_S20.z) < 9.99999997475242708e-07f)
     {
         return false;
     }
@@ -297,7 +297,7 @@ fn sample_disk_concentric_0( u_2 : vec2<f32>) -> vec2<f32>
     var _S23 : bool;
     if(_S22 == 0.0f)
     {
-        _S23 = _S21.y == 0.0f;
+        _S23 = (_S21.y) == 0.0f;
     }
     else
     {
@@ -310,7 +310,7 @@ fn sample_disk_concentric_0( u_2 : vec2<f32>) -> vec2<f32>
     var _S24 : f32 = _S21.y;
     var r_0 : f32;
     var phi_1 : f32;
-    if(abs(_S22) > abs(_S24))
+    if((abs(_S22)) > (abs(_S24)))
     {
         var _S25 : f32 = _S24 / _S22 * 0.78539818525314331f;
         r_0 = _S22;
@@ -357,7 +357,7 @@ fn DisneyDiffuseBRDF_sample_0( this_4 : DisneyDiffuseBRDF_0,  wi_4 : vec3<f32>, 
     var _S28 : vec3<f32> = sample_cosine_hemisphere_concentric_0(_S27, &((*pdf_3)));
     (*wo_2) = _S28;
     (*lobeType_2) = u32(1);
-    if(min(wi_4.z, (*wo_2).z) < 9.99999997475242708e-07f)
+    if((min(wi_4.z, (*wo_2).z)) < 9.99999997475242708e-07f)
     {
         (*weight_1) = vec3<f32>(0.0f, 0.0f, 0.0f);
         return false;
@@ -376,7 +376,7 @@ struct MaterialInstance_0
 
 fn MaterialInstance_is_emissive_0( this_5 : MaterialInstance_0) -> bool
 {
-    return any(this_5.emission_0 > vec3<f32>(0.0f));
+    return any((this_5.emission_0) > vec3<f32>(0.0f));
 }
 
 struct ShadingFrame_0
@@ -451,7 +451,7 @@ fn MaterialInstance_sample_0( this_8 : MaterialInstance_0,  sd_0 : ShadingData_0
     var woLocal_0 : vec3<f32> = _S30;
     var selection_0 : f32 = sampleNext1D_0(&((*sg_4)));
     var valid_0 : bool;
-    if(selection_0 > this_8.fresnel_0)
+    if(selection_0 > (this_8.fresnel_0))
     {
         var _S31 : BSDFContext_0 = BSDFContext_x24init_0();
         var _S32 : f32 = (*result_0).pdf_4;
@@ -483,11 +483,11 @@ fn SpecularMicrofacetBRDF_eval_0( this_9 : SpecularMicrofacetBRDF_0,  wi_5 : vec
 {
     var _S41 : f32 = wi_5.z;
     var _S42 : f32 = wo_4.z;
-    if(min(_S41, _S42) < 9.99999997475242708e-07f)
+    if((min(_S41, _S42)) < 9.99999997475242708e-07f)
     {
         return vec3<f32>(0.0f);
     }
-    if(this_9.alpha_0 == 0.0f)
+    if((this_9.alpha_0) == 0.0f)
     {
         return vec3<f32>(0.0f);
     }
@@ -502,7 +502,7 @@ fn SpecularMicrofacetBRDF_eval_0( this_9 : SpecularMicrofacetBRDF_0,  wi_5 : vec
 fn DisneyDiffuseBRDF_eval_0( this_10 : DisneyDiffuseBRDF_0,  wi_6 : vec3<f32>,  wo_5 : vec3<f32>,  sg_6 : ptr<function, TinyUniformSampleGenerator_0>,  bc_3 : BSDFContext_0) -> vec3<f32>
 {
     var _S43 : f32 = wo_5.z;
-    if(min(wi_6.z, _S43) < 9.99999997475242708e-07f)
+    if((min(wi_6.z, _S43)) < 9.99999997475242708e-07f)
     {
         return vec3<f32>(0.0f);
     }
@@ -541,7 +541,7 @@ fn create_rotation_matrix_0( dir_0 : vec3<f32>) -> mat3x3<f32>
 {
     const _S49 : vec3<f32> = vec3<f32>(1.0f, 0.0f, 0.0f);
     var T_1 : vec3<f32>;
-    if(abs(dir_0.x) > 0.99000000953674316f)
+    if((abs(dir_0.x)) > 0.99000000953674316f)
     {
         T_1 = vec3<f32>(0.0f, 1.0f, 0.0f);
     }
@@ -562,13 +562,13 @@ fn sample_light_0( sampler_1 : ptr<function, TinyUniformSampleGenerator_0>) -> v
 fn computeRayOrigin_0( pos_0 : vec3<f32>,  normal_0 : vec3<f32>) -> vec3<f32>
 {
     var iOff_0 : vec3<i32> = vec3<i32>(normal_0 * vec3<f32>(768.0f));
-    return select((bitcast<vec3<f32>>(((bitcast<vec3<i32>>((pos_0))) + select(iOff_0, - iOff_0, pos_0 < vec3<f32>(0.0f))))), pos_0 + normal_0 * vec3<f32>(0.0000457763671875f), abs(pos_0) < vec3<f32>(0.0625f));
+    return select((bitcast<vec3<f32>>(((bitcast<vec3<i32>>((pos_0))) + select(iOff_0, - iOff_0, pos_0 < vec3<f32>(0.0f))))), pos_0 + normal_0 * vec3<f32>(0.0000457763671875f), (abs(pos_0)) < vec3<f32>(0.0625f));
 }
 
 fn ShadingData_computeRayOrigin_0( this_12 : ShadingData_0,  viewside_0 : bool) -> vec3<f32>
 {
     var _S52 : vec3<f32>;
-    if(this_12.frontFacing_0 == viewside_0)
+    if((this_12.frontFacing_0) == viewside_0)
     {
         _S52 = this_12.faceN_0;
     }
@@ -590,18 +590,13 @@ fn unpackStorage_1( _S53 : backend_tree64_Node_std430_0) -> backend_tree64_Node_
     return _S54;
 }
 
-fn backend_tree64_VoxelMap_passthrough_0( value_0 : vec3<bool>) -> vec3<bool>
-{
-    return value_0;
-}
-
 fn backend_tree64_VoxelMap_GetMirroredPos_0( pos_1 : vec3<f32>,  dir_1 : vec3<f32>,  rangeCheck_0 : bool) -> vec3<f32>
 {
     var _S55 : vec3<f32> = (bitcast<vec3<f32>>((((bitcast<vec3<u32>>((pos_1))) ^ (vec3<u32>(u32(8388607)))))));
     var _S56 : bool;
     if(rangeCheck_0)
     {
-        _S56 = any((backend_tree64_VoxelMap_passthrough_0(pos_1 < vec3<f32>(1.0f)) | (backend_tree64_VoxelMap_passthrough_0(pos_1 >= vec3<f32>(2.0f)))));
+        _S56 = any(((pos_1 < vec3<f32>(1.0f)) | ((pos_1 >= vec3<f32>(2.0f)))));
     }
     else
     {
@@ -621,27 +616,27 @@ fn backend_tree64_VoxelMap_GetMirroredPos_0( pos_1 : vec3<f32>,  dir_1 : vec3<f3
 
 fn backend_tree64_Node_IsLeaf_get_0( this_13 : backend_tree64_Node_0) -> bool
 {
-    return ((this_13.PackedData_0[i32(0)] & (u32(1)))) != u32(0);
+    return (((this_13.PackedData_0[i32(0)]) & (u32(1)))) != u32(0);
 }
 
 fn backend_tree64_VoxelMap_GetNodeCellIndex_0( pos_2 : vec3<f32>,  scale_exp_0 : i32) -> i32
 {
-    var cellPos_0 : vec3<u32> = (((bitcast<vec3<u32>>((pos_2))) >> (vec3<u32>(u32(scale_exp_0)))) & (vec3<u32>(u32(3))));
+    var cellPos_0 : vec3<u32> = ((((bitcast<vec3<u32>>((pos_2))) >> (vec3<u32>(u32(scale_exp_0))))) & (vec3<u32>(u32(3))));
     return i32(cellPos_0.x + cellPos_0.z * u32(4) + cellPos_0.y * u32(16));
 }
 
-fn backend_tree64_Node_get_child_shifted_0( this_14 : backend_tree64_Node_0,  index_0 : u32) -> u32
+fn backend_tree64_Node_pop_mask_shifted_0( this_14 : backend_tree64_Node_0,  shift_0 : u32) -> u32
 {
-    if(index_0 >= u32(32))
+    if(shift_0 >= u32(32))
     {
-        return (this_14.PackedData_0[i32(2)] >> ((index_0 - u32(32))));
+        return ((this_14.PackedData_0[i32(2)]) >> ((shift_0 - u32(32))));
     }
-    return ((this_14.PackedData_0[i32(1)] >> (index_0)) | ((this_14.PackedData_0[i32(2)] << ((u32(32) - index_0)))));
+    return ((this_14.PackedData_0[i32(1)]) >> (shift_0));
 }
 
 fn backend_tree64_Node_ChildPtr_get_0( this_15 : backend_tree64_Node_0) -> u32
 {
-    return (this_15.PackedData_0[i32(0)] >> (u32(1)));
+    return ((this_15.PackedData_0[i32(0)]) >> (u32(1)));
 }
 
 fn backend_tree64_Node_PopMask_get_0( this_16 : backend_tree64_Node_0) -> vec2<u32>
@@ -664,7 +659,7 @@ fn popcnt_var64_0( mask_0 : vec2<u32>,  width_0 : u32) -> u32
         himask_0 = mask_0[i32(1)];
         count_0 = u32(0);
     }
-    return count_0 + countOneBits((himask_0 & (((u32(1) << (((width_0 & (u32(31))))))) - u32(1))));
+    return count_0 + countOneBits((himask_0 & ((((u32(1) << (((width_0 & (u32(31))))))) - u32(1)))));
 }
 
 fn backend_tree64_VoxelMap_FloorScale_0( pos_3 : vec3<f32>,  scale_exp_1 : i32) -> vec3<f32>
@@ -706,7 +701,7 @@ fn backend_tree64_VoxelMap_Traversal_OctMirror_0( _S60 : backend_tree64_VoxelMap
     var _S66 : vec3<f32> = abs(_S62);
     var _S67 : vec3<f32> = vec3<f32>(1.0f) / - _S66;
     var mirrorMask_0 : u32;
-    if(_S62.x > 0.0f)
+    if((_S62.x) > 0.0f)
     {
         mirrorMask_0 = u32(3);
     }
@@ -714,11 +709,11 @@ fn backend_tree64_VoxelMap_Traversal_OctMirror_0( _S60 : backend_tree64_VoxelMap
     {
         mirrorMask_0 = u32(0);
     }
-    if(_S62.y > 0.0f)
+    if((_S62.y) > 0.0f)
     {
         mirrorMask_0 = (mirrorMask_0 | (u32(48)));
     }
-    if(_S62.z > 0.0f)
+    if((_S62.z) > 0.0f)
     {
         mirrorMask_0 = (mirrorMask_0 | (u32(12)));
     }
@@ -771,7 +766,7 @@ fn backend_tree64_VoxelMap_Traversal_OctMirror_0( _S60 : backend_tree64_VoxelMap
         for(;;)
         {
             var _S74 : u32 = u32(childIdx_1);
-            var _S75 : bool = ((backend_tree64_Node_get_child_shifted_0(node_1, _S74) & (u32(1)))) != u32(0);
+            var _S75 : bool = (((backend_tree64_Node_pop_mask_shifted_0(node_1, _S74)) & (u32(1)))) != u32(0);
             _S64 = _S75;
             var _S76 : bool;
             if(_S75)
@@ -815,7 +810,7 @@ fn backend_tree64_VoxelMap_Traversal_OctMirror_0( _S60 : backend_tree64_VoxelMap
             break;
         }
         var advScaleExp_0 : i32;
-        if(((backend_tree64_Node_get_child_shifted_0(node_1, u32((childIdx_1 & (i32(42))))) & (u32(3342387)))) == u32(0))
+        if((((backend_tree64_Node_pop_mask_shifted_0(node_1, u32((childIdx_1 & (i32(42)))))) & (u32(3342387)))) == u32(0))
         {
             advScaleExp_0 = scaleExp_1 + i32(1);
         }
@@ -828,9 +823,9 @@ fn backend_tree64_VoxelMap_Traversal_OctMirror_0( _S60 : backend_tree64_VoxelMap
         var _S79 : vec3<f32> = vec3<f32>(min(min(sideDist_1.x, sideDist_1.y), sideDist_1.z));
         var pos_5 : vec3<f32> = min(_S69 - _S66 * _S79, (bitcast<vec3<f32>>((vec3<i32>(bitcast<i32>(edgePos_0[u32(0)]), bitcast<i32>(edgePos_0[u32(1)]), bitcast<i32>(edgePos_0[u32(2)])) + select(vec3<i32>((((i32(1) << (u32(advScaleExp_0)))) - i32(1))), _S71, sideDist_1 == _S79)))));
         var diffPos_0 : vec3<u32> = ((bitcast<vec3<u32>>((pos_5))) ^ ((bitcast<vec3<u32>>((edgePos_0)))));
-        var diffExp_0 : i32 = i32(firstLeadingBit(((diffPos_0.x | (diffPos_0.y)) | (diffPos_0.z))));
+        var diffExp_0 : i32 = i32(firstLeadingBit(((((diffPos_0.x) | ((diffPos_0.y)))) | ((diffPos_0.z)))));
         var diffExp_1 : i32;
-        if(diffExp_0 % i32(2) == i32(0))
+        if((diffExp_0 % i32(2)) == i32(0))
         {
             diffExp_1 = diffExp_0 - i32(1);
         }
@@ -880,19 +875,19 @@ fn backend_tree64_VoxelMap_Traversal_OctMirror_0( _S60 : backend_tree64_VoxelMap
         var pos_6 : vec3<f32> = backend_tree64_VoxelMap_GetMirroredPos_0(pos_4, _S62, false);
         hit_0.MaterialId_0 = backend_tree64_VoxelMap_load_leaf_data_0(_S60, backend_tree64_Node_ChildPtr_get_0(node_0) + popcnt_var64_0(backend_tree64_Node_PopMask_get_0(node_0), u32(childIdx_0)));
         hit_0.Pos_0 = pos_6;
-        hit_0.Normal_0 = select(vec3<f32>(0.0f), vec3<f32>(- sign(_S62)), vec3<f32>(min(min(sideDist_0.x, sideDist_0.y), sideDist_0.z)) >= sideDist_0);
+        hit_0.Normal_0 = select(vec3<f32>(0.0f), vec3<f32>(- sign(_S62)), vec3<f32>((min(min(sideDist_0.x, sideDist_0.y), sideDist_0.z))) >= sideDist_0);
     }
     return hit_0;
 }
 
 fn backend_tree64_VoxelMap_RayCast_0( _S81 : backend_tree64_VoxelMap_0,  _S82 : vec3<i32>,  _S83 : vec3<f32>,  _S84 : vec3<f32>,  _S85 : bool) -> HitInfo_0
 {
-    var _S86 : f32 = f32((i32(1) << (_S81.TreeScale_0)));
+    var _S86 : f32 = f32((i32(1) << ((_S81.TreeScale_0))));
     var _S87 : vec3<f32> = vec3<f32>((1.0f / _S86));
     var _S88 : vec3<f32> = vec3<f32>(_S82) * _S87;
     var _S89 : vec3<f32> = vec3<f32>(1.0f);
     var hit_1 : HitInfo_0 = backend_tree64_VoxelMap_Traversal_OctMirror_0(_S81, _S88 + _S83 * _S87 + _S89, _S84, _S85);
-    if(hit_1.MaterialId_0 != u32(0))
+    if((hit_1.MaterialId_0) != u32(0))
     {
         hit_1.Pos_0 = (hit_1.Pos_0 - _S89 - _S88) * vec3<f32>(_S86);
     }
@@ -909,12 +904,12 @@ fn ray_cast_0( ray_0 : Ray3f_0,  coarse_0 : bool) -> HitInfo_0
 
 fn HitInfo_Miss_get_0( this_17 : HitInfo_0) -> bool
 {
-    return this_17.MaterialId_0 == u32(0);
+    return (this_17.MaterialId_0) == u32(0);
 }
 
 fn shoot_shadow_ray_0( ray_1 : Ray3f_0) -> bool
 {
-    if(((globalParams_0.settings_0 & (i32(1)))) != i32(0))
+    if((((globalParams_0.settings_0) & (i32(1)))) != i32(0))
     {
         return !HitInfo_Miss_get_0(ray_cast_0(ray_1, true));
     }
@@ -1079,7 +1074,7 @@ fn compute_shading_0( hit_4 : HitInfo_0,  ray_dir_2 : vec3<f32>,  sampler_3 : pt
     var _S109 : vec3<f32> = vec3<f32>(0.00999999977648258f);
     for(;;)
     {
-        if(i_2 < globalParams_0.max_bounces_0)
+        if(i_2 < (globalParams_0.max_bounces_0))
         {
         }
         else
@@ -1147,20 +1142,20 @@ fn viridis_0( t_0 : f32) -> vec3<f32>
 fn main(@builtin(global_invocation_id) dispatch_thread_id_0 : vec3<u32>)
 {
     var _S122 : vec2<u32> = dispatch_thread_id_0.xy;
-    if(any(_S122 >= globalParams_0.resolution_0))
+    if(any(_S122 >= (globalParams_0.resolution_0)))
     {
         return;
     }
     var _S123 : vec2<f32> = (vec2<f32>(_S122) + vec2<f32>(0.5f)) / vec2<f32>(globalParams_0.resolution_0);
     var rng_4 : TinyUniformSampleGenerator_0 = TinyUniformSampleGenerator_x24init_0(_S122, globalParams_0.frame_index_0);
-    if(((globalParams_0.settings_0 & (i32(2)))) != i32(0))
+    if((((globalParams_0.settings_0) & (i32(2)))) != i32(0))
     {
         var _S124 : vec2<f32> = sampleNext2D_0(&(rng_4));
     }
     var _S125 : vec3<f32> = GetPrimaryRay_0(vec2<i32>(_S122), &(rng_4));
     var sample_1 : vec3<f32> = trace_0(_S125, &(rng_4));
     var sample_2 : vec3<f32>;
-    if(((globalParams_0.settings_0 & (i32(2)))) != i32(0) && globalParams_0.accumulated_frame_index_0 > u32(0))
+    if(((((globalParams_0.settings_0) & (i32(2)))) != i32(0)) && ((globalParams_0.accumulated_frame_index_0) > u32(0)))
     {
         sample_2 = sample_1 + (textureSampleLevel((entryPointParams_previous_0), (entryPointParams_sampler_0), (_S123), (0.0f)).xyz);
     }
@@ -1169,7 +1164,7 @@ fn main(@builtin(global_invocation_id) dispatch_thread_id_0 : vec3<u32>)
         sample_2 = sample_1;
     }
     textureStore((entryPointParams_current_0), (_S122), vec4<f32>((sample_2), 1));
-    if(((globalParams_0.settings_0 & (i32(4)))) != i32(0))
+    if((((globalParams_0.settings_0) & (i32(4)))) != i32(0))
     {
         textureStore((entryPointParams_current_0), (_S122), vec4<f32>((viridis_0(0.0f)), 1));
     }

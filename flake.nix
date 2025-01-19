@@ -72,6 +72,7 @@
             installPhaseCommand = "mv target/wheels $out";
             doCheck = false;
             nativeBuildInputs = [pkgs.python3 pkgs.maturin pkgs.rustc];
+            doNotPostBuildInstallCargoBinaries = true;
           };
           python-lib = with pkgs;
             python3Packages.buildPythonPackage {
@@ -126,6 +127,11 @@
             hash = "sha256-1AN2E9t/lZhbXdVznhTcniy+7ZzlaEp/gwLEAucs6EA=";
             cargoHash = "sha256-DbwAh8RJtW38LJp+J9Ht8fAROK9OabaJ85D9C/Vkve4=";
           };
+          wasm-bindgen-100 = pkgs.wasm-bindgen-cli.override {
+            version = "0.2.100";
+            #hash = "sha256-1AN2E9t/lZhbXdVznhTcniy+7ZzlaEp/gwLEAucs6EA=";
+            #cargoHash = "sha256-DbwAh8RJtW38LJp+J9Ht8fAROK9OabaJ85D9C/Vkve4=";
+          };
 
           voxviewer-wasm = let
             craneLib = (crane.mkLib pkgs).overrideToolchain (with fenix.packages.${system};
@@ -149,7 +155,7 @@
 
           voxviewer-dir = with pkgs;
             runCommand "voxviewer-dir" {} ''
-              ${wasm-bindgen-99}/bin/wasm-bindgen ${voxviewer-wasm}/bin/voxviewer.wasm --target web --out-dir $out
+              ${wasm-bindgen-100}/bin/wasm-bindgen ${voxviewer-wasm}/bin/voxviewer.wasm --target web --out-dir $out
               cp -r ${./voxviewer/assets}/* $out
             '';
 
@@ -209,21 +215,24 @@
               openusd
             ];
           };
-        devShells.bevy = with pkgs;
+        devShells.wgpu = with pkgs;
           mkShell rec {
             nativeBuildInputs = [
               (pkgs-slang.shader-slang.overrideAttrs (attrs: {
                 src = fetchFromGitHub {
                   owner = "shader-slang";
                   repo = "slang";
-                  rev = "a985e240a6d9edb1545e357d20805bf81fba975a";
-                  hash = "sha256-H/ePYu6o926M22zussW1f15iYRJCq29TeNJzBD0eAao=";
+                  rev = "f3d7aa6ce964e3f8e2550886dae24ee6cba7ae9c";
+                  hash = "sha256-0M1xB+PaijdQ0TzqKBWQhC+2688OyUIUR8cO8425z9k=";
                   fetchSubmodules = true;
                 };
+                cmakeFlags = attrs.cmakeFlags ++ ["-DSLANG_RHI_ENABLE_CUDA=0"];
               }))
               pkg-config
               renderdoc
               spirv-tools
+              linuxPackages_latest.perf
+              packages.gen-flamegraph
             ];
             buildInputs = [
               udev

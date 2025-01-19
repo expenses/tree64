@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-anyhow = "1.0.93"
+anyhow = "1.0.95"
 rand = { version = "0.8.5", features = ["small_rng"] }
 tev_client = "0.5.2"
 numpy = "0.23.0"
@@ -15,10 +15,10 @@ pyo3 = { version = "0.23", features = ["extension-module"] }
 memchr = "2.7.4"
 rayon = "1.10.0"
 block-mesh = "0.2.0"
-bytemuck = { version = "1.20.0", features = ["derive"] }
+bytemuck = { version = "1.21.0", features = ["derive"] }
 ndshape = "0.3.0"
 arrayvec = "0.7.6"
-ordered-float = "4.5.0"
+ordered-float = "4.6.0"
 num-traits = "0.2.19"
 fnv = "1.0.7"
 hashbrown = "0.15.2"

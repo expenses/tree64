@@ -359,9 +359,7 @@ def join_split_vox(filename):
         shape = np.array((model.shape[2], model.shape[1], model.shape[0]))
 
         min_v = np.minimum(min_v, pos - shape // 2)
-        max_v = np.maximum(
-            max_v, pos + shape // 2
-        )
+        max_v = np.maximum(max_v, pos + shape // 2)
 
     size = max_v - min_v + 1
     arr = np.zeros((size[2], size[1], size[0]), dtype=np.uint8)

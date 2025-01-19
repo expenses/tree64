@@ -1,13 +1,43 @@
 use dolly::prelude::*;
 use egui_winit::egui;
+use glam::swizzles::Vec3Swizzles;
 use wgpu::util::DeviceExt;
 use winit::{
-    event::{DeviceEvent, ElementState, MouseButton, MouseScrollDelta, WindowEvent},
+    event::{DeviceEvent, ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
+    keyboard::PhysicalKey,
     window::{Window, WindowId},
 };
 
 const USE_SPIRV_SHADER: bool = false;
+
+fn copy_aligned(
+    queue: &wgpu::Queue,
+    buffer: &wgpu::Buffer,
+    data: &[u8],
+    range: std::ops::Range<usize>,
+) {
+    let aligned_range = std::ops::Range {
+        start: range
+            .start
+            .saturating_sub(wgpu::COPY_BUFFER_ALIGNMENT as _)
+            .next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT as _),
+
+        end: range.end.next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT as _),
+    };
+    if aligned_range.end <= data.len() {
+        queue.write_buffer(
+            buffer,
+            aligned_range.start as _,
+            &data[aligned_range.clone()],
+        );
+    } else {
+        let mut aligned_data = vec![0; aligned_range.len()];
+        aligned_data[..data.len() - aligned_range.start]
+            .copy_from_slice(&data[aligned_range.start..data.len()]);
+        queue.write_buffer(buffer, aligned_range.start as _, &aligned_data);
+    }
+}
 
 struct App<'a> {
     egui_state: egui_winit::State,
@@ -37,6 +67,7 @@ impl<'a> App<'a> {
             materials,
             queue,
             pipelines,
+            tree64,
             ..
         } = self;
 
@@ -44,6 +75,81 @@ impl<'a> App<'a> {
 
         let output = egui_state.egui_ctx().run(raw_input, |ctx| {
             egui::Window::new("Controls").show(ctx, |ui| {
+                egui::CollapsingHeader::new("Edits")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        ui.add_enabled_ui(tree64.edits.can_undo(), |ui| {
+                            if ui.button("Reset").clicked() {
+                                while tree64.edits.can_undo() {
+                                    tree64.edits.undo();
+                                }
+                                reset_accumulation = true;
+                            }
+                        });
+                        ui.add_enabled_ui(tree64.edits.can_undo(), |ui| {
+                            if ui.button("Undo").clicked() {
+                                tree64.edits.undo();
+                                reset_accumulation = true;
+                            }
+                        });
+                        ui.add_enabled_ui(tree64.edits.can_redo(), |ui| {
+                            if ui.button("Redo").clicked() {
+                                tree64.edits.redo();
+                                reset_accumulation = true;
+                            }
+                        });
+                        if ui.button("Expand").clicked() {
+                            reset_accumulation = true;
+                            let range_to_upload = tree64.expand();
+                            queue.write_buffer(
+                                &pipelines.tree_nodes,
+                                range_to_upload.start as u64
+                                    * std::mem::size_of::<svo_dag::Tree64Node>() as u64,
+                                bytemuck::cast_slice(&tree64.nodes.inner[range_to_upload]),
+                            );
+                        }
+
+                        ui.label("Edit distance");
+                        ui.add(egui::Slider::new(&mut settings.edit_distance, 0.0..=1000.0));
+                        ui.label("Edit Size");
+                        ui.add(egui::Slider::new(&mut settings.edit_size, 0.0..=1000.0));
+
+                        let mut edit = |value| {
+                            let position: glam::Vec3 =
+                                glam::Vec3::from(self.camera.final_transform.position)
+                                    + self.camera.final_transform.forward::<glam::Vec3>()
+                                        * settings.edit_distance;
+
+                            let ranges = tree64.modify_nodes_in_box(
+                                (position - settings.edit_size / 2.0)
+                                    .max(glam::Vec3::ZERO)
+                                    .xzy()
+                                    .as_uvec3(),
+                                (position + settings.edit_size / 2.0).xzy().as_uvec3(),
+                                value,
+                            );
+                            self.accumulated_frame_index = 0;
+                            queue.write_buffer(
+                                &pipelines.tree_nodes,
+                                ranges.nodes.start as u64
+                                    * std::mem::size_of::<svo_dag::Tree64Node>() as u64,
+                                bytemuck::cast_slice(&tree64.nodes.inner[ranges.nodes]),
+                            );
+                            copy_aligned(
+                                &queue,
+                                &pipelines.leaf_data,
+                                bytemuck::cast_slice(&tree64.data.inner),
+                                ranges.data,
+                            );
+                        };
+
+                        if ui.button("Delete").clicked() {
+                            edit(0);
+                        }
+                        if ui.button("Create").clicked() {
+                            edit(1);
+                        }
+                    });
                 egui::CollapsingHeader::new("Rendering")
                     .default_open(true)
                     .show(ui, |ui| {
@@ -124,15 +230,13 @@ impl<'a> App<'a> {
                             reset_accumulation = true;
                         }
                     });
+                #[cfg(not(target_arch = "wasm32"))]
                 egui::CollapsingHeader::new("Debugging")
                     .default_open(true)
                     .show(ui, |ui| {
-                        #[cfg(not(target_arch = "wasm32"))]
-                        {
-                            reset_accumulation |= ui
-                                .checkbox(&mut settings.show_heatmap, "Show Heatmap")
-                                .changed();
-                        }
+                        reset_accumulation |= ui
+                            .checkbox(&mut settings.show_heatmap, "Show Heatmap")
+                            .changed();
                     });
                 egui::CollapsingHeader::new("Materials").show(ui, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -231,6 +335,7 @@ impl<'a> App<'a> {
         transform: dolly::transform::Transform<dolly::handedness::RightHanded>,
     ) {
         let settings = &self.settings;
+        let (root_node_index, num_levels) = self.tree64.root_node_index_and_num_levels();
 
         self.queue.write_buffer(
             &self.pipelines.uniform_buffer,
@@ -266,8 +371,8 @@ impl<'a> App<'a> {
                 background_colour: (glam::Vec3::from(settings.background_colour)
                     * settings.background_strength)
                     .into(),
-                tree_scale: 10,
-                root_node_index: 0,
+                tree_scale: num_levels as u32 * 2,
+                root_node_index,
                 _padding: Default::default(),
             }),
         );
@@ -736,14 +841,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     );
 
     let leaf_data: &[u8] = bytemuck::cast_slice(&tree64.data.inner);
-    let mut aligned_buffer = vec![
-        0;
-        leaf_data
-            .len()
-            .next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT as _)
-    ];
-    aligned_buffer[..leaf_data.len()].copy_from_slice(&leaf_data);
-    queue.write_buffer(&pipelines.leaf_data, 0, &aligned_buffer);
+    copy_aligned(&queue, &pipelines.leaf_data, &leaf_data, 0..leaf_data.len());
 
     let mut app = App {
         egui_renderer: egui_wgpu::Renderer::new(&device, swapchain_format, None, 1, false),
@@ -826,6 +924,8 @@ struct Settings {
     background_strength: f32,
     vertical_fov: f32,
     show_heatmap: bool,
+    edit_distance: f32,
+    edit_size: f32,
 }
 
 impl Default for Settings {
@@ -843,6 +943,8 @@ impl Default for Settings {
             background_strength: 1.0,
             vertical_fov: 45.0_f32,
             show_heatmap: false,
+            edit_distance: 10.0,
+            edit_size: 10.0,
         }
     }
 }
@@ -1087,13 +1189,13 @@ impl Pipelines {
             }),
             tree_nodes: device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,
-                size: 5_000_000,
+                size: 20_000_000,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
             leaf_data: device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,
-                size: 5_000_000,
+                size: 22_000_000,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
