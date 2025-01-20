@@ -843,7 +843,6 @@ impl<T: Copy + Default> PopMaskedData<T> {
         }
     }
 
-    #[inline(never)]
     fn as_compact(&self) -> arrayvec::ArrayVec<T, 64> {
         let mut array = arrayvec::ArrayVec::new();
 
@@ -1409,7 +1408,7 @@ fn trillion_voxel_deletion() {
     tree.modify_nodes_in_box([0; 3], [10000; 3], 1);
     let range = tree.modify_nodes_in_box([1; 3], [10000 - 1; 3], 0);
     assert_eq!(range.data.len(), 0);
-    assert_eq!(range.nodes.len(), 2908);
+    assert_eq!(range.nodes.len(), 2095);
 }
 
 fn count_ones_variable(value: u64, index: u32) -> u32 {

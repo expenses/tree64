@@ -61,6 +61,13 @@ struct App<'a> {
     selected_material: usize,
     hide_ui: bool,
     padded_uniform_buffer: encase::UniformBuffer<Vec<u8>>,
+    promise: Option<poll_promise::Promise<PromizeResult>>,
+}
+
+enum PromizeResult {
+    Cancelled,
+    Load(svo_dag::Tree64),
+    Saved,
 }
 
 impl App<'_> {
@@ -81,6 +88,33 @@ impl App<'_> {
             egui::Window::new("Controls")
                 .default_width(100.0)
                 .show(ctx, |ui| {
+                    egui::CollapsingHeader::new("Scene").show(ui, |ui| {
+                        if ui.button("Load").clicked {
+                            self.promise = Some(poll_promise::Promise::spawn_local(async {
+                                let browser = rfd::AsyncFileDialog::new()
+                                    .add_filter("64-tree", &["tree64"])
+                                    .add_filter("MagicaVoxel .vox", &["vox"]);
+
+                                let file = match browser.pick_file().await {
+                                    Some(file) => file,
+                                    None => return PromizeResult::Cancelled,
+                                };
+
+                                match file.file_name().rsplit_once('.') {
+                                    Some((_, "tree64")) => {
+                                        let bytes = file.read().await;
+                                        PromizeResult::Load(
+                                            svo_dag::Tree64::deserialize(std::io::Cursor::new(
+                                                bytes,
+                                            ))
+                                            .unwrap(),
+                                        )
+                                    }
+                                    _ => return PromizeResult::Cancelled,
+                                }
+                            }));
+                        }
+                    });
                     egui::CollapsingHeader::new("Edits")
                         .default_open(true)
                         .show(ui, |ui| {
@@ -443,6 +477,18 @@ impl winit::application::ApplicationHandler for App<'_> {
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {}
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        #[cfg(not(target_arch = "wasm32"))]
+        poll_promise::tick_local();
+        if let Some(promise) = self.promise.take() {
+            match promise.try_take() {
+                Err(promise) => self.promise = Some(promise),
+                Ok(value) => {
+                    if let PromizeResult::Load(value) = value {
+                        self.tree64 = value;
+                    }
+                }
+            }
+        }
         self.window.request_redraw();
     }
 
@@ -934,6 +980,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         selected_material: 0,
         hide_ui: false,
         padded_uniform_buffer: encase::UniformBuffer::new(vec![]),
+        promise: None,
     };
 
     event_loop.run_app(&mut app).unwrap()

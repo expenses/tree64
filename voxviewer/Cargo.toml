@@ -24,3 +24,11 @@ ddsfile = "0.5.2"
 rayon = "1.10.0"
 svo_dag = { path = "../svo_dag" }
 encase = { version = "0.9.0", features = ["glam"] }
+poll-promise = { version = "0.3.0" }
+rfd = "0.15.2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+poll-promise = { version = "0.3.0", features = ["smol"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+poll-promise = { version = "0.3.0", features = ["web"] }

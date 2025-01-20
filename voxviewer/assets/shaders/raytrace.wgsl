@@ -183,13 +183,13 @@ fn unpackStorage_1( _S12 : Camera_std140_0) -> Camera_0
     return _S13;
 }
 
-struct Ray3f_0
+struct Ray_0
 {
-     mOrigin_0 : vec3<f32>,
-     mDir_0 : vec3<f32>,
+     pos_1 : vec3<f32>,
+     dir_0 : vec3<f32>,
 };
 
-fn GetPrimaryRay_0( screenPos_0 : vec2<i32>,  rng_3 : ptr<function, TinyUniformSampleGenerator_0>) -> Ray3f_0
+fn GetPrimaryRay_0( screenPos_0 : vec2<i32>,  rng_3 : ptr<function, TinyUniformSampleGenerator_0>) -> Ray_0
 {
     var _S14 : vec2<f32> = vec2<f32>(0.5f);
     var thread_offset_0 : vec2<f32>;
@@ -207,9 +207,9 @@ fn GetPrimaryRay_0( screenPos_0 : vec2<i32>,  rng_3 : ptr<function, TinyUniformS
     uv_0[i32(1)] = - _S16.y;
     var far_0 : vec4<f32> = (((vec4<f32>(uv_0, 1.0f, 1.0f)) * (unpackStorage_1(globalParams_0.camera_0).p_inv_0)));
     var rayDirection_0 : vec3<f32> = normalize(far_0.xyz / vec3<f32>(far_0.w));
-    var ray_0 : Ray3f_0;
-    ray_0.mOrigin_0 = unpackStorage_1(globalParams_0.camera_0).pos_0 % vec3<f32>(1.0f);
-    ray_0.mDir_0 = rayDirection_0;
+    var ray_0 : Ray_0;
+    ray_0.pos_1 = unpackStorage_1(globalParams_0.camera_0).pos_0 % vec3<f32>(1.0f);
+    ray_0.dir_0 = rayDirection_0;
     return ray_0;
 }
 
@@ -598,11 +598,11 @@ fn sample_cone_0( u_4 : vec2<f32>,  cosTheta_5 : f32) -> vec3<f32>
     return vec3<f32>(r_1 * cos(phi_2), r_1 * sin(phi_2), z_2);
 }
 
-fn create_rotation_matrix_0( dir_0 : vec3<f32>) -> mat3x3<f32>
+fn create_rotation_matrix_0( dir_1 : vec3<f32>) -> mat3x3<f32>
 {
     const _S53 : vec3<f32> = vec3<f32>(1.0f, 0.0f, 0.0f);
     var T_1 : vec3<f32>;
-    if((abs(dir_0.x)) > 0.99000000953674316f)
+    if((abs(dir_1.x)) > 0.99000000953674316f)
     {
         T_1 = vec3<f32>(0.0f, 1.0f, 0.0f);
     }
@@ -610,8 +610,8 @@ fn create_rotation_matrix_0( dir_0 : vec3<f32>) -> mat3x3<f32>
     {
         T_1 = _S53;
     }
-    var _S54 : vec3<f32> = normalize(cross(T_1, dir_0));
-    return transpose(mat3x3<f32>(_S54, cross(dir_0, _S54), dir_0));
+    var _S54 : vec3<f32> = normalize(cross(T_1, dir_1));
+    return transpose(mat3x3<f32>(_S54, cross(dir_1, _S54), dir_1));
 }
 
 fn sample_light_0( sampler_1 : ptr<function, TinyUniformSampleGenerator_0>) -> vec3<f32>
@@ -620,10 +620,10 @@ fn sample_light_0( sampler_1 : ptr<function, TinyUniformSampleGenerator_0>) -> v
     return (((sample_cone_0(_S55, unpackStorage_2(globalParams_0.sun_0).cosine_apparent_size_0)) * (create_rotation_matrix_0(unpackStorage_2(globalParams_0.sun_0).direction_0))));
 }
 
-fn computeRayOrigin_0( pos_1 : vec3<f32>,  normal_0 : vec3<f32>) -> vec3<f32>
+fn computeRayOrigin_0( pos_2 : vec3<f32>,  normal_0 : vec3<f32>) -> vec3<f32>
 {
     var iOff_0 : vec3<i32> = vec3<i32>(normal_0 * vec3<f32>(768.0f));
-    return select((bitcast<vec3<f32>>(((bitcast<vec3<i32>>((pos_1))) + select(iOff_0, - iOff_0, pos_1 < vec3<f32>(0.0f))))), pos_1 + normal_0 * vec3<f32>(0.0000457763671875f), (abs(pos_1)) < vec3<f32>(0.0625f));
+    return select((bitcast<vec3<f32>>(((bitcast<vec3<i32>>((pos_2))) + select(iOff_0, - iOff_0, pos_2 < vec3<f32>(0.0f))))), pos_2 + normal_0 * vec3<f32>(0.0000457763671875f), (abs(pos_2)) < vec3<f32>(0.0625f));
 }
 
 fn ShadingData_computeRayOrigin_0( this_12 : ShadingData_0,  viewside_0 : bool) -> vec3<f32>
@@ -664,13 +664,13 @@ fn unpackStorage_4( _S59 : SLANG_anonymous_1_std140_0) -> SLANG_anonymous_1_0
     return _S60;
 }
 
-fn backend_tree64_VoxelMap_GetMirroredPos_0( pos_2 : vec3<f32>,  dir_1 : vec3<f32>,  rangeCheck_0 : bool) -> vec3<f32>
+fn backend_tree64_VoxelMap_GetMirroredPos_0( pos_3 : vec3<f32>,  dir_2 : vec3<f32>,  rangeCheck_0 : bool) -> vec3<f32>
 {
-    var _S61 : vec3<f32> = (bitcast<vec3<f32>>((((bitcast<vec3<u32>>((pos_2))) ^ (vec3<u32>(u32(8388607)))))));
+    var _S61 : vec3<f32> = (bitcast<vec3<f32>>((((bitcast<vec3<u32>>((pos_3))) ^ (vec3<u32>(u32(8388607)))))));
     var _S62 : bool;
     if(rangeCheck_0)
     {
-        _S62 = any(((pos_2 < vec3<f32>(1.0f)) | ((pos_2 >= vec3<f32>(2.0f)))));
+        _S62 = any(((pos_3 < vec3<f32>(1.0f)) | ((pos_3 >= vec3<f32>(2.0f)))));
     }
     else
     {
@@ -679,13 +679,13 @@ fn backend_tree64_VoxelMap_GetMirroredPos_0( pos_2 : vec3<f32>,  dir_1 : vec3<f3
     var mirrored_0 : vec3<f32>;
     if(_S62)
     {
-        mirrored_0 = vec3<f32>(3.0f) - pos_2;
+        mirrored_0 = vec3<f32>(3.0f) - pos_3;
     }
     else
     {
         mirrored_0 = _S61;
     }
-    return select(pos_2, mirrored_0, dir_1 > vec3<f32>(0.0f));
+    return select(pos_3, mirrored_0, dir_2 > vec3<f32>(0.0f));
 }
 
 fn backend_tree64_Node_IsLeaf_get_0( this_13 : backend_tree64_Node_0) -> bool
@@ -693,9 +693,9 @@ fn backend_tree64_Node_IsLeaf_get_0( this_13 : backend_tree64_Node_0) -> bool
     return (((this_13.PackedData_0[i32(0)]) & (u32(1)))) != u32(0);
 }
 
-fn backend_tree64_VoxelMap_GetNodeCellIndex_0( pos_3 : vec3<f32>,  scale_exp_0 : i32) -> i32
+fn backend_tree64_VoxelMap_GetNodeCellIndex_0( pos_4 : vec3<f32>,  scale_exp_0 : i32) -> i32
 {
-    var cellPos_0 : vec3<u32> = ((((bitcast<vec3<u32>>((pos_3))) >> (vec3<u32>(u32(scale_exp_0))))) & (vec3<u32>(u32(3))));
+    var cellPos_0 : vec3<u32> = ((((bitcast<vec3<u32>>((pos_4))) >> (vec3<u32>(u32(scale_exp_0))))) & (vec3<u32>(u32(3))));
     return i32(cellPos_0.x + cellPos_0.z * u32(4) + cellPos_0.y * u32(16));
 }
 
@@ -736,9 +736,9 @@ fn popcnt_var64_0( mask_0 : vec2<u32>,  width_0 : u32) -> u32
     return count_0 + countOneBits((himask_0 & ((((u32(1) << (((width_0 & (u32(31))))))) - u32(1)))));
 }
 
-fn backend_tree64_VoxelMap_FloorScale_0( pos_4 : vec3<f32>,  scale_exp_1 : i32) -> vec3<f32>
+fn backend_tree64_VoxelMap_FloorScale_0( pos_5 : vec3<f32>,  scale_exp_1 : i32) -> vec3<f32>
 {
-    return (bitcast<vec3<f32>>((((bitcast<vec3<u32>>((pos_4))) & (vec3<u32>(((u32(4294967295) << (u32(scale_exp_1))))))))));
+    return (bitcast<vec3<f32>>((((bitcast<vec3<u32>>((pos_5))) & (vec3<u32>(((u32(4294967295) << (u32(scale_exp_1))))))))));
 }
 
 struct HitInfo_0
@@ -792,7 +792,7 @@ fn backend_tree64_VoxelMap_Traversal_OctMirror_0( _S66 : backend_tree64_VoxelMap
     var sideDist_0 : vec3<f32>;
     var childIdx_0 : i32;
     var node_0 : backend_tree64_Node_0 = _S71;
-    var pos_5 : vec3<f32> = _S76;
+    var pos_6 : vec3<f32> = _S76;
     var nodeIdx_0 : u32 = _S66.RootNodeIndex_0;
     var i_1 : i32 = i32(0);
     var scaleExp_0 : i32 = i32(21);
@@ -826,7 +826,7 @@ fn backend_tree64_VoxelMap_Traversal_OctMirror_0( _S66 : backend_tree64_VoxelMap
         {
             break;
         }
-        var _S79 : i32 = i32((u32(backend_tree64_VoxelMap_GetNodeCellIndex_0(pos_5, scaleExp_0)) ^ (mirrorMask_0)));
+        var _S79 : i32 = i32((u32(backend_tree64_VoxelMap_GetNodeCellIndex_0(pos_6, scaleExp_0)) ^ (mirrorMask_0)));
         var node_1 : backend_tree64_Node_0 = node_0;
         var childIdx_1 : i32 = _S79;
         var nodeIdx_1 : u32 = nodeIdx_0;
@@ -855,7 +855,7 @@ fn backend_tree64_VoxelMap_Traversal_OctMirror_0( _S66 : backend_tree64_VoxelMap
             stack_0[(scaleExp_1 >> (u32(1)))] = nodeIdx_1;
             var nodeIdx_2 : u32 = backend_tree64_Node_ChildPtr_get_0(node_1) + popcnt_var64_0(backend_tree64_Node_PopMask_get_0(node_1), _S80);
             var scaleExp_2 : i32 = scaleExp_1 - i32(2);
-            var _S83 : i32 = i32((u32(backend_tree64_VoxelMap_GetNodeCellIndex_0(pos_5, scaleExp_2)) ^ (mirrorMask_0)));
+            var _S83 : i32 = i32((u32(backend_tree64_VoxelMap_GetNodeCellIndex_0(pos_6, scaleExp_2)) ^ (mirrorMask_0)));
             node_1 = unpackStorage_3(tree_nodes_0[nodeIdx_2]);
             childIdx_1 = _S83;
             nodeIdx_1 = nodeIdx_2;
@@ -886,11 +886,11 @@ fn backend_tree64_VoxelMap_Traversal_OctMirror_0( _S66 : backend_tree64_VoxelMap
         {
             advScaleExp_0 = scaleExp_1;
         }
-        var edgePos_0 : vec3<f32> = backend_tree64_VoxelMap_FloorScale_0(pos_5, advScaleExp_0);
+        var edgePos_0 : vec3<f32> = backend_tree64_VoxelMap_FloorScale_0(pos_6, advScaleExp_0);
         var sideDist_1 : vec3<f32> = (edgePos_0 - _S75) * _S73;
         var _S85 : vec3<f32> = vec3<f32>(min(min(sideDist_1.x, sideDist_1.y), sideDist_1.z));
-        var pos_6 : vec3<f32> = min(_S75 - _S72 * _S85, (bitcast<vec3<f32>>((vec3<i32>(bitcast<i32>(edgePos_0[u32(0)]), bitcast<i32>(edgePos_0[u32(1)]), bitcast<i32>(edgePos_0[u32(2)])) + select(vec3<i32>((((i32(1) << (u32(advScaleExp_0)))) - i32(1))), _S77, sideDist_1 == _S85)))));
-        var diffPos_0 : vec3<u32> = ((bitcast<vec3<u32>>((pos_6))) ^ ((bitcast<vec3<u32>>((edgePos_0)))));
+        var pos_7 : vec3<f32> = min(_S75 - _S72 * _S85, (bitcast<vec3<f32>>((vec3<i32>(bitcast<i32>(edgePos_0[u32(0)]), bitcast<i32>(edgePos_0[u32(1)]), bitcast<i32>(edgePos_0[u32(2)])) + select(vec3<i32>((((i32(1) << (u32(advScaleExp_0)))) - i32(1))), _S77, sideDist_1 == _S85)))));
+        var diffPos_0 : vec3<u32> = ((bitcast<vec3<u32>>((pos_7))) ^ ((bitcast<vec3<u32>>((edgePos_0)))));
         var diffExp_0 : i32 = i32(firstLeadingBit(((((diffPos_0.x) | ((diffPos_0.y)))) | ((diffPos_0.z)))));
         var diffExp_1 : i32;
         if((diffExp_0 % i32(2)) == i32(0))
@@ -906,7 +906,7 @@ fn backend_tree64_VoxelMap_Traversal_OctMirror_0( _S66 : backend_tree64_VoxelMap
             if(diffExp_1 > i32(21))
             {
                 node_0 = node_1;
-                pos_5 = pos_6;
+                pos_6 = pos_7;
                 childIdx_0 = childIdx_1;
                 sideDist_0 = sideDist_1;
                 scaleExp_0 = diffExp_1;
@@ -923,7 +923,7 @@ fn backend_tree64_VoxelMap_Traversal_OctMirror_0( _S66 : backend_tree64_VoxelMap
             scaleExp_0 = scaleExp_1;
         }
         var _S86 : i32 = i_1 + i32(1);
-        pos_5 = pos_6;
+        pos_6 = pos_7;
         childIdx_0 = childIdx_1;
         sideDist_0 = sideDist_1;
         i_1 = _S86;
@@ -940,9 +940,9 @@ fn backend_tree64_VoxelMap_Traversal_OctMirror_0( _S66 : backend_tree64_VoxelMap
     }
     if(_S74)
     {
-        var pos_7 : vec3<f32> = backend_tree64_VoxelMap_GetMirroredPos_0(pos_5, _S68, false);
+        var pos_8 : vec3<f32> = backend_tree64_VoxelMap_GetMirroredPos_0(pos_6, _S68, false);
         hit_0.MaterialId_0 = backend_tree64_VoxelMap_load_leaf_data_0(_S66, backend_tree64_Node_ChildPtr_get_0(node_0) + popcnt_var64_0(backend_tree64_Node_PopMask_get_0(node_0), u32(childIdx_0)));
-        hit_0.Pos_0 = pos_7;
+        hit_0.Pos_0 = pos_8;
         hit_0.Normal_0 = select(vec3<f32>(0.0f), vec3<f32>(- sign(_S68)), vec3<f32>((min(min(sideDist_0.x, sideDist_0.y), sideDist_0.z))) >= sideDist_0);
     }
     return hit_0;
@@ -962,12 +962,12 @@ fn backend_tree64_VoxelMap_RayCast_0( _S87 : backend_tree64_VoxelMap_0,  _S88 : 
     return hit_1;
 }
 
-fn ray_cast_0( ray_1 : Ray3f_0,  coarse_0 : bool) -> HitInfo_0
+fn ray_cast_0( ray_1 : Ray_0,  coarse_0 : bool) -> HitInfo_0
 {
     var voxel_map_0 : backend_tree64_VoxelMap_0;
     voxel_map_0.TreeScale_0 = unpackStorage_4(globalParams_0.tree_0).scale_0;
     voxel_map_0.RootNodeIndex_0 = unpackStorage_4(globalParams_0.tree_0).root_node_index_0;
-    return backend_tree64_VoxelMap_RayCast_0(voxel_map_0, unpackStorage_4(globalParams_0.tree_0).offset_0 + vec3<i32>(unpackStorage_1(globalParams_0.camera_0).pos_0), ray_1.mOrigin_0, ray_1.mDir_0, coarse_0);
+    return backend_tree64_VoxelMap_RayCast_0(voxel_map_0, unpackStorage_4(globalParams_0.tree_0).offset_0 + vec3<i32>(unpackStorage_1(globalParams_0.camera_0).pos_0), ray_1.pos_1, ray_1.dir_0, coarse_0);
 }
 
 fn HitInfo_Miss_get_0( this_17 : HitInfo_0) -> bool
@@ -975,7 +975,7 @@ fn HitInfo_Miss_get_0( this_17 : HitInfo_0) -> bool
     return (this_17.MaterialId_0) == u32(0);
 }
 
-fn shoot_shadow_ray_0( ray_2 : Ray3f_0) -> bool
+fn shoot_shadow_ray_0( ray_2 : Ray_0) -> bool
 {
     if((((globalParams_0.settings_0) & (i32(1)))) != i32(0))
     {
@@ -994,7 +994,7 @@ fn MaterialAndShadingData_get_direct_lighting_0( this_18 : MaterialAndShadingDat
 {
     var _S96 : vec3<f32> = ShadingData_computeRayOrigin_0(this_18.shading_data_0, true);
     var _S97 : vec3<f32> = sample_light_0(&((*sampler_2)));
-    var _S98 : Ray3f_0 = Ray3f_0( _S96, _S97 );
+    var _S98 : Ray_0 = Ray_0( _S96, _S97 );
     var _S99 : vec3<f32> = MaterialInstance_eval_0(this_18.material_0, this_18.shading_data_0, unpackStorage_2(globalParams_0.sun_0).direction_0, vec3<f32>(f32(!shoot_shadow_ray_0(_S98))) * unpackStorage_2(globalParams_0.sun_0).emission_0, &((*sampler_2)));
     return _S99;
 }
@@ -1164,7 +1164,7 @@ fn compute_shading_0( hit_4 : HitInfo_0,  ray_dir_2 : vec3<f32>,  sampler_3 : pt
         var _S118 : vec3<f32>;
         var _S119 : MaterialAndShadingData_0;
         var _S120 : vec3<f32> = sample_result_0.wo_3;
-        var _S121 : Ray3f_0 = Ray3f_0( ShadingData_computeRayOrigin_0(_S116.shading_data_0, true), sample_result_0.wo_3 );
+        var _S121 : Ray_0 = Ray_0( ShadingData_computeRayOrigin_0(_S116.shading_data_0, true), sample_result_0.wo_3 );
         var _S122 : HitInfo_0 = ray_cast_0(_S121, true);
         if(!HitInfo_Miss_get_0(_S122))
         {
@@ -1187,12 +1187,12 @@ fn compute_shading_0( hit_4 : HitInfo_0,  ray_dir_2 : vec3<f32>,  sampler_3 : pt
     return radiance_0;
 }
 
-fn trace_0( ray_3 : Ray3f_0,  sampler_4 : ptr<function, TinyUniformSampleGenerator_0>) -> vec3<f32>
+fn trace_0( ray_3 : Ray_0,  sampler_4 : ptr<function, TinyUniformSampleGenerator_0>) -> vec3<f32>
 {
     var hit_5 : HitInfo_0 = ray_cast_0(ray_3, false);
     if(!HitInfo_Miss_get_0(hit_5))
     {
-        var _S125 : vec3<f32> = compute_shading_0(hit_5, ray_3.mDir_0, &((*sampler_4)));
+        var _S125 : vec3<f32> = compute_shading_0(hit_5, ray_3.dir_0, &((*sampler_4)));
         return _S125;
     }
     return globalParams_0.background_colour_0;
@@ -1219,7 +1219,7 @@ fn main(@builtin(global_invocation_id) dispatch_thread_id_0 : vec3<u32>)
     {
         var _S129 : vec2<f32> = sampleNext2D_0(&(rng_4));
     }
-    var _S130 : Ray3f_0 = GetPrimaryRay_0(vec2<i32>(_S127), &(rng_4));
+    var _S130 : Ray_0 = GetPrimaryRay_0(vec2<i32>(_S127), &(rng_4));
     var sample_1 : vec3<f32> = trace_0(_S130, &(rng_4));
     var sample_2 : vec3<f32>;
     if(((((globalParams_0.settings_0) & (i32(2)))) != i32(0)) && ((globalParams_0.accumulated_frame_index_0) > u32(0)))

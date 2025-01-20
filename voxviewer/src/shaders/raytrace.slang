@@ -13,12 +13,12 @@ import Scene.ShadingData;
 #include "gradients.slang"
 #include "../../VoxelRT/src/VoxelRT/Shaders/Backends/Tree64/Map.slang"
 
-struct Ray3f {
-    float3 mOrigin;
-    float3 mDir;
+struct Ray {
+    float3 pos;
+    float3 dir;
 }
 
-Ray3f GetPrimaryRay<S: ISampleGenerator>(int2 screenPos, inout S rng) {
+Ray GetPrimaryRay<S: ISampleGenerator>(int2 screenPos, inout S rng) {
     var thread_offset = float2(.5);
 
     if (settings & Settings::AccumulateSamples) {
@@ -33,9 +33,9 @@ Ray3f GetPrimaryRay<S: ISampleGenerator>(int2 screenPos, inout S rng) {
 
     float3 rayDirection = normalize(far.xyz / far.w);
 
-    Ray3f ray;
-    ray.mOrigin = camera.pos % 1;
-    ray.mDir = rayDirection;
+    Ray ray;
+    ray.pos = camera.pos % 1;
+    ray.dir = rayDirection;
 
     return ray;
 }
@@ -44,14 +44,14 @@ Ray3f GetPrimaryRay<S: ISampleGenerator>(int2 screenPos, inout S rng) {
 StructuredBuffer<backend::tree64::Node> tree_nodes;
 StructuredBuffer<uint> leaf_data;
 
-HitInfo ray_cast(Ray3f ray, bool coarse) {
+HitInfo ray_cast(Ray ray, bool coarse) {
     backend::tree64::VoxelMap voxel_map;
     voxel_map.TreeNodes = tree_nodes;
     voxel_map.LeafData = leaf_data;
     voxel_map.TreeScale = tree.scale;
     voxel_map.RootNodeIndex = tree.root_node_index;
 
-    return voxel_map.RayCast(tree.offset + int3(camera.pos), ray.mOrigin, ray.mDir, coarse);
+    return voxel_map.RayCast(tree.offset + int3(camera.pos), ray.pos, ray.dir, coarse);
 }
 
 struct Camera {
@@ -210,7 +210,7 @@ struct MaterialAndShadingData {
     ShadingData shading_data;
 
     float3 get_direct_lighting<S: ISampleGenerator>(inout S sampler) {
-        float lighting = float(!shoot_shadow_ray(Ray3f(shading_data.computeRayOrigin(), sample_light(sampler))));
+        float lighting = float(!shoot_shadow_ray(Ray(shading_data.computeRayOrigin(), sample_light(sampler))));
         return material.eval(shading_data, sun.direction, lighting * sun.emission, sampler);
     }
 };
@@ -248,7 +248,7 @@ float3 sample_light<S: ISampleGenerator>(inout S sampler) {
     return mul(create_rotation_matrix(sun.direction), dir);
 }
 
-bool shoot_shadow_ray(Ray3f ray) {
+bool shoot_shadow_ray(Ray ray) {
     if (settings & Settings::EnableShadows) {
         return !ray_cast(ray, true).Miss;
     }
@@ -273,10 +273,10 @@ float3 compute_shading<S: ISampleGenerator>(HitInfo hit, float3 ray_dir, inout S
             break;
         }
 
-        let ray = Ray3f(material.shading_data.computeRayOrigin(), sample_result.wo);
+        let ray = Ray(material.shading_data.computeRayOrigin(), sample_result.wo);
         hit = ray_cast(ray, true);
         if (!hit.Miss) {
-            material = create_material_from_hit(hit, ray.mDir);
+            material = create_material_from_hit(hit, ray.dir);
             radiance += material.get_direct_lighting(sampler) * throughput;
         } else {
             radiance += background_colour * throughput;
@@ -287,10 +287,10 @@ float3 compute_shading<S: ISampleGenerator>(HitInfo hit, float3 ray_dir, inout S
     return radiance;
 }
 
-float3 trace<S: ISampleGenerator>(Ray3f ray, inout S sampler) {
+float3 trace<S: ISampleGenerator>(Ray ray, inout S sampler) {
     HitInfo hit = ray_cast(ray, false);
     if (!hit.Miss) {
-        return compute_shading(hit, ray.mDir, sampler);
+        return compute_shading(hit, ray.dir, sampler);
     }
 
     return background_colour;
