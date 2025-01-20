@@ -35,6 +35,7 @@ struct GlobalParams_std140_0
     @align(16) sun_direction_0 : vec3<f32>,
     @align(16) sun_colour_0 : vec3<f32>,
     @align(16) background_colour_0 : vec3<f32>,
+    @align(16) root_offset_0 : vec3<i32>,
     @align(16) resolution_0 : vec2<u32>,
     @align(8) settings_0 : i32,
     @align(4) frame_index_0 : u32,
@@ -899,7 +900,7 @@ fn ray_cast_0( ray_0 : Ray3f_0,  coarse_0 : bool) -> HitInfo_0
     var voxel_map_0 : backend_tree64_VoxelMap_0;
     voxel_map_0.TreeScale_0 = globalParams_0.tree_scale_0;
     voxel_map_0.RootNodeIndex_0 = globalParams_0.root_node_index_0;
-    return backend_tree64_VoxelMap_RayCast_0(voxel_map_0, vec3<i32>(i32(0)), ray_0.mOrigin_0, ray_0.mDir_0, coarse_0);
+    return backend_tree64_VoxelMap_RayCast_0(voxel_map_0, globalParams_0.root_offset_0 + vec3<i32>(globalParams_0.cameraPos_0), ray_0.mOrigin_0, ray_0.mDir_0, coarse_0);
 }
 
 fn HitInfo_Miss_get_0( this_17 : HitInfo_0) -> bool
@@ -1121,7 +1122,7 @@ fn compute_shading_0( hit_4 : HitInfo_0,  ray_dir_2 : vec3<f32>,  sampler_3 : pt
 
 fn trace_0( direction_0 : vec3<f32>,  sampler_4 : ptr<function, TinyUniformSampleGenerator_0>) -> vec3<f32>
 {
-    var _S119 : Ray3f_0 = Ray3f_0( globalParams_0.cameraPos_0, direction_0 );
+    var _S119 : Ray3f_0 = Ray3f_0( globalParams_0.cameraPos_0 % vec3<f32>(1.0f), direction_0 );
     var hit_5 : HitInfo_0 = ray_cast_0(_S119, false);
     if(!HitInfo_Miss_get_0(hit_5))
     {

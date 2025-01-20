@@ -123,31 +123,38 @@ struct Tree64GC {
     node_spans: Vec<CompactRange>,
 }
 
+#[derive(PartialEq, Debug, Clone, Copy)]
+pub struct RootState {
+    pub index: u32,
+    pub num_levels: u8,
+    pub offset: glam::IVec3,
+}
+
 #[derive(Debug, Default, PartialEq)]
 pub struct Tree64Edits {
-    roots_and_num_levels: Vec<(u32, u8)>,
+    root_states: Vec<RootState>,
     index: u32,
 }
 
 impl Tree64Edits {
-    fn push(&mut self, index: u32, num_levels: u8) {
-        if !self.roots_and_num_levels.is_empty() {
-            if (index, num_levels) == self.current() {
+    fn push(&mut self, state: RootState) {
+        if !self.root_states.is_empty() {
+            if state == self.current() {
                 return;
             }
 
             // Ensure that history is linear.
             while self.can_redo() {
-                self.roots_and_num_levels.pop();
+                self.root_states.pop();
             }
         }
 
-        self.roots_and_num_levels.push((index, num_levels));
-        self.index = self.roots_and_num_levels.len() as u32 - 1;
+        self.index = self.root_states.len() as u32;
+        self.root_states.push(state);
     }
 
-    fn current(&self) -> (u32, u8) {
-        self.roots_and_num_levels[self.index as usize]
+    fn current(&self) -> RootState {
+        self.root_states[self.index as usize]
     }
 
     pub fn can_undo(&self) -> bool {
@@ -155,7 +162,7 @@ impl Tree64Edits {
     }
 
     pub fn can_redo(&self) -> bool {
-        self.index < (self.roots_and_num_levels.len() as u32 - 1)
+        self.index < (self.root_states.len() as u32 - 1)
     }
 
     pub fn undo(&mut self) {
@@ -186,7 +193,7 @@ fn test_tree_node_size() {
 
 impl Tree64 {
     pub fn collect_garbage(&self) {
-        let root_node_index = self.root_node_index_and_num_levels().0;
+        let root_node_index = self.root_state().index;
         let mut gc = Tree64GC::default();
         let mut stack = vec![root_node_index];
 
@@ -334,8 +341,12 @@ impl Tree64 {
             edits: Tree64Edits::default(),
         };
         let root = this.insert(array, dims, [0; 3], scale);
-        let root_node_index = this.insert_nodes(&[root]);
-        this.edits.push(root_node_index, num_levels);
+        let root_index = this.insert_nodes(&[root]);
+        this.edits.push(RootState {
+            index: root_index,
+            num_levels,
+            offset: glam::IVec3::ZERO,
+        });
         {
             //dbg!(&this.stats);
             //dbg!(
@@ -346,23 +357,31 @@ impl Tree64 {
         this
     }
 
-    pub fn root_node_index_and_num_levels(&self) -> (u32, u8) {
+    pub fn root_state(&self) -> RootState {
         self.edits.current()
     }
 
-    fn push_new_root_node(&mut self, node: Tree64Node, num_levels: u8) -> u32 {
+    fn push_new_root_node(&mut self, node: Tree64Node, num_levels: u8, offset: glam::IVec3) -> u32 {
         let index = self.insert_nodes(&[node]);
-        self.edits.push(index, num_levels);
+        self.edits.push(RootState {
+            index,
+            num_levels,
+            offset,
+        });
         index
     }
 
     pub fn expand(&mut self) -> std::ops::Range<usize> {
-        let (root_node_index, num_levels) = self.root_node_index_and_num_levels();
+        let root_state = self.root_state();
         let current_len = self.nodes.inner.len();
 
-        let new_nodes = [self.nodes.inner[root_node_index as usize]; 64];
+        let new_nodes = [self.nodes.inner[root_state.index as usize]; 64];
         let children = self.insert_nodes(&new_nodes);
-        self.push_new_root_node(Tree64Node::new(false, children, !0), num_levels + 1);
+        self.push_new_root_node(
+            Tree64Node::new(false, children, !0),
+            root_state.num_levels + 1,
+            root_state.offset,
+        );
 
         current_len..self.nodes.inner.len()
     }
@@ -396,10 +415,10 @@ impl Tree64 {
         let num_data = self.data.inner.len();
         let num_nodes = self.nodes.inner.len();
 
-        let (mut root_index, mut num_levels) = self.root_node_index_and_num_levels();
+        let mut root_state = self.root_state();
 
-        let mut min = min.into();
-        let mut max = max.into();
+        let mut min = min.into() + root_state.offset;
+        let mut max = max.into() + root_state.offset;
 
         if min.cmpge(max).any() {
             return UpdatedRanges {
@@ -414,26 +433,30 @@ impl Tree64 {
         };
 
         while bbox
-            .get_intersection(&BoundingBox::from_levels(num_levels))
+            .get_intersection(&BoundingBox::from_levels(root_state.num_levels))
             .map(|intersection| intersection != bbox)
             .unwrap_or(true)
             && value != 0
         {
-            let index_of_existing_root = 1 * 1 + 1 * 4 + 1 * 16;
-            root_index = self.push_new_root_node(
-                Tree64Node::new(false, root_index, 1 << index_of_existing_root),
-                num_levels + 1,
-            );
+            let index_of_existing_root = 1 + 4 + 16;
+            root_state.index = self.insert_nodes(&[Tree64Node::new(
+                false,
+                root_state.index,
+                1 << index_of_existing_root,
+            )]);
 
-            min += 4_i32.pow(num_levels as u32);
-            max += 4_i32.pow(num_levels as u32);
+            let offset = glam::IVec3::splat(4_i32.pow(root_state.num_levels as u32));
+
+            min += offset;
+            max += offset;
 
             bbox = BoundingBox {
                 min: min.as_uvec3(),
                 max: max.as_uvec3(),
             };
 
-            num_levels += 1;
+            root_state.num_levels += 1;
+            root_state.offset += offset;
         }
 
         let modify_leaf_node = |this: &mut Self, node, mut intersection: BoundingBox| {
@@ -459,7 +482,7 @@ impl Tree64 {
             )
         };
 
-        let root = self.nodes.inner[root_index as usize];
+        let root = self.nodes.inner[root_state.index as usize];
 
         if root.is_leaf() {
             let node_bbox = BoundingBox {
@@ -468,7 +491,7 @@ impl Tree64 {
             };
             if let Some(intersection) = bbox.get_intersection(&node_bbox) {
                 let new_root = modify_leaf_node(self, root, intersection);
-                self.push_new_root_node(new_root, num_levels);
+                self.push_new_root_node(new_root, root_state.num_levels, root_state.offset);
             }
 
             return UpdatedRanges {
@@ -488,8 +511,8 @@ impl Tree64 {
 
         let mut stack: Vec<StackItem> = vec![StackItem {
             node_min_pos: glam::UVec3::ZERO,
-            node_level: num_levels,
-            corresponding_node_index: Some(root_index),
+            node_level: root_state.num_levels,
+            corresponding_node_index: Some(root_state.index),
             children: PopMaskedData::new(self.get_children_for_node(root), root.pop_mask),
             parent_and_index: None,
         }];
@@ -600,7 +623,7 @@ impl Tree64 {
             }
         }
 
-        self.push_new_root_node(new_root, num_levels);
+        self.push_new_root_node(new_root, root_state.num_levels, root_state.offset);
 
         UpdatedRanges {
             data: num_data..self.data.inner.len(),
@@ -671,9 +694,9 @@ impl Tree64 {
     }
 
     pub fn serialize<W: io::Write>(&self, mut writer: W) -> io::Result<()> {
-        let (root_node_index, num_levels) = self.root_node_index_and_num_levels();
-        writer.write_all(&[num_levels])?;
-        writer.write_all(&root_node_index.to_le_bytes())?;
+        let root_state = self.root_state();
+        writer.write_all(&[root_state.num_levels])?;
+        writer.write_all(&root_state.index.to_le_bytes())?;
         writer.write_all(&(self.nodes.inner.len() as u32).to_le_bytes())?;
         writer.write_all(&(self.data.inner.len() as u32).to_le_bytes())?;
         writer.write_all(bytemuck::cast_slice(&self.nodes.inner))?;
@@ -695,7 +718,11 @@ impl Tree64 {
             data: VecWithCaching::from_vec(vec![0; num_data as usize]),
             stats: Default::default(),
             edits: Tree64Edits {
-                roots_and_num_levels: vec![(root_node_index, num_levels)],
+                root_states: vec![RootState {
+                    num_levels,
+                    offset: glam::IVec3::ZERO,
+                    index: root_node_index,
+                }],
                 index: 0,
             },
         };
@@ -706,9 +733,9 @@ impl Tree64 {
 
     pub fn get_value_at<P: Into<glam::UVec3>>(&self, pos: P) -> u8 {
         let pos = pos.into();
-        let (root_index, node_level) = self.root_node_index_and_num_levels();
-        let mut node = self.nodes.inner[root_index as usize];
-        let mut child_size = 4_u32.pow(node_level as u32 - 1);
+        let state = self.root_state();
+        let mut node = self.nodes.inner[state.index as usize];
+        let mut child_size = 4_u32.pow(state.num_levels as u32 - 1);
 
         while !node.is_leaf() {
             let child_index = ((pos / child_size) % 4).dot(glam::UVec3::new(1, 4, 16));

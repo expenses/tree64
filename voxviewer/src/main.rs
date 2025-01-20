@@ -1,10 +1,12 @@
 use dolly::prelude::*;
+use egui::Key;
 use egui_winit::egui;
 use glam::swizzles::Vec3Swizzles;
 use wgpu::util::DeviceExt;
 use winit::{
-    event::{DeviceEvent, ElementState, MouseButton, MouseScrollDelta, WindowEvent},
+    event::{DeviceEvent, ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
+    keyboard::PhysicalKey,
     window::{Window, WindowId},
 };
 
@@ -56,9 +58,11 @@ struct App<'a> {
     materials: Vec<Material>,
     egui_renderer: egui_wgpu::Renderer,
     tree64: svo_dag::Tree64,
+    selected_material: usize,
+    hide_ui: bool,
 }
 
-impl<'a> App<'a> {
+impl App<'_> {
     fn draw_egui(&mut self, raw_input: egui::RawInput) -> egui::FullOutput {
         let Self {
             egui_state,
@@ -73,95 +77,97 @@ impl<'a> App<'a> {
         let mut reset_accumulation = false;
 
         let output = egui_state.egui_ctx().run(raw_input, |ctx| {
-            egui::Window::new("Controls").show(ctx, |ui| {
-                egui::CollapsingHeader::new("Edits")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        ui.add_enabled_ui(tree64.edits.can_undo(), |ui| {
-                            if ui.button("Reset").clicked() {
-                                while tree64.edits.can_undo() {
-                                    tree64.edits.undo();
+            egui::Window::new("Controls")
+                .default_width(100.0)
+                .show(ctx, |ui| {
+                    egui::CollapsingHeader::new("Edits")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.add_enabled_ui(tree64.edits.can_undo(), |ui| {
+                                    if ui.button("Reset").clicked() {
+                                        while tree64.edits.can_undo() {
+                                            tree64.edits.undo();
+                                        }
+                                        reset_accumulation = true;
+                                    }
+                                });
+                                ui.add_enabled_ui(tree64.edits.can_undo(), |ui| {
+                                    if ui.button("Undo").clicked() {
+                                        tree64.edits.undo();
+                                        reset_accumulation = true;
+                                    }
+                                });
+                                ui.add_enabled_ui(tree64.edits.can_redo(), |ui| {
+                                    if ui.button("Redo").clicked() {
+                                        tree64.edits.redo();
+                                        reset_accumulation = true;
+                                    }
+                                });
+                                if ui.button("Expand").clicked() {
+                                    reset_accumulation = true;
+                                    let range_to_upload = tree64.expand();
+                                    queue.write_buffer(
+                                        &pipelines.tree_nodes,
+                                        range_to_upload.start as u64
+                                            * std::mem::size_of::<svo_dag::Tree64Node>() as u64,
+                                        bytemuck::cast_slice(&tree64.nodes.inner[range_to_upload]),
+                                    );
                                 }
-                                reset_accumulation = true;
-                            }
+                            });
+
+                            ui.label("Edit distance");
+                            ui.add(egui::Slider::new(&mut settings.edit_distance, 0.0..=1000.0));
+                            ui.label("Edit Size");
+                            ui.add(egui::Slider::new(&mut settings.edit_size, 0.5..=1000.0));
+
+                            let mut edit = |value| {
+                                let position: glam::Vec3 =
+                                    glam::Vec3::from(self.camera.final_transform.position)
+                                        + self.camera.final_transform.forward::<glam::Vec3>()
+                                            * settings.edit_distance;
+
+                                let ranges = tree64.modify_nodes_in_box(
+                                    (position - settings.edit_size / 2.0).xzy().as_ivec3(),
+                                    (position + settings.edit_size / 2.0).xzy().as_ivec3(),
+                                    value,
+                                );
+                                self.accumulated_frame_index = 0;
+                                queue.write_buffer(
+                                    &pipelines.tree_nodes,
+                                    ranges.nodes.start as u64
+                                        * std::mem::size_of::<svo_dag::Tree64Node>() as u64,
+                                    bytemuck::cast_slice(&tree64.nodes.inner[ranges.nodes]),
+                                );
+                                copy_aligned(
+                                    queue,
+                                    &pipelines.leaf_data,
+                                    bytemuck::cast_slice(&tree64.data.inner),
+                                    ranges.data,
+                                );
+                            };
+
+                            ui.horizontal(|ui| {
+                                if ui.button("Delete").clicked() {
+                                    edit(0);
+                                }
+                                if ui.button("Create").clicked() {
+                                    edit(self.selected_material as u8 + 1);
+                                }
+                            });
                         });
-                        ui.add_enabled_ui(tree64.edits.can_undo(), |ui| {
-                            if ui.button("Undo").clicked() {
-                                tree64.edits.undo();
-                                reset_accumulation = true;
-                            }
+                    egui::CollapsingHeader::new("Rendering")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.label("Max bounces");
+                            reset_accumulation |= ui
+                                .add(egui::Slider::new(&mut settings.max_bounces, 0..=10))
+                                .changed();
+                            reset_accumulation |= ui
+                                .checkbox(&mut settings.accumulate_samples, "Accumulate Samples")
+                                .changed();
                         });
-                        ui.add_enabled_ui(tree64.edits.can_redo(), |ui| {
-                            if ui.button("Redo").clicked() {
-                                tree64.edits.redo();
-                                reset_accumulation = true;
-                            }
-                        });
-                        if ui.button("Expand").clicked() {
-                            reset_accumulation = true;
-                            let range_to_upload = tree64.expand();
-                            queue.write_buffer(
-                                &pipelines.tree_nodes,
-                                range_to_upload.start as u64
-                                    * std::mem::size_of::<svo_dag::Tree64Node>() as u64,
-                                bytemuck::cast_slice(&tree64.nodes.inner[range_to_upload]),
-                            );
-                        }
-
-                        ui.label("Edit distance");
-                        ui.add(egui::Slider::new(&mut settings.edit_distance, 0.0..=1000.0));
-                        ui.label("Edit Size");
-                        ui.add(egui::Slider::new(&mut settings.edit_size, 0.0..=1000.0));
-
-                        let mut edit = |value| {
-                            let position: glam::Vec3 =
-                                glam::Vec3::from(self.camera.final_transform.position)
-                                    + self.camera.final_transform.forward::<glam::Vec3>()
-                                        * settings.edit_distance;
-
-                            let ranges = tree64.modify_nodes_in_box(
-                                (position - settings.edit_size / 2.0)
-                                    .xzy()
-                                    .as_ivec3(),
-                                (position + settings.edit_size / 2.0).xzy().as_ivec3(),
-                                value,
-                            );
-                            self.accumulated_frame_index = 0;
-                            queue.write_buffer(
-                                &pipelines.tree_nodes,
-                                ranges.nodes.start as u64
-                                    * std::mem::size_of::<svo_dag::Tree64Node>() as u64,
-                                bytemuck::cast_slice(&tree64.nodes.inner[ranges.nodes]),
-                            );
-                            copy_aligned(
-                                &queue,
-                                &pipelines.leaf_data,
-                                bytemuck::cast_slice(&tree64.data.inner),
-                                ranges.data,
-                            );
-                        };
-
-                        if ui.button("Delete").clicked() {
-                            edit(0);
-                        }
-                        if ui.button("Create").clicked() {
-                            edit(1);
-                        }
-                    });
-                egui::CollapsingHeader::new("Rendering")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        ui.label("Max bounces");
-                        reset_accumulation |= ui
-                            .add(egui::Slider::new(&mut settings.max_bounces, 0..=10))
-                            .changed();
-                        reset_accumulation |= ui
-                            .checkbox(&mut settings.accumulate_samples, "Accumulate Samples")
-                            .changed();
-                    });
-                egui::CollapsingHeader::new("Lighting")
-                    .default_open(true)
-                    .show(ui, |ui| {
+                    egui::CollapsingHeader::new("Lighting").show(ui, |ui| {
                         egui::CollapsingHeader::new("Sun")
                             .default_open(true)
                             .show(ui, |ui| {
@@ -212,33 +218,68 @@ impl<'a> App<'a> {
                             ))
                             .changed();
                     });
-                egui::CollapsingHeader::new("Camera")
-                    .default_open(true)
-                    .show(ui, |ui| {
+                    egui::CollapsingHeader::new("Camera").show(ui, |ui| {
                         ui.label("Field of view (vertical)");
                         reset_accumulation |= ui
                             .add(egui::Slider::new(&mut settings.vertical_fov, 1.0..=120.0))
                             .changed();
                     });
-                egui::CollapsingHeader::new("Settings")
-                    .default_open(true)
-                    .show(ui, |ui| {
+                    egui::CollapsingHeader::new("Settings").show(ui, |ui| {
                         if ui.button("Reset").clicked() {
                             *settings = Settings::default();
                             reset_accumulation = true;
                         }
                     });
-                #[cfg(not(target_arch = "wasm32"))]
-                egui::CollapsingHeader::new("Debugging")
-                    .default_open(true)
-                    .show(ui, |ui| {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    egui::CollapsingHeader::new("Debugging").show(ui, |ui| {
                         reset_accumulation |= ui
                             .checkbox(&mut settings.show_heatmap, "Show Heatmap")
                             .changed();
                     });
-                egui::CollapsingHeader::new("Materials").show(ui, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        for (i, material) in materials.iter_mut().enumerate() {
+                    egui::CollapsingHeader::new("Materials")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .max_height(400.0)
+                                .show(ui, |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        for (i, material) in materials.iter().enumerate() {
+                                            let (rect, response) = ui.allocate_at_least(
+                                                egui::Vec2::new(35., 20.),
+                                                egui::Sense::click(),
+                                            );
+
+                                            let stroke_colour = egui::Color32::WHITE
+                                                .linear_multiply(
+                                                    if response.hovered()
+                                                        || i == self.selected_material
+                                                    {
+                                                        1.0
+                                                    } else {
+                                                        0.25
+                                                    },
+                                                );
+
+                                            if response.clicked() {
+                                                self.selected_material = i;
+                                            }
+
+                                            ui.painter().rect(
+                                                rect,
+                                                5.0,
+                                                egui::Rgba::from_rgb(
+                                                    material.base_colour[0],
+                                                    material.base_colour[1],
+                                                    material.base_colour[2],
+                                                ),
+                                                egui::Stroke::new(1.0, stroke_colour),
+                                            );
+                                        }
+                                    });
+                                });
+
+                            let material = &mut materials[self.selected_material];
+
                             let mut changed = false;
                             ui.label("Base Colour");
                             changed |= egui::widgets::color_picker::color_edit_button_rgb(
@@ -267,15 +308,13 @@ impl<'a> App<'a> {
                             if changed {
                                 queue.write_buffer(
                                     &pipelines.materials,
-                                    (i * std::mem::size_of::<Material>()) as _,
+                                    (self.selected_material * std::mem::size_of::<Material>()) as _,
                                     bytemuck::bytes_of(&*material),
                                 );
                                 reset_accumulation = true;
                             };
-                        }
-                    });
+                        });
                 });
-            });
         });
 
         if reset_accumulation {
@@ -333,7 +372,7 @@ impl<'a> App<'a> {
         transform: dolly::transform::Transform<dolly::handedness::RightHanded>,
     ) {
         let settings = &self.settings;
-        let (root_node_index, num_levels) = self.tree64.root_node_index_and_num_levels();
+        let root_state = self.tree64.root_state();
 
         self.queue.write_buffer(
             &self.pipelines.uniform_buffer,
@@ -369,8 +408,9 @@ impl<'a> App<'a> {
                 background_colour: (glam::Vec3::from(settings.background_colour)
                     * settings.background_strength)
                     .into(),
-                tree_scale: num_levels as u32 * 2,
-                root_node_index,
+                tree_scale: root_state.num_levels as u32 * 2,
+                root_node_index: root_state.index,
+                root_offset: root_state.offset.into(),
                 _padding: Default::default(),
             }),
         );
@@ -382,7 +422,7 @@ impl<'a> App<'a> {
     }
 }
 
-impl<'a> winit::application::ApplicationHandler for App<'a> {
+impl winit::application::ApplicationHandler for App<'_> {
     fn resumed(&mut self, _event_loop: &ActiveEventLoop) {}
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {}
@@ -431,6 +471,8 @@ impl<'a> winit::application::ApplicationHandler for App<'a> {
     ) {
         let egui_response = self.egui_state.on_window_event(self.window, &event);
         if egui_response.consumed {
+            self.left_mouse_down = false;
+            self.right_mouse_down = false;
             return;
         }
 
@@ -447,6 +489,19 @@ impl<'a> winit::application::ApplicationHandler for App<'a> {
                 button: MouseButton::Right,
                 ..
             } => self.right_mouse_down = state == ElementState::Pressed,
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        physical_key: PhysicalKey::Code(key_code),
+                        state,
+                        ..
+                    },
+                ..
+            } => {
+                if key_code == winit::keyboard::KeyCode::KeyH {
+                    self.hide_ui ^= state == ElementState::Pressed;
+                }
+            }
             WindowEvent::Resized(new_size) => {
                 self.accumulated_frame_index = 0;
                 // Reconfigure the surface with the new size
@@ -514,73 +569,78 @@ impl<'a> winit::application::ApplicationHandler for App<'a> {
                 let (tessellated, screen_descriptor) = self.get_egui_render_state(&mut encoder);
                 let egui_cmd_buf = encoder.finish();
 
-                let (cmd_buf_a, cmd_buf_b) =
-                    rayon::join(
-                        || {
-                            let mut encoder = self.device.create_command_encoder(
-                                &wgpu::CommandEncoderDescriptor { label: None },
-                            );
-
-                            let mut compute_pass =
-                                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
-
-                            compute_pass.set_pipeline(&self.pipelines.trace);
-                            compute_pass.set_bind_group(
-                                0,
-                                &self.resizables.trace_bind_groups
-                                    [self.accumulated_frame_index as usize % 2],
-                                &[],
-                            );
-
-                            let workgroup_size = 8;
-
-                            compute_pass.dispatch_workgroups(
-                                (self.config.width + workgroup_size - 1) / workgroup_size,
-                                (self.config.height + workgroup_size - 1) / workgroup_size,
-                                1,
-                            );
-
-                            drop(compute_pass);
-
-                            encoder.finish()
-                        },
-                        || {
-                            let mut encoder = self.device.create_command_encoder(
-                                &wgpu::CommandEncoderDescriptor { label: None },
-                            );
-
-                            let mut rpass = encoder
-                                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                let (cmd_buf_a, cmd_buf_b) = rayon::join(
+                    || {
+                        let mut encoder =
+                            self.device
+                                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                                     label: None,
-                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                        view: &view,
-                                        resolve_target: None,
-                                        ops: wgpu::Operations {
-                                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                            store: wgpu::StoreOp::Store,
-                                        },
-                                    })],
-                                    depth_stencil_attachment: None,
-                                    timestamp_writes: None,
-                                    occlusion_query_set: None,
-                                })
-                                .forget_lifetime();
-                            rpass.set_pipeline(&self.pipelines.blit_srgb);
-                            rpass.set_bind_group(
-                                0,
-                                &self.resizables.blit_bind_groups
-                                    [(self.accumulated_frame_index) as usize % 2],
-                                &[],
-                            );
-                            rpass.draw(0..3, 0..1);
+                                });
+
+                        let mut compute_pass =
+                            encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+
+                        compute_pass.set_pipeline(&self.pipelines.trace);
+                        compute_pass.set_bind_group(
+                            0,
+                            &self.resizables.trace_bind_groups
+                                [self.accumulated_frame_index as usize % 2],
+                            &[],
+                        );
+
+                        let workgroup_size = 8;
+
+                        compute_pass.dispatch_workgroups(
+                            self.config.width.div_ceil(workgroup_size),
+                            self.config.height.div_ceil(workgroup_size),
+                            1,
+                        );
+
+                        drop(compute_pass);
+
+                        encoder.finish()
+                    },
+                    || {
+                        let mut encoder =
+                            self.device
+                                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: None,
+                                });
+
+                        let mut rpass = encoder
+                            .begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: None,
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            })
+                            .forget_lifetime();
+                        rpass.set_pipeline(&self.pipelines.blit_srgb);
+                        rpass.set_bind_group(
+                            0,
+                            &self.resizables.blit_bind_groups
+                                [(self.accumulated_frame_index) as usize % 2],
+                            &[],
+                        );
+                        rpass.draw(0..3, 0..1);
+                        if !self.hide_ui {
                             self.egui_renderer
                                 .render(&mut rpass, &tessellated, &screen_descriptor);
+                        }
 
-                            drop(rpass);
+                        drop(rpass);
 
-                            encoder.finish()
-                        },
-                    );
+                        encoder.finish()
+                    },
+                );
 
                 self.queue.submit([egui_cmd_buf, cmd_buf_a, cmd_buf_b]);
                 frame.present();
@@ -644,16 +704,6 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     log::info!("{:?}\n{:?}", &config, &swapchain_capabilities.formats);
 
     let pipelines = Pipelines::new(&device, &queue, swapchain_format).await;
-
-    /*let mut materials = vec![
-        Material {
-            base_colour: [1.0; 3],
-            linear_roughness: 1.0,
-            metallic: 0.0,
-            ..Default::default()
-        };
-        256
-    ];*/
 
     let palette = [
         (65, 59, 47, 255),
@@ -804,7 +854,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         }
     }
 
-    let materials = palette
+    let mut materials = palette
         .map(|(r, g, b, _)| Material {
             // Boost values for brighter bounces.
             base_colour: [srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b)],
@@ -815,16 +865,13 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         })
         .to_vec();
 
-    /*
-    materials[1] = Material {
-        base_colour: [1.0, 0.1, 0.1],
-        emission_factor: 0.0,
-    };
-    materials[31] = Material {
-        base_colour: [0.0, 0.0, 1.0],
-        emission_factor: 10.0,
-    };
-    */
+    for _ in 0..255 - materials.len() {
+        materials.push(Material {
+            base_colour: [1.0; 3],
+            linear_roughness: 1.0,
+            ..Default::default()
+        });
+    }
 
     let tree64 = svo_dag::Tree64::deserialize(std::io::Cursor::new(
         load_resource_bytes("sponza.tree64").await,
@@ -839,7 +886,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     );
 
     let leaf_data: &[u8] = bytemuck::cast_slice(&tree64.data.inner);
-    copy_aligned(&queue, &pipelines.leaf_data, &leaf_data, 0..leaf_data.len());
+    copy_aligned(&queue, &pipelines.leaf_data, leaf_data, 0..leaf_data.len());
 
     let mut app = App {
         egui_renderer: egui_wgpu::Renderer::new(&device, swapchain_format, None, 1, false),
@@ -871,6 +918,8 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         pipelines,
         materials,
         tree64,
+        selected_material: 0,
+        hide_ui: false,
     };
 
     event_loop.run_app(&mut app).unwrap()
@@ -965,12 +1014,29 @@ impl From<glam::Vec3> for Vec3A {
 
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
+struct IVec3A {
+    inner: glam::IVec3,
+    padding: u32,
+}
+
+impl From<glam::IVec3> for IVec3A {
+    fn from(vec: glam::IVec3) -> Self {
+        Self {
+            inner: vec,
+            padding: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
 struct Uniforms {
     p_inv: glam::Mat4,
     camera_pos: Vec3A,
     sun_direction: Vec3A,
     sun_emission: Vec3A,
     background_colour: Vec3A,
+    root_offset: IVec3A,
     resolution: glam::UVec2,
     settings: i32,
     frame_index: u32,
@@ -1199,7 +1265,7 @@ impl Pipelines {
             }),
             materials: device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,
-                size: std::mem::size_of::<[Material; 256]>() as _,
+                size: std::mem::size_of::<[Material; 255]>() as _,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),

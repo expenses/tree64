@@ -45,7 +45,7 @@ HitInfo ray_cast(Ray3f ray, bool coarse) {
     voxel_map.TreeScale = tree_scale;
     voxel_map.RootNodeIndex = root_node_index;
 
-    return voxel_map.RayCast(int3(0), ray.mOrigin, ray.mDir, coarse);
+    return voxel_map.RayCast(root_offset + int3(cameraPos), ray.mOrigin, ray.mDir, coarse);
 }
 
 uniform float4x4 PInv;
@@ -53,6 +53,7 @@ uniform float3 cameraPos;
 uniform float3 sun_direction;
 uniform float3 sun_colour;
 uniform float3 background_colour;
+uniform int3 root_offset;
 uniform uint2 resolution;
 uniform Settings settings;
 uniform uint frame_index;
@@ -238,7 +239,7 @@ float3 compute_shading<S: ISampleGenerator>(HitInfo hit, float3 ray_dir, inout S
 }
 
 float3 trace<S: ISampleGenerator>(float3 direction, inout S sampler) {
-    HitInfo hit = ray_cast({cameraPos, direction}, false);
+    HitInfo hit = ray_cast({cameraPos % 1, direction}, false);
     if (!hit.Miss) {
         return compute_shading(hit, direction, sampler);
     }
