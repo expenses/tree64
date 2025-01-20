@@ -18,7 +18,7 @@ struct Ray3f {
     float3 mDir;
 }
 
-float3 GetPrimaryRay<S: ISampleGenerator>(int2 screenPos, inout S rng) {
+Ray3f GetPrimaryRay<S: ISampleGenerator>(int2 screenPos, inout S rng) {
     var thread_offset = float2(.5);
 
     if (settings & Settings::AccumulateSamples) {
@@ -29,9 +29,15 @@ float3 GetPrimaryRay<S: ISampleGenerator>(int2 screenPos, inout S rng) {
     float2 uv = (screenPos + thread_offset) / resolution;
     uv = uv * 2 - 1;
     uv.y = -uv.y;
-    float4 far = mul(PInv, float4(uv, 1, 1));
+    float4 far = mul(camera.p_inv, float4(uv, 1, 1));
 
-    return normalize(far.xyz / far.w);
+    float3 rayDirection = normalize(far.xyz / far.w);
+
+    Ray3f ray;
+    ray.mOrigin = camera.pos % 1;
+    ray.mDir = rayDirection;
+
+    return ray;
 }
 
 
@@ -42,26 +48,69 @@ HitInfo ray_cast(Ray3f ray, bool coarse) {
     backend::tree64::VoxelMap voxel_map;
     voxel_map.TreeNodes = tree_nodes;
     voxel_map.LeafData = leaf_data;
-    voxel_map.TreeScale = tree_scale;
-    voxel_map.RootNodeIndex = root_node_index;
+    voxel_map.TreeScale = tree.scale;
+    voxel_map.RootNodeIndex = tree.root_node_index;
 
-    return voxel_map.RayCast(root_offset + int3(cameraPos), ray.mOrigin, ray.mDir, coarse);
+    return voxel_map.RayCast(tree.offset + int3(camera.pos), ray.mOrigin, ray.mDir, coarse);
 }
 
-uniform float4x4 PInv;
-uniform float3 cameraPos;
-uniform float3 sun_direction;
-uniform float3 sun_colour;
+struct Camera {
+    float4x4 p_inv;
+    float4x4 view;
+    float4x4 view_inv;
+    float3 pos;
+    float3 forward;
+    float3 up;
+    float3 right;
+
+    // https://blog.demofox.org/2018/07/04/pathtraced-depth-of-field-bokeh/
+    float4 sensor_plane() {
+        float4 sensorPlane;
+        sensorPlane.xyz = forward;
+        sensorPlane.w = -dot(forward, (pos - forward));
+        return sensorPlane;
+    }
+
+    float3 calculate_sensor_pos(float3 ray_direction) {
+        float4 sensorPlane = sensor_plane();
+        float t = -(dot(pos, sensorPlane.xyz) + sensorPlane.w) / dot(ray_direction, sensorPlane.xyz);
+        float3 sensorPos = pos + ray_direction * t;
+
+        // convert the sensorPos from world space to camera space
+        float3 cameraSpaceSensorPos = mul(float4(sensorPos, 1.0f), view).xyz;
+
+        float DOFFocalLength = 50.0;
+
+        // elongate z by the focal length
+        cameraSpaceSensorPos.z *= DOFFocalLength;
+
+        // convert back into world space
+        return mul(float4(cameraSpaceSensorPos, 1.0f), view_inv).xyz;
+    }
+
+
+};
+
+uniform Camera camera;
+
+uniform struct {
+    float3 direction;
+    float3 emission;
+    float cosine_apparent_size;
+} sun;
+
+uniform struct {
+    int3 offset;
+    uint scale;
+    uint root_node_index;
+} tree;
+
 uniform float3 background_colour;
-uniform int3 root_offset;
 uniform uint2 resolution;
 uniform Settings settings;
 uniform uint frame_index;
-uniform float cos_sun_aparent_size;
 uniform uint accumulated_frame_index;
 uniform uint max_bounces;
-uniform uint tree_scale;
-uniform uint root_node_index;
 
 [Flags]
 enum Settings {
@@ -162,7 +211,7 @@ struct MaterialAndShadingData {
 
     float3 get_direct_lighting<S: ISampleGenerator>(inout S sampler) {
         float lighting = float(!shoot_shadow_ray(Ray3f(shading_data.computeRayOrigin(), sample_light(sampler))));
-        return material.eval(shading_data, sun_direction, lighting * sun_colour, sampler);
+        return material.eval(shading_data, sun.direction, lighting * sun.emission, sampler);
     }
 };
 
@@ -195,8 +244,8 @@ float3x3 create_rotation_matrix(dynamic_uniform float3 dir) {
 }
 
 float3 sample_light<S: ISampleGenerator>(inout S sampler) {
-    float3 dir = sample_cone(sampleNext2D(sampler), cos_sun_aparent_size);
-    return mul(create_rotation_matrix(sun_direction), dir);
+    float3 dir = sample_cone(sampleNext2D(sampler), sun.cosine_apparent_size);
+    return mul(create_rotation_matrix(sun.direction), dir);
 }
 
 bool shoot_shadow_ray(Ray3f ray) {
@@ -238,10 +287,10 @@ float3 compute_shading<S: ISampleGenerator>(HitInfo hit, float3 ray_dir, inout S
     return radiance;
 }
 
-float3 trace<S: ISampleGenerator>(float3 direction, inout S sampler) {
-    HitInfo hit = ray_cast({cameraPos % 1, direction}, false);
+float3 trace<S: ISampleGenerator>(Ray3f ray, inout S sampler) {
+    HitInfo hit = ray_cast(ray, false);
     if (!hit.Miss) {
-        return compute_shading(hit, direction, sampler);
+        return compute_shading(hit, ray.mDir, sampler);
     }
 
     return background_colour;

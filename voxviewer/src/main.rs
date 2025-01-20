@@ -60,6 +60,7 @@ struct App<'a> {
     tree64: svo_dag::Tree64,
     selected_material: usize,
     hide_ui: bool,
+    padded_uniform_buffer: encase::UniformBuffer<Vec<u8>>,
 }
 
 impl App<'_> {
@@ -368,51 +369,65 @@ impl App<'_> {
     }
 
     fn write_uniforms(
-        &self,
+        &mut self,
         transform: dolly::transform::Transform<dolly::handedness::RightHanded>,
     ) {
         let settings = &self.settings;
         let root_state = self.tree64.root_state();
 
-        self.queue.write_buffer(
-            &self.pipelines.uniform_buffer,
-            0,
-            bytemuck::bytes_of(&Uniforms {
-                p_inv: (glam::Mat4::perspective_infinite_reverse_rh(
-                    settings.vertical_fov.to_radians(),
-                    self.config.width as f32 / self.config.height as f32,
-                    0.0001,
-                ) * glam::Mat4::look_to_rh(
-                    glam::Vec3::ZERO,
-                    transform.forward(),
-                    transform.up(),
-                ))
-                .inverse(),
-                resolution: glam::UVec2::new(self.config.width, self.config.height),
-                camera_pos: glam::Vec3::from(transform.position).into(),
-                sun_emission: (glam::Vec3::from(settings.sun_colour) * settings.sun_strength)
+        let view_matrix =
+            glam::Mat4::look_to_rh(glam::Vec3::ZERO, transform.forward(), transform.up());
+
+        self.padded_uniform_buffer
+            .write(&Uniforms {
+                camera: CameraUniforms {
+                    p_inv: (glam::Mat4::perspective_infinite_reverse_rh(
+                        settings.vertical_fov.to_radians(),
+                        self.config.width as f32 / self.config.height as f32,
+                        0.0001,
+                    ) * view_matrix)
+                        .inverse(),
+                    pos: glam::Vec3::from(transform.position).into(),
+                    forward: transform.forward(),
+                    view: view_matrix,
+                    view_inv: view_matrix.inverse(),
+                    up: transform.up(),
+                    right: transform.right(),
+                },
+                sun: SunUniforms {
+                    emission: (glam::Vec3::from(settings.sun_colour) * settings.sun_strength)
+                        .into(),
+                    direction: glam::Vec3::new(
+                        settings.sun_long.to_radians().sin() * settings.sun_lat.to_radians().cos(),
+                        settings.sun_lat.to_radians().sin(),
+                        settings.sun_long.to_radians().cos() * settings.sun_lat.to_radians().cos(),
+                    )
                     .into(),
-                sun_direction: glam::Vec3::new(
-                    settings.sun_long.to_radians().sin() * settings.sun_lat.to_radians().cos(),
-                    settings.sun_lat.to_radians().sin(),
-                    settings.sun_long.to_radians().cos() * settings.sun_lat.to_radians().cos(),
-                )
-                .into(),
+                    cosine_apparent_size: settings.sun_apparent_size.to_radians().cos(),
+                },
+                tree: TreeUniforms {
+                    scale: root_state.num_levels as u32 * 2,
+                    root_node_index: root_state.index,
+                    offset: root_state.offset.into(),
+                },
+                resolution: glam::UVec2::new(self.config.width, self.config.height),
+
                 settings: (settings.enable_shadows as i32)
                     | (settings.accumulate_samples as i32) << 1
                     | (settings.show_heatmap as i32) << 2,
                 frame_index: self.frame_index,
                 accumulated_frame_index: self.accumulated_frame_index,
                 max_bounces: settings.max_bounces,
-                cos_sun_apparent_size: settings.sun_apparent_size.to_radians().cos(),
                 background_colour: (glam::Vec3::from(settings.background_colour)
                     * settings.background_strength)
                     .into(),
-                tree_scale: root_state.num_levels as u32 * 2,
-                root_node_index: root_state.index,
-                root_offset: root_state.offset.into(),
-                _padding: Default::default(),
-            }),
+            })
+            .unwrap();
+
+        self.queue.write_buffer(
+            &self.pipelines.uniform_buffer,
+            0,
+            self.padded_uniform_buffer.as_ref(),
         );
         self.queue.write_buffer(
             &self.pipelines.blit_uniform_buffer,
@@ -542,15 +557,13 @@ impl winit::application::ApplicationHandler for App<'_> {
                     self.accumulated_frame_index = 0;
                 }
 
-                let settings = &self.settings;
-
-                if !settings.accumulate_samples || settings.show_heatmap {
+                if !self.settings.accumulate_samples || self.settings.show_heatmap {
                     self.accumulated_frame_index = 0;
                 }
 
                 self.write_uniforms(transform);
 
-                if settings.accumulate_samples {
+                if self.settings.accumulate_samples {
                     self.accumulated_frame_index += 1;
                 }
                 self.frame_index += 1;
@@ -920,6 +933,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         tree64,
         selected_material: 0,
         hide_ui: false,
+        padded_uniform_buffer: encase::UniformBuffer::new(vec![]),
     };
 
     event_loop.run_app(&mut app).unwrap()
@@ -1028,24 +1042,42 @@ impl From<glam::IVec3> for IVec3A {
     }
 }
 
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-#[repr(C)]
-struct Uniforms {
+#[derive(encase::ShaderType)]
+struct CameraUniforms {
     p_inv: glam::Mat4,
-    camera_pos: Vec3A,
-    sun_direction: Vec3A,
-    sun_emission: Vec3A,
-    background_colour: Vec3A,
-    root_offset: IVec3A,
+    view: glam::Mat4,
+    view_inv: glam::Mat4,
+    pos: glam::Vec3,
+    forward: glam::Vec3,
+    up: glam::Vec3,
+    right: glam::Vec3,
+}
+
+#[derive(encase::ShaderType)]
+struct SunUniforms {
+    direction: glam::Vec3,
+    emission: glam::Vec3,
+    cosine_apparent_size: f32,
+}
+
+#[derive(encase::ShaderType)]
+struct TreeUniforms {
+    offset: glam::IVec3,
+    scale: u32,
+    root_node_index: u32,
+}
+
+#[derive(encase::ShaderType)]
+struct Uniforms {
+    camera: CameraUniforms,
+    sun: SunUniforms,
+    tree: TreeUniforms,
+    background_colour: glam::Vec3,
     resolution: glam::UVec2,
     settings: i32,
     frame_index: u32,
-    cos_sun_apparent_size: f32,
     accumulated_frame_index: u32,
     max_bounces: u32,
-    tree_scale: u32,
-    root_node_index: u32,
-    _padding: [u32; 3],
 }
 
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod, Default)]
@@ -1241,7 +1273,7 @@ impl Pipelines {
             trace_bgl,
             uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,
-                size: std::mem::size_of::<Uniforms>() as _,
+                size: 1024,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
