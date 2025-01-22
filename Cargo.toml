@@ -1,39 +1,22 @@
 [package]
-name = "markov"
+name = "tree64"
 version = "0.1.0"
 edition = "2021"
 
-[lib]
-crate-type = ["cdylib"]
-
 [dependencies]
-anyhow = "1.0.95"
-rand = { version = "0.8.5", features = ["small_rng"] }
-tev_client = "0.5.2"
-numpy = "0.23.0"
-pyo3 = { version = "0.23", features = ["extension-module"] }
-memchr = "2.7.4"
-rayon = "1.10.0"
-block-mesh = "0.2.0"
-bytemuck = { version = "1.21.0", features = ["derive"] }
-ndshape = "0.3.0"
 arrayvec = "0.7.6"
-ordered-float = "4.6.0"
-num-traits = "0.2.19"
+bytemuck = { version = "1.21.0", features = ["derive"] }
 fnv = "1.0.7"
+glam = "0.29"
 hashbrown = "0.15.2"
-wfc = { path = "wfc" }
-svo_dag = { path = "svo_dag" }
-zstd = "0.13.2"
-dot_vox = "5.1.1"
-glam = "0.29.2"
-
-[build-dependencies]
-xml = "0.8.20"
-
-[profile.release-with-debug]
-inherits = "release"
-debug = true
 
 [workspace]
-members = [".", "svo_dag", "voxviewer", "wfc"]
+members = [".", "fuzz"]
+
+[dev-dependencies]
+criterion = "0.5.1"
+dot_vox = "5.1.1"
+
+[[bench]]
+name = "benchmarks"
+harness = false
