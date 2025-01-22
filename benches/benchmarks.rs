@@ -33,6 +33,15 @@ fn benchmark(c: &mut Criterion) {
             black_box(tree);
         })
     });
+    c.bench_function("billion_voxel_deletion", |b| {
+        b.iter(|| {
+            let empty_slice: &[u8] = &[];
+            let mut tree = tree64::Tree64::new((empty_slice, [0; 3]));
+            tree.modify_nodes_in_box([0; 3], [1024; 3], Some(1));
+            let range = tree.modify_nodes_in_box([1; 3], [1024 - 1; 3], None);
+            black_box(range)
+        })
+    });
 }
 
 criterion_group!(benches, benchmark);
