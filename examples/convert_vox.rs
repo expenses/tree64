@@ -17,10 +17,10 @@ fn main() {
             + voxel.z as usize * model.size.x as usize * model.size.y as usize] = voxel.i;
     }
 
-    let tree = tree64::Tree64::new(
-        &array,
+    let tree = tree64::Tree64::new((
+        &array[..],
         [model.size.x as _, model.size.y as _, model.size.z as _],
-    );
+    ));
 
     tree.serialize(std::fs::File::create(&tree_filename).unwrap())
         .unwrap();

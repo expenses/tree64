@@ -1,6 +1,68 @@
 use std::fmt::Debug;
 use std::io;
 
+pub trait VoxelModel<T> {
+    fn dimensions(&self) -> [u32; 3];
+
+    fn access(&self, coord: [usize; 3]) -> Option<T>;
+}
+
+struct FlatArray<'a, T> {
+    values: &'a [T],
+    dimensions: [u32; 3],
+}
+
+impl<T: PartialEq + Clone + Default> VoxelModel<T> for FlatArray<'_, T> {
+    fn dimensions(&self) -> [u32; 3] {
+        self.dimensions
+    }
+
+    fn access(&self, [x, y, z]: [usize; 3]) -> Option<T> {
+        if x >= self.dimensions[0] as usize
+            || y >= self.dimensions[1] as usize
+            || z >= self.dimensions[2] as usize
+        {
+            return None;
+        }
+
+        self.values
+            .get(
+                x + y * self.dimensions[0] as usize
+                    + z * self.dimensions[0] as usize * self.dimensions[1] as usize,
+            )
+            .cloned()
+            .filter(|value| *value != T::default())
+    }
+}
+
+impl<T: PartialEq + Clone + Default> VoxelModel<T> for (&'_ [T], [u32; 3]) {
+    fn dimensions(&self) -> [u32; 3] {
+        FlatArray {
+            values: self.0,
+            dimensions: self.1,
+        }
+        .dimensions()
+    }
+
+    fn access(&self, coord: [usize; 3]) -> Option<T> {
+        FlatArray {
+            values: self.0,
+            dimensions: self.1,
+        }
+        .access(coord)
+    }
+}
+
+impl<T: PartialEq + Clone + Default, M: VoxelModel<T>> VoxelModel<T> for &'_ M {
+    fn dimensions(&self) -> [u32; 3] {
+        M::dimensions(self)
+    }
+
+    fn access(&self, coord: [usize; 3]) -> Option<T> {
+        M::access(self, coord)
+    }
+}
+
 #[repr(C, packed)]
 #[derive(
     Default, Debug, Clone, Copy, std::hash::Hash, PartialEq, bytemuck::Pod, bytemuck::Zeroable,
@@ -107,9 +169,9 @@ impl Edits {
 }
 
 #[derive(Debug)]
-pub struct Tree64 {
+pub struct Tree64<T> {
     pub nodes: VecWithCaching<Node>,
-    pub data: VecWithCaching<u8>,
+    pub data: VecWithCaching<T>,
     pub stats: Stats,
     pub edits: Edits,
 }
@@ -119,8 +181,18 @@ fn test_tree_node_size() {
     assert_eq!(std::mem::size_of::<Node>(), 4 + 8);
 }
 
-impl Tree64 {
-    fn insert_values(&mut self, values: &[u8]) -> u32 {
+impl<
+        T: std::hash::Hash
+            + Clone
+            + Copy
+            + Default
+            + PartialEq
+            + Debug
+            + bytemuck::Pod
+            + bytemuck::Zeroable,
+    > Tree64<T>
+{
+    fn insert_values(&mut self, values: &[T]) -> u32 {
         if values.is_empty() {
             return 0;
         }
@@ -201,8 +273,9 @@ impl Tree64 {
         index
     }
 
-    pub fn new(array: &[u8], dims: [usize; 3]) -> Self {
-        let mut scale = dims[0].max(dims[1]).max(dims[2]).next_power_of_two() as u32;
+    pub fn new<M: VoxelModel<T>>(model: M) -> Self {
+        let dims = model.dimensions();
+        let mut scale = dims[0].max(dims[1]).max(dims[2]).next_power_of_two();
         scale = scale.max(4);
         if scale.ilog2() % 2 == 1 {
             scale *= 2;
@@ -214,7 +287,7 @@ impl Tree64 {
             stats: Default::default(),
             edits: Default::default(),
         };
-        let root = this.insert(array, dims, [0; 3], scale);
+        let root = this.insert(&model, [0; 3], scale);
         let root_index = this.insert_nodes(&[root]);
         this.edits.push(RootState {
             index: root_index,
@@ -253,7 +326,7 @@ impl Tree64 {
         current_len..self.nodes.len()
     }
 
-    pub fn modify(&mut self, at: [i32; 3], value: u8) -> UpdatedRanges {
+    pub fn modify(&mut self, at: [i32; 3], value: Option<T>) -> UpdatedRanges {
         self.modify_nodes_in_box(at, [at[0] + 1, at[1] + 1, at[2] + 1], value)
     }
 
@@ -261,7 +334,7 @@ impl Tree64 {
         &mut self,
         min: [i32; 3],
         max: [i32; 3],
-        value: u8,
+        value: Option<T>,
     ) -> UpdatedRanges {
         let num_data = self.data.len();
         let num_nodes = self.nodes.len();
@@ -287,7 +360,6 @@ impl Tree64 {
             .get_intersection(&BoundingBox::from_levels(root_state.num_levels))
             .map(|intersection| intersection != bbox)
             .unwrap_or(true)
-            && value != 0
         {
             let index_of_existing_root = 1 + 4 + 16;
             root_state.index = self.insert_nodes(&[Node::new(
@@ -320,7 +392,7 @@ impl Tree64 {
                 for y in intersection.min.y..intersection.max.y {
                     for z in intersection.min.z..intersection.max.z {
                         let index = x + y * 4 + z * 16;
-                        pop_masked_data.set(index, Some(value).filter(|&v| v != 0));
+                        pop_masked_data.set(index, value);
                     }
                 }
             }
@@ -397,7 +469,7 @@ impl Tree64 {
                     if intersection == node_bbox {
                         item.children.set(
                             child_index,
-                            if value > 0 {
+                            if let Some(value) = value {
                                 // leaf node for the specific value.
                                 let mut child_node =
                                     Node::new(true, self.insert_values(&[value; 64]), !0);
@@ -477,15 +549,12 @@ impl Tree64 {
         }
     }
 
-    fn insert(&mut self, array: &[u8], dims: [usize; 3], offset: [usize; 3], scale: u32) -> Node {
+    fn insert<M: VoxelModel<T>>(&mut self, model: &M, offset: [usize; 3], scale: u32) -> Node {
         let access = |mut x, mut y, mut z| {
             x += offset[0];
             y += offset[1];
             z += offset[2];
-            match array.get(x + y * dims[0] + z * dims[0] * dims[1]) {
-                Some(&value) if x < dims[0] && y < dims[1] => value,
-                _ => 0,
-            }
+            model.access([x, y, z])
         };
 
         if scale == 4 {
@@ -495,7 +564,7 @@ impl Tree64 {
                 for y in 0..4 {
                     for x in 0..4 {
                         let value = access(x, y, z);
-                        if value != 0 {
+                        if let Some(value) = value {
                             vec.push(value);
                             bitmask |= 1 << (z * 16 + y * 4 + x) as u64;
                         }
@@ -512,8 +581,7 @@ impl Tree64 {
                 for y in 0..4 {
                     for x in 0..4 {
                         let value = self.insert(
-                            array,
-                            dims,
+                            model,
                             [
                                 offset[0] + x * new_scale as usize,
                                 offset[1] + y * new_scale as usize,
@@ -555,7 +623,7 @@ impl Tree64 {
         reader.read_exact(bytemuck::bytes_of_mut(&mut num_data))?;
         let mut this = Self {
             nodes: VecWithCaching::from_vec(vec![Node::default(); num_nodes as usize]),
-            data: VecWithCaching::from_vec(vec![0; num_data as usize]),
+            data: VecWithCaching::from_vec(vec![T::default(); num_data as usize]),
             stats: Default::default(),
             edits: Edits {
                 root_states: vec![RootState {
@@ -571,7 +639,7 @@ impl Tree64 {
         Ok(this)
     }
 
-    pub fn get_value_at(&self, pos: [u32; 3]) -> u8 {
+    pub fn get_value_at(&self, pos: [u32; 3]) -> Option<T> {
         let pos = glam::UVec3::from(pos);
         let state = self.root_state();
         let mut node = self.nodes[state.index as usize];
@@ -583,7 +651,7 @@ impl Tree64 {
             if let Some(child_node_index) = node.get_index_for_child(child_index) {
                 node = self.nodes[child_node_index as usize];
             } else {
-                return 0;
+                return None;
             }
         }
 
@@ -592,7 +660,6 @@ impl Tree64 {
         let child_index = (pos % 4).dot(glam::UVec3::new(1, 4, 16));
         node.get_index_for_child(child_index)
             .map(|index| self.data[index as usize])
-            .unwrap_or(0)
     }
 }
 
@@ -608,11 +675,21 @@ impl CompactRange {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct VecWithCaching<T, Hasher = fnv::FnvBuildHasher> {
     pub inner: Vec<T>,
     cache: hashbrown::HashTable<CompactRange>,
     _phantom: std::marker::PhantomData<Hasher>,
+}
+
+impl<T, Hasher> Default for VecWithCaching<T, Hasher> {
+    fn default() -> Self {
+        Self {
+            inner: Default::default(),
+            cache: Default::default(),
+            _phantom: Default::default(),
+        }
+    }
 }
 
 impl<T: std::hash::Hash + Clone + PartialEq + Debug, Hasher: std::hash::BuildHasher + Default>
@@ -693,7 +770,7 @@ pub struct UpdatedRanges {
 #[test]
 fn test_pm() {
     let mut x = PopMaskedData::<u8>::default();
-    for i in (0..64) {
+    for i in 0..64 {
         x.set(i, Some(1));
     }
     assert_eq!(&x.as_compact()[..], &[1; 64]);
@@ -711,7 +788,7 @@ fn test_pm() {
     }
     assert_eq!(&x.as_compact()[..], &[]);
     let mut x = PopMaskedData::<u8>::default();
-    for i in (0..64) {
+    for i in 0..64 {
         x.set(i, Some(1));
     }
     x.set(1, None);
@@ -811,7 +888,7 @@ impl BoundingBox {
 #[test]
 fn test_tree() {
     {
-        let tree = Tree64::new(&[1, 1, 1, 1], [2, 2, 1]);
+        let tree = Tree64::new((&[1, 1, 1, 1][..], [2, 2, 1]));
         dbg!(&tree.data, &tree.nodes);
         assert_eq!(&*tree.data, &[1; 4]);
         assert_eq!({ tree.nodes[0].is_leaf_and_ptr }, 1);
@@ -820,15 +897,18 @@ fn test_tree() {
         for x in 0..2 {
             for y in 0..2 {
                 for z in 0..2 {
-                    assert_eq!(tree.get_value_at([x, y, z]), if z == 1 { 0 } else { 1 });
+                    assert_eq!(
+                        tree.get_value_at([x, y, z]),
+                        if z == 1 { None } else { Some(1) }
+                    );
                 }
             }
         }
     }
 
     {
-        let array = &[1, 1, 1, 1, 1, 0, 1, 1];
-        let tree = Tree64::new(array, [2, 2, 2]);
+        let array = &[1_u8, 1, 1, 1, 1, 0, 1, 1];
+        let tree = Tree64::new((&array[..], [2_u32, 2, 2]));
         assert_eq!(&*tree.data, &[1; 7]);
         assert_eq!({ tree.nodes[0].is_leaf_and_ptr }, 1);
         assert_eq!(
@@ -843,7 +923,8 @@ fn test_tree() {
                 for z in 0..2 {
                     assert_eq!(
                         tree.get_value_at([x, y, z]),
-                        array[x as usize + y as usize * 2 + z as usize * 4]
+                        Some(array[x as usize + y as usize * 2 + z as usize * 4])
+                            .filter(|v| *v != 0)
                     );
                 }
             }
@@ -854,7 +935,7 @@ fn test_tree() {
         let mut values = [1; 64];
         values[63] = 0;
 
-        let tree = Tree64::new(&values, [4, 4, 4]);
+        let tree = Tree64::new((&values[..], [4, 4, 4]));
         assert_eq!(&*tree.data, &[1; 63]);
         assert_eq!({ tree.nodes[0].is_leaf_and_ptr }, 1);
         assert_eq!({ tree.nodes[0].pop_mask }, (!0 & !(1 << 63)));
@@ -864,7 +945,11 @@ fn test_tree() {
                 for z in 0..4 {
                     assert_eq!(
                         tree.get_value_at([x, y, z]),
-                        if x == 3 && y == 3 && z == 3 { 0 } else { 1 }
+                        if x == 3 && y == 3 && z == 3 {
+                            None
+                        } else {
+                            Some(1)
+                        }
                     );
                 }
             }
@@ -874,7 +959,7 @@ fn test_tree() {
     {
         let mut values = [1; 64];
         values[63] = 0;
-        let tree = Tree64::new(&values, [4, 4, 4]);
+        let tree = Tree64::new((&values[..], [4, 4, 4]));
 
         let mut data = Vec::new();
         tree.serialize(&mut data).unwrap();
@@ -884,12 +969,12 @@ fn test_tree() {
         assert_eq!(tree.edits, tree2.edits);
 
         let mut tree = tree;
-        let ranges = tree.modify([2, 2, 3], 0);
+        let ranges = tree.modify([2, 2, 3], None);
         assert_eq!(ranges.nodes, 1..2);
         assert!(ranges.data.is_empty(), "{:?}", tree.data);
 
         let mut tree = tree;
-        let ranges = tree.modify([0, 0, 0], 2);
+        let ranges = tree.modify([0, 0, 0], Some(2));
         assert_eq!(ranges.nodes, 2..3);
         assert_eq!(ranges.data.len(), 64 - 2);
     }
@@ -898,30 +983,30 @@ fn test_tree() {
 #[test]
 fn single_node_modifications() {
     {
-        let values = [1; 4 * 4 * 4];
-        let mut tree = Tree64::new(&values, [4; 3]);
+        let values = [1_u8; 4 * 4 * 4];
+        let mut tree = Tree64::new((&values[..], [4; 3]));
 
-        let ranges = tree.modify([3, 3, 3], 0);
+        let ranges = tree.modify([3, 3, 3], None);
         assert_eq!(ranges.nodes.len(), 1);
         assert!(ranges.data.is_empty());
     }
 
     {
-        let values = [1; 4 * 4 * 4];
-        let mut tree = Tree64::new(&values, [4; 3]);
+        let values = [1_u8; 4 * 4 * 4];
+        let mut tree = Tree64::new((&values[..], [4; 3]));
 
-        let ranges = tree.modify([3, 3, 3], 2);
+        let ranges = tree.modify([3, 3, 3], Some(2));
         dbg!(&tree.data[ranges.data.clone()]);
         assert_eq!(ranges.data.len(), 1);
         assert_eq!(ranges.nodes.len(), 1);
     }
 
     {
-        let values = [1; 16 * 16 * 16];
-        let mut tree = Tree64::new(&values, [16; 3]);
+        let values = [1_u8; 16 * 16 * 16];
+        let mut tree = Tree64::new((&values[..], [16; 3]));
         let updated_nodes = 64 + 1;
 
-        let ranges = tree.modify([5, 5, 5], 0);
+        let ranges = tree.modify([5, 5, 5], None);
         assert_eq!(ranges.nodes.len(), updated_nodes);
         assert!(ranges.data.is_empty());
 
@@ -930,7 +1015,11 @@ fn single_node_modifications() {
                 for z in 0..16 {
                     assert_eq!(
                         tree.get_value_at([x, y, z]),
-                        if x == 5 && y == 5 && z == 5 { 0 } else { 1 }
+                        if x == 5 && y == 5 && z == 5 {
+                            None
+                        } else {
+                            Some(1)
+                        }
                     );
                 }
             }
@@ -938,31 +1027,31 @@ fn single_node_modifications() {
     }
 
     {
-        let values = [1; 64 * 64 * 64];
-        let mut tree = Tree64::new(&values, [64; 3]);
+        let values = [1_u8; 64 * 64 * 64];
+        let mut tree = Tree64::new((&values[..], [64; 3]));
         let updated_nodes = 64 + 64 + 1;
 
-        let ranges = tree.modify([63, 63, 63], 0);
+        let ranges = tree.modify([63, 63, 63], None);
         assert!(ranges.data.is_empty());
         assert_eq!(ranges.nodes.len(), updated_nodes);
     }
 
     {
-        let values = [1; 64 * 64 * 64];
-        let mut tree = Tree64::new(&values, [64; 3]);
+        let values = [1_u8; 64 * 64 * 64];
+        let mut tree = Tree64::new((&values[..], [64; 3]));
         let updated_nodes = 64 + 64 + 1;
 
-        let ranges = tree.modify([63, 63, 63], 2);
+        let ranges = tree.modify([63, 63, 63], Some(2));
         assert_eq!(ranges.data.len(), 1);
         assert_eq!(ranges.nodes.len(), updated_nodes);
     }
 
     {
-        let values = [1; 64 * 64 * 64];
-        let mut tree = Tree64::new(&values, [64; 3]);
+        let values = [1_u8; 64 * 64 * 64];
+        let mut tree = Tree64::new((&values[..], [64; 3]));
         let updated_nodes = 64 + 64 + 1;
 
-        let ranges = tree.modify([0, 0, 0], 2);
+        let ranges = tree.modify([0, 0, 0], Some(2));
         assert_eq!(ranges.data.len(), 64);
         assert_eq!(ranges.nodes.len(), updated_nodes);
     }
@@ -972,36 +1061,36 @@ fn single_node_modifications() {
 fn modifications_in_box() {
     {
         let values = [1; 4 * 4 * 4];
-        let mut tree = Tree64::new(&values, [4; 3]);
+        let mut tree = Tree64::new((&values[..], [4; 3]));
 
-        let ranges = tree.modify_nodes_in_box([1; 3], [2; 3], 0);
+        let ranges = tree.modify_nodes_in_box([1; 3], [2; 3], None);
         assert_eq!(ranges.nodes.len(), 1);
         assert!(ranges.data.is_empty());
     }
 
     {
         let values = [1; 16 * 16 * 16];
-        let mut tree = Tree64::new(&values, [16; 3]);
+        let mut tree = Tree64::new((&values[..], [16; 3]));
 
-        let ranges = tree.modify_nodes_in_box([1; 3], [3; 3], 0);
+        let ranges = tree.modify_nodes_in_box([1; 3], [3; 3], None);
         assert_eq!(ranges.nodes.len(), 64 + 1);
         assert!(ranges.data.is_empty());
     }
 
     {
         let values = [1; 16 * 16 * 16];
-        let mut tree = Tree64::new(&values, [16; 3]);
+        let mut tree = Tree64::new((&values[..], [16; 3]));
 
-        let ranges = tree.modify_nodes_in_box([0; 3], [3; 3], 2);
+        let ranges = tree.modify_nodes_in_box([0; 3], [3; 3], Some(2));
         assert_eq!(ranges.nodes.len(), 64 + 1);
         assert_eq!(ranges.data.len(), 64);
     }
 
     {
         let values = [1; 16 * 16 * 16];
-        let mut tree = Tree64::new(&values, [16; 3]);
+        let mut tree = Tree64::new((&values[..], [16; 3]));
 
-        let ranges = tree.modify_nodes_in_box([0; 3], [3; 3], 2);
+        let ranges = tree.modify_nodes_in_box([0; 3], [3; 3], Some(2));
 
         assert_eq!(ranges.data.len(), 64);
         assert_eq!(ranges.nodes.len(), 64 + 1);
@@ -1009,9 +1098,9 @@ fn modifications_in_box() {
 
     {
         let values = [1; 16 * 16 * 16];
-        let mut tree = Tree64::new(&values, [16; 3]);
+        let mut tree = Tree64::new((&values[..], [16; 3]));
 
-        let ranges = tree.modify_nodes_in_box([0; 3], [4; 3], 2);
+        let ranges = tree.modify_nodes_in_box([0; 3], [4; 3], Some(2));
         assert_eq!(ranges.nodes.len(), 64 + 1);
     }
 }
@@ -1019,10 +1108,10 @@ fn modifications_in_box() {
 #[test]
 fn advanced_modifications_in_box() {
     {
-        let values = [1; 64 * 64 * 64];
-        let mut tree = Tree64::new(&values, [64; 3]);
+        let values = [1_u8; 64 * 64 * 64];
+        let mut tree = Tree64::new((&values[..], [64; 3]));
 
-        let ranges = tree.modify_nodes_in_box([0; 3], [3; 3], 2);
+        let ranges = tree.modify_nodes_in_box([0; 3], [3; 3], Some(2));
         dbg!(tree.data);
 
         assert_eq!(ranges.data.len(), 64);
@@ -1030,10 +1119,10 @@ fn advanced_modifications_in_box() {
     }
 
     {
-        let values = [1; 64 * 64 * 64];
-        let mut tree = Tree64::new(&values, [64; 3]);
+        let values = [1_u8; 64 * 64 * 64];
+        let mut tree = Tree64::new((&values[..], [64; 3]));
 
-        let ranges = tree.modify_nodes_in_box([0; 3], [3; 3], 2);
+        let ranges = tree.modify_nodes_in_box([0; 3], [3; 3], Some(2));
         dbg!(tree.data);
 
         assert_eq!(ranges.data.len(), 64);
@@ -1044,11 +1133,11 @@ fn advanced_modifications_in_box() {
 #[test]
 fn modifications_on_empty_spaces() {
     {
-        let mut values = [0; 16 * 16 * 16];
+        let mut values = [0_u8; 16 * 16 * 16];
         values[3 * 16 + 3 * 4 + 3] = 1;
-        let mut tree = Tree64::new(&values, [16; 3]);
+        let mut tree = Tree64::new((&values[..], [16; 3]));
 
-        let ranges = tree.modify([0; 3], 1);
+        let ranges = tree.modify([0; 3], Some(1));
         assert_eq!(
             ranges,
             UpdatedRanges {
@@ -1059,11 +1148,11 @@ fn modifications_on_empty_spaces() {
     }
 
     {
-        let values = [0; 16 * 16 * 16];
-        let mut tree = Tree64::new(&values, [16; 3]);
+        let values = [0_u8; 16 * 16 * 16];
+        let mut tree = Tree64::new((&values[..], [16; 3]));
         dbg!(&tree.nodes);
 
-        let ranges = tree.modify([0; 3], 1);
+        let ranges = tree.modify([0; 3], Some(1));
         dbg!(&tree.nodes);
         assert_eq!(
             ranges,
@@ -1075,11 +1164,11 @@ fn modifications_on_empty_spaces() {
     }
 
     {
-        let values = [0; 64 * 64 * 64];
-        let mut tree = Tree64::new(&values, [64; 3]);
+        let values = [0_u8; 64 * 64 * 64];
+        let mut tree = Tree64::new((&values[..], [64; 3]));
         dbg!(&tree.nodes);
 
-        let ranges = tree.modify([0; 3], 1);
+        let ranges = tree.modify([0; 3], Some(1));
         dbg!(&tree.nodes);
         assert_eq!(
             ranges,
@@ -1091,11 +1180,11 @@ fn modifications_on_empty_spaces() {
     }
 
     {
-        let values = [0; 64 * 64 * 64];
-        let mut tree = Tree64::new(&values, [64; 3]);
+        let values = [0_u8; 64 * 64 * 64];
+        let mut tree = Tree64::new((&values[..], [64; 3]));
         dbg!(&tree.nodes);
 
-        let ranges = tree.modify_nodes_in_box([0; 3], [16; 3], 1);
+        let ranges = tree.modify_nodes_in_box([0; 3], [16; 3], Some(1));
         dbg!(&tree.nodes);
         assert_eq!(
             ranges,
@@ -1110,10 +1199,10 @@ fn modifications_on_empty_spaces() {
     {
         let values = [0; 4 * 4 * 4];
 
-        let mut tree = Tree64::new(&values, [4; 3]);
+        let mut tree = Tree64::new((&values[..], [4; 3]));
         dbg!(&tree.nodes);
 
-        let ranges = tree.modify_nodes_in_box([2; 3], [4; 3], 1);
+        let ranges = tree.modify_nodes_in_box([2; 3], [4; 3], Some(1));
         dbg!(&tree.nodes);
         assert_eq!(
             ranges,
@@ -1127,10 +1216,25 @@ fn modifications_on_empty_spaces() {
     {
         let values = [0; 16 * 16 * 16];
 
-        let mut tree = Tree64::new(&values, [16; 3]);
+        let mut tree = Tree64::new((&values[..], [16; 3]));
         dbg!(&tree.nodes);
 
-        let ranges = tree.modify_nodes_in_box([2; 3], [4; 3], 1);
+        let ranges = tree.modify_nodes_in_box([2; 3], [4; 3], Some(1));
+        dbg!(&tree.nodes);
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                data: 0..8,
+                nodes: 1..3,
+            }
+        );
+    }
+
+    {
+        let mut tree = Tree64::new((&[0; 16 * 16 * 16][..], [16; 3]));
+        dbg!(&tree.nodes);
+
+        let ranges = tree.modify_nodes_in_box([6; 3], [8; 3], Some(1));
         dbg!(&tree.nodes);
         assert_eq!(
             ranges,
@@ -1144,26 +1248,9 @@ fn modifications_on_empty_spaces() {
     {
         let values = [0; 16 * 16 * 16];
 
-        let mut tree = Tree64::new(&values, [16; 3]);
-        dbg!(&tree.nodes);
+        let mut tree = Tree64::new((&values[..], [16; 3]));
 
-        let ranges = tree.modify_nodes_in_box([6; 3], [8; 3], 1);
-        dbg!(&tree.nodes);
-        assert_eq!(
-            ranges,
-            UpdatedRanges {
-                data: 0..8,
-                nodes: 1..3,
-            }
-        );
-    }
-
-    {
-        let values = [0; 16 * 16 * 16];
-
-        let mut tree = Tree64::new(&values, [16; 3]);
-
-        let ranges = tree.modify_nodes_in_box([0; 3], [5; 3], 1);
+        let ranges = tree.modify_nodes_in_box([0; 3], [5; 3], Some(1));
         assert_eq!(
             ranges,
             UpdatedRanges {
@@ -1176,9 +1263,9 @@ fn modifications_on_empty_spaces() {
     {
         let values = [0; 16 * 16 * 16];
 
-        let mut tree = Tree64::new(&values, [16; 3]);
+        let mut tree = Tree64::new((&values[..], [16; 3]));
 
-        let ranges = tree.modify_nodes_in_box([4; 3], [12; 3], 1);
+        let ranges = tree.modify_nodes_in_box([4; 3], [12; 3], Some(1));
         assert_eq!(
             ranges,
             UpdatedRanges {
@@ -1190,18 +1277,18 @@ fn modifications_on_empty_spaces() {
 
     {
         let values = [1; 16 * 16 * 16];
-        let mut tree = Tree64::new(&values, [16; 3]);
+        let mut tree = Tree64::new((&values[..], [16; 3]));
 
-        let ranges = tree.modify_nodes_in_box([1; 3], [3; 3], 0);
+        let ranges = tree.modify_nodes_in_box([1; 3], [3; 3], None);
         assert_eq!(ranges.nodes.len(), 64 + 1);
         assert!(ranges.data.is_empty());
     }
 
     {
         let values = [1; 16 * 16 * 16];
-        let mut tree = Tree64::new(&values, [16; 3]);
+        let mut tree = Tree64::new((&values[..], [16; 3]));
 
-        let ranges = tree.modify_nodes_in_box([0; 3], [16; 3], 0);
+        let ranges = tree.modify_nodes_in_box([0; 3], [16; 3], None);
         assert_eq!(ranges.nodes.len(), 1);
         assert!(ranges.data.is_empty());
     }
@@ -1209,33 +1296,42 @@ fn modifications_on_empty_spaces() {
 
 #[test]
 fn outside_modifications() {
-    let mut tree = Tree64::new(&[], [0; 3]);
+    let empty_slice: &[u8] = &[];
+
+    let mut tree = Tree64::new((empty_slice, [0; 3]));
     assert_eq!(
-        tree.modify_nodes_in_box([64; 3], [65; 3], 1),
+        tree.modify_nodes_in_box([64; 3], [65; 3], Some(1)),
         UpdatedRanges {
             nodes: 1..9,
             data: 0..1
         }
     );
 
-    let mut tree = Tree64::new(&[], [0; 3]);
-    assert_eq!(tree.modify_nodes_in_box([-100; 3], [2; 3], 1).data, 0..64);
+    let mut tree = Tree64::new((empty_slice, [0; 3]));
+    assert_eq!(
+        tree.modify_nodes_in_box([-100; 3], [2; 3], Some(1)).data,
+        0..64
+    );
 }
 
 #[test]
 fn modify_box_wierd_sizes() {
     {
-        let values = [0; 64 * 64 * 64];
-        let mut tree = Tree64::new(&values, [64; 3]);
+        let values = [0_u8; 64 * 64 * 64];
+        let mut tree = Tree64::new((&values[..], [64; 3]));
 
-        tree.modify([10; 3], 1);
+        tree.modify([10; 3], Some(1));
 
         for x in 0..64 {
             for y in 0..64 {
                 for z in 0..64 {
                     assert_eq!(
                         tree.get_value_at([x, y, z]),
-                        if x == 10 && y == 10 && z == 10 { 1 } else { 0 },
+                        if x == 10 && y == 10 && z == 10 {
+                            Some(1)
+                        } else {
+                            None
+                        },
                         "{} {} {}",
                         x,
                         y,
@@ -1247,17 +1343,21 @@ fn modify_box_wierd_sizes() {
     }
 
     {
-        let values = [0; 64 * 64 * 64];
-        let mut tree = Tree64::new(&values, [64; 3]);
+        let values = [0_u8; 64 * 64 * 64];
+        let mut tree = Tree64::new((&values[..], [64; 3]));
 
-        tree.modify_nodes_in_box([0; 3], [20; 3], 1);
+        tree.modify_nodes_in_box([0; 3], [20; 3], Some(1));
 
         for x in 0..64 {
             for y in 0..64 {
                 for z in 0..64 {
                     assert_eq!(
                         tree.get_value_at([x, y, z]),
-                        if x < 20 && y < 20 && z < 20 { 1 } else { 0 },
+                        if x < 20 && y < 20 && z < 20 {
+                            Some(1)
+                        } else {
+                            None
+                        },
                         "{:?}",
                         (x, y, z)
                     );
@@ -1267,10 +1367,10 @@ fn modify_box_wierd_sizes() {
     }
 
     for start in 0..44 {
-        let values = [0; 64 * 64 * 64];
-        let mut tree = Tree64::new(&values, [64; 3]);
+        let values = [0_u8; 64 * 64 * 64];
+        let mut tree = Tree64::new((&values[..], [64; 3]));
 
-        tree.modify_nodes_in_box([start; 3], [start + 20, start + 20, start + 20], 1);
+        tree.modify_nodes_in_box([start; 3], [start + 20, start + 20, start + 20], Some(1));
 
         let start = start as u32;
 
@@ -1286,9 +1386,9 @@ fn modify_box_wierd_sizes() {
                             && z >= start
                             && z < (start + 20)
                         {
-                            1
+                            Some(1)
                         } else {
-                            0
+                            None
                         },
                         "{:?} {:?}",
                         (x, y, z),
@@ -1302,7 +1402,7 @@ fn modify_box_wierd_sizes() {
 
 #[test]
 fn test_tiny() {
-    let tree = Tree64::new(&[0], [1; 3]);
+    Tree64::new((&[0][..], [1; 3]));
 }
 
 #[test]
@@ -1316,11 +1416,11 @@ fn test_sponza_editing() {
     for x in min.x - 2..max.x + 2 {
         for y in min.y - 2..max.y + 2 {
             for z in min.z - 2..max.z + 2 {
-                assert_eq!(tree.get_value_at([x, y, z]), 0);
+                assert_eq!(tree.get_value_at([x, y, z]), None);
             }
         }
     }
-    tree.modify_nodes_in_box(min.as_ivec3().into(), max.as_ivec3().into(), 1);
+    tree.modify_nodes_in_box(min.as_ivec3().into(), max.as_ivec3().into(), Some(1));
     for x in min.x - 3..max.x + 3 {
         for y in min.y - 3..max.y + 3 {
             for z in min.z - 3..max.z + 3 {
@@ -1331,9 +1431,9 @@ fn test_sponza_editing() {
                     && y >= min.y
                     && y < max.y
                 {
-                    1
+                    Some(1)
                 } else {
-                    0
+                    None
                 };
                 assert_eq!(tree.get_value_at([x, y, z]), expected);
             }
@@ -1343,7 +1443,7 @@ fn test_sponza_editing() {
     for x in min.x - 2..max.x + 2 {
         for y in min.y - 2..max.y + 2 {
             for z in min.z - 2..max.z + 2 {
-                assert_eq!(tree.get_value_at([x, y, z]), 0);
+                assert_eq!(tree.get_value_at([x, y, z]), None);
             }
         }
     }
@@ -1351,9 +1451,10 @@ fn test_sponza_editing() {
 
 #[test]
 fn trillion_voxel_deletion() {
-    let mut tree = Tree64::new(&[], [0; 3]);
-    tree.modify_nodes_in_box([0; 3], [10000; 3], 1);
-    let range = tree.modify_nodes_in_box([1; 3], [10000 - 1; 3], 0);
+    let empty_slice: &[u8] = &[];
+    let mut tree = Tree64::new((empty_slice, [0; 3]));
+    tree.modify_nodes_in_box([0; 3], [10000; 3], Some(1));
+    let range = tree.modify_nodes_in_box([1; 3], [10000 - 1; 3], None);
     assert_eq!(range.data.len(), 0);
     assert_eq!(range.nodes.len(), 2095);
 }

@@ -19,10 +19,8 @@ fn benchmark(c: &mut Criterion) {
 
     c.bench_function("function_name", |b| {
         b.iter(|| {
-            let tree = tree64::Tree64::new(
-                &array,
-                [model.size.x as _, model.size.y as _, model.size.z as _],
-            );
+            let tree =
+                tree64::Tree64::new((&array[..], [model.size.x, model.size.y, model.size.z]));
             black_box(tree);
         })
     });

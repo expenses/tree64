@@ -16,10 +16,7 @@ fuzz_target!(|data: Array| {
         return;
     }
 
-    let mut tree = tree64::Tree64::new(
-        &data.array,
-        [size.x as usize, size.y as usize, size.z as usize],
-    );
+    let mut tree = tree64::Tree64::new((&data.array[..], size.into()));
 
     for (min, max, value) in data.modifications {
         let min = glam::IVec3::from(min);
