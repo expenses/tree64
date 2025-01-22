@@ -1,3 +1,71 @@
+fn merge_vox_models(vox: dot_vox::DotVoxData) -> (Vec<u8>, glam::UVec3) {
+    dbg!(vox.models.len());
+
+    let root_transform = &vox.scenes[0];
+    let root_group = &vox.scenes[match root_transform {
+        dot_vox::SceneNode::Transform { child, .. } => *child as usize,
+        _ => panic!(),
+    }];
+    let children = match root_group {
+        dot_vox::SceneNode::Group { children, .. } => children,
+        _ => panic!(),
+    };
+
+    let mut models_and_positions: Vec<(glam::IVec3, glam::UVec3, &dot_vox::Model)> = Vec::new();
+
+    for child in children {
+        let (child, frames) = match &vox.scenes[*child as usize] {
+            dot_vox::SceneNode::Transform { frames, child, .. } => (child, frames),
+            _ => panic!(),
+        };
+
+        let translation = &frames[0].attributes["_t"];
+
+        let mut splits = translation.split(' ');
+
+        let x = splits.next().unwrap().parse::<i32>().unwrap();
+        let y = splits.next().unwrap().parse::<i32>().unwrap();
+        let z = splits.next().unwrap().parse::<i32>().unwrap();
+
+        let model = match &vox.scenes[*child as usize] {
+            dot_vox::SceneNode::Shape { models, .. } => models[0].model_id,
+            _ => panic!(),
+        };
+
+        let model = &vox.models[model as usize];
+
+        let size = glam::UVec3::new(model.size.x, model.size.y, model.size.z);
+
+        models_and_positions.push(((x, y, z).into(), size, model));
+    }
+
+    let mut min = glam::IVec3::splat(i32::MAX);
+    let mut max = glam::IVec3::splat(i32::MIN);
+
+    for &(pos, model_size, _) in &models_and_positions {
+        min = min.min(pos - (model_size / 2).as_ivec3());
+        max = max.max(pos + (model_size / 2).as_ivec3());
+    }
+
+    let size = max - min + 1;
+
+    let mut array = vec![0; size.x as usize * size.y as usize * size.z as usize];
+
+    for (pos, model_size, model) in models_and_positions {
+        let offset = pos - min - (model_size / 2).as_ivec3();
+
+        for voxel in &model.voxels {
+            let voxel_pos =
+                offset + glam::IVec3::new(voxel.x as i32, voxel.y as i32, voxel.z as i32);
+            array[voxel_pos.x as usize
+                + voxel_pos.y as usize * size.x as usize
+                + voxel_pos.z as usize * size.x as usize * size.y as usize] = voxel.i;
+        }
+    }
+
+    (array, size.as_uvec3())
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let vox_filename = args.next().unwrap();
@@ -5,22 +73,9 @@ fn main() {
 
     let vox = dot_vox::load(&vox_filename).unwrap();
 
-    //assert_eq!(vox.models.len(), 1, "Expected 1 model");
+    let (array, size) = merge_vox_models(vox);
 
-    let model = &vox.models[0];
-
-    let mut array = vec![0; model.size.x as usize * model.size.y as usize * model.size.z as usize];
-
-    for voxel in &model.voxels {
-        array[voxel.x as usize
-            + voxel.y as usize * model.size.x as usize
-            + voxel.z as usize * model.size.x as usize * model.size.y as usize] = voxel.i;
-    }
-
-    let tree = tree64::Tree64::new((
-        &array[..],
-        [model.size.x as _, model.size.y as _, model.size.z as _],
-    ));
+    let tree = tree64::Tree64::new((&array[..], size.into()));
 
     tree.serialize(std::fs::File::create(&tree_filename).unwrap())
         .unwrap();

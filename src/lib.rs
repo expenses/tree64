@@ -10,6 +10,7 @@ pub trait VoxelModel<T> {
 struct FlatArray<'a, T> {
     values: &'a [T],
     dimensions: [u32; 3],
+    empty_value: T,
 }
 
 impl<T: PartialEq + Clone + Default> VoxelModel<T> for FlatArray<'_, T> {
@@ -31,7 +32,7 @@ impl<T: PartialEq + Clone + Default> VoxelModel<T> for FlatArray<'_, T> {
                     + z * self.dimensions[0] as usize * self.dimensions[1] as usize,
             )
             .cloned()
-            .filter(|value| *value != T::default())
+            .filter(|value| *value != self.empty_value)
     }
 }
 
@@ -40,6 +41,7 @@ impl<T: PartialEq + Clone + Default> VoxelModel<T> for (&'_ [T], [u32; 3]) {
         FlatArray {
             values: self.0,
             dimensions: self.1,
+            empty_value: T::default(),
         }
         .dimensions()
     }
@@ -48,6 +50,7 @@ impl<T: PartialEq + Clone + Default> VoxelModel<T> for (&'_ [T], [u32; 3]) {
         FlatArray {
             values: self.0,
             dimensions: self.1,
+            empty_value: T::default(),
         }
         .access(coord)
     }
@@ -275,30 +278,6 @@ impl<
         }
 
         index
-    }
-
-    pub fn new_recursive<M: VoxelModel<T>>(model: M) -> Self {
-        let dims = model.dimensions();
-        let mut scale = dims[0].max(dims[1]).max(dims[2]).next_power_of_two();
-        scale = scale.max(4);
-        if scale.ilog2() % 2 == 1 {
-            scale *= 2;
-        }
-        let num_levels = scale.ilog(4) as _;
-        let mut this = Self {
-            nodes: Default::default(),
-            data: Default::default(),
-            stats: Default::default(),
-            edits: Default::default(),
-        };
-        let root = this.insert(&model, [0; 3], scale);
-        let root_index = this.insert_nodes(&[root]);
-        this.edits.push(RootState {
-            index: root_index,
-            num_levels,
-            offset: glam::IVec3::ZERO,
-        });
-        this
     }
 
     pub fn root_state(&self) -> RootState {
@@ -554,6 +533,14 @@ impl<
     }
 
     pub fn new<M: VoxelModel<T>>(model: M) -> Self {
+        Self::new_inner(model, true)
+    }
+
+    pub fn new_iterative<M: VoxelModel<T>>(model: M) -> Self {
+        Self::new_inner(model, false)
+    }
+
+    pub fn new_inner<M: VoxelModel<T>>(model: M, recursive: bool) -> Self {
         let dims = model.dimensions();
         let mut scale = dims[0].max(dims[1]).max(dims[2]).next_power_of_two();
         scale = scale.max(4);
@@ -587,6 +574,8 @@ impl<
 
         let root = if num_levels < 2 {
             get_leaf_node(&mut this, glam::UVec3::ZERO)
+        } else if recursive {
+            this.insert_from_model_recursive(&model, [0; 3], scale)
         } else {
             #[derive(Clone)]
             struct StackItem {
@@ -653,7 +642,6 @@ impl<
                     stack.pop();
                 }
             }
-
             root
         };
 
@@ -666,7 +654,12 @@ impl<
         this
     }
 
-    fn insert<M: VoxelModel<T>>(&mut self, model: &M, offset: [usize; 3], scale: u32) -> Node {
+    fn insert_from_model_recursive<M: VoxelModel<T>>(
+        &mut self,
+        model: &M,
+        offset: [usize; 3],
+        scale: u32,
+    ) -> Node {
         let access = |mut x, mut y, mut z| {
             x += offset[0];
             y += offset[1];
@@ -698,7 +691,7 @@ impl<
                 for y in 0..4 {
                     for x in 0..4 {
                         if let Some(child) = self
-                            .insert(
+                            .insert_from_model_recursive(
                                 model,
                                 [
                                     offset[0] + x * new_scale as usize,
