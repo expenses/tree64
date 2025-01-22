@@ -3,10 +3,10 @@
 use libfuzzer_sys::fuzz_target;
 
 #[derive(arbitrary::Arbitrary, Debug)]
-pub struct Array<'a> {
+pub struct Array {
     pub size: [u32; 3],
-    modifications: Vec<([i32; 3], [i32; 3], u8)>,
-    array: &'a [u8],
+    modifications: Vec<([i32; 3], [i32; 3], Option<u8>)>,
+    array: Vec<u8>,
 }
 
 fuzz_target!(|data: Array| {

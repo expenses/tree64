@@ -17,10 +17,19 @@ fn benchmark(c: &mut Criterion) {
             + voxel.z as usize * model.size.x as usize * model.size.y as usize] = voxel.i;
     }
 
-    c.bench_function("function_name", |b| {
+    c.bench_function("new_iterative", |b| {
         b.iter(|| {
             let tree =
                 tree64::Tree64::new((&array[..], [model.size.x, model.size.y, model.size.z]));
+            black_box(tree);
+        })
+    });
+    c.bench_function("new_recursive", |b| {
+        b.iter(|| {
+            let tree = tree64::Tree64::new_recursive((
+                &array[..],
+                [model.size.x, model.size.y, model.size.z],
+            ));
             black_box(tree);
         })
     });

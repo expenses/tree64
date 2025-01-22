@@ -17,6 +17,7 @@
             nativeBuildInputs = [
               cargo-fuzz
               linuxPackages_latest.perf
+              hotspot
             ];
             LD_LIBRARY_PATH = lib.makeLibraryPath [stdenv.cc.cc];
           };

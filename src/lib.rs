@@ -111,6 +111,10 @@ impl Node {
     fn range(&self) -> std::ops::Range<usize> {
         self.ptr() as usize..self.ptr() as usize + self.pop_mask.count_ones() as usize
     }
+
+    fn check_empty(&self) -> Option<Self> {
+        Some(*self).filter(|node| node.pop_mask != 0)
+    }
 }
 
 #[derive(PartialEq, Debug, Clone, Copy)]
@@ -273,7 +277,7 @@ impl<
         index
     }
 
-    pub fn new<M: VoxelModel<T>>(model: M) -> Self {
+    pub fn new_recursive<M: VoxelModel<T>>(model: M) -> Self {
         let dims = model.dimensions();
         let mut scale = dims[0].max(dims[1]).max(dims[2]).next_power_of_two();
         scale = scale.max(4);
@@ -445,8 +449,7 @@ impl<
 
         while let Some(mut item) = stack.last().cloned() {
             let index = stack.len() as u32 - 1;
-            let child_size = 4_u32.pow(item.node_level as u32 - 1);
-            let children_are_leaves = child_size == 4;
+            let children_are_leaves = item.node_level == 2;
 
             let going_up = last_parent == Some(index);
             let mut any_pushed = false;
@@ -455,6 +458,8 @@ impl<
 
             if !going_up {
                 for child_index in 0..64 {
+                    let child_size = 4_u32.pow(item.node_level as u32 - 1);
+
                     let pos = glam::UVec3::new(child_index, child_index / 4, child_index / 16) % 4;
                     let node_bbox = BoundingBox {
                         min: item.node_min_pos + child_size * pos,
@@ -511,8 +516,7 @@ impl<
                         } else {
                             item.children.set(
                                 child_index,
-                                Some(modify_leaf_node(self, child, intersection))
-                                    .filter(|node| node.pop_mask != 0),
+                                modify_leaf_node(self, child, intersection).check_empty(),
                             );
                         }
                     }
@@ -529,7 +533,7 @@ impl<
                 if let Some((parent, index)) = item.parent_and_index {
                     stack[parent as usize]
                         .children
-                        .set(index as u32, Some(node).filter(|node| node.pop_mask != 0));
+                        .set(index as u32, node.check_empty());
                 } else {
                     new_root = node;
                 }
@@ -547,6 +551,119 @@ impl<
             data: num_data..self.data.len(),
             nodes: num_nodes..self.nodes.len(),
         }
+    }
+
+    pub fn new<M: VoxelModel<T>>(model: M) -> Self {
+        let dims = model.dimensions();
+        let mut scale = dims[0].max(dims[1]).max(dims[2]).next_power_of_two();
+        scale = scale.max(4);
+        if scale.ilog2() % 2 == 1 {
+            scale *= 2;
+        }
+
+        let num_levels = scale.ilog(4) as _;
+        let mut this = Self {
+            nodes: Default::default(),
+            data: Default::default(),
+            stats: Default::default(),
+            edits: Default::default(),
+        };
+
+        let get_leaf_node = |this: &mut Self, offset: glam::UVec3| {
+            let mut bitmask = 0;
+            let mut vec = arrayvec::ArrayVec::<_, 64>::new();
+            for leaf_index in 0..64 {
+                let pos = glam::UVec3::new(leaf_index, leaf_index / 4, leaf_index / 16) % 4;
+                let index = offset + pos;
+                let value = model.access([index.x as _, index.y as _, index.z as _]);
+                if let Some(value) = value {
+                    vec.push(value);
+                    bitmask |= 1 << leaf_index as u64;
+                }
+            }
+
+            Node::new(true, this.insert_values(&vec), bitmask)
+        };
+
+        let root = if num_levels < 2 {
+            get_leaf_node(&mut this, glam::UVec3::ZERO)
+        } else {
+            #[derive(Clone)]
+            struct StackItem {
+                offset: glam::UVec3,
+                node_level: u8,
+                parent_and_index: Option<(u32, u8)>,
+                children: PopMaskedData<Node>,
+            }
+
+            let mut stack: Vec<StackItem> = vec![StackItem {
+                offset: glam::UVec3::ZERO,
+                node_level: num_levels,
+                children: PopMaskedData::default(),
+                parent_and_index: None,
+            }];
+            let mut last_parent = None;
+
+            let mut root = Node::default();
+
+            while let Some(mut item) = stack.last().cloned() {
+                let index = stack.len() as u32 - 1;
+                let children_are_leaves = item.node_level == 2;
+
+                let going_up = last_parent == Some(index);
+
+                last_parent = item.parent_and_index.map(|(parent, _)| parent);
+
+                if !going_up {
+                    for child_index in 0..64 {
+                        let child_size = 4_u32.pow(item.node_level as u32 - 1);
+                        let pos =
+                            glam::UVec3::new(child_index, child_index / 4, child_index / 16) % 4;
+                        let offset = item.offset + pos * child_size;
+
+                        if children_are_leaves {
+                            let node = get_leaf_node(&mut this, offset);
+                            item.children.set(child_index, node.check_empty());
+                        } else {
+                            stack.push(StackItem {
+                                offset,
+                                node_level: item.node_level - 1,
+                                children: PopMaskedData::default(),
+                                parent_and_index: Some((index, child_index as u8)),
+                            });
+                        }
+                    }
+                }
+
+                if going_up || children_are_leaves {
+                    let node = Node::new(
+                        false,
+                        this.insert_nodes(&item.children.as_compact()),
+                        item.children.pop_mask,
+                    );
+
+                    if let Some((parent, index)) = item.parent_and_index {
+                        stack[parent as usize]
+                            .children
+                            .set(index as u32, node.check_empty());
+                    } else {
+                        root = node;
+                    }
+
+                    stack.pop();
+                }
+            }
+
+            root
+        };
+
+        let root_index = this.insert_nodes(&[root]);
+        this.edits.push(RootState {
+            index: root_index,
+            num_levels,
+            offset: glam::IVec3::ZERO,
+        });
+        this
     }
 
     fn insert<M: VoxelModel<T>>(&mut self, model: &M, offset: [usize; 3], scale: u32) -> Node {
@@ -580,17 +697,19 @@ impl<
             for z in 0..4 {
                 for y in 0..4 {
                     for x in 0..4 {
-                        let value = self.insert(
-                            model,
-                            [
-                                offset[0] + x * new_scale as usize,
-                                offset[1] + y * new_scale as usize,
-                                offset[2] + z * new_scale as usize,
-                            ],
-                            new_scale,
-                        );
-                        if value.pop_mask != 0 {
-                            nodes.push(value);
+                        if let Some(child) = self
+                            .insert(
+                                model,
+                                [
+                                    offset[0] + x * new_scale as usize,
+                                    offset[1] + y * new_scale as usize,
+                                    offset[2] + z * new_scale as usize,
+                                ],
+                                new_scale,
+                            )
+                            .check_empty()
+                        {
+                            nodes.push(child);
                             bitmask |= 1 << (z * 16 + y * 4 + x) as u64;
                         }
                     }
@@ -907,7 +1026,7 @@ fn test_tree() {
     }
 
     {
-        let array = &[1_u8, 1, 1, 1, 1, 0, 1, 1];
+        let array = &[1, 1, 1, 1, 1, 0, 1, 1];
         let tree = Tree64::new((&array[..], [2_u32, 2, 2]));
         assert_eq!(&*tree.data, &[1; 7]);
         assert_eq!({ tree.nodes[0].is_leaf_and_ptr }, 1);
@@ -983,7 +1102,7 @@ fn test_tree() {
 #[test]
 fn single_node_modifications() {
     {
-        let values = [1_u8; 4 * 4 * 4];
+        let values = [1; 4 * 4 * 4];
         let mut tree = Tree64::new((&values[..], [4; 3]));
 
         let ranges = tree.modify([3, 3, 3], None);
@@ -992,7 +1111,7 @@ fn single_node_modifications() {
     }
 
     {
-        let values = [1_u8; 4 * 4 * 4];
+        let values = [1; 4 * 4 * 4];
         let mut tree = Tree64::new((&values[..], [4; 3]));
 
         let ranges = tree.modify([3, 3, 3], Some(2));
@@ -1002,7 +1121,7 @@ fn single_node_modifications() {
     }
 
     {
-        let values = [1_u8; 16 * 16 * 16];
+        let values = vec![1; 16 * 16 * 16];
         let mut tree = Tree64::new((&values[..], [16; 3]));
         let updated_nodes = 64 + 1;
 
@@ -1027,7 +1146,7 @@ fn single_node_modifications() {
     }
 
     {
-        let values = [1_u8; 64 * 64 * 64];
+        let values = vec![1_u16; 64 * 64 * 64];
         let mut tree = Tree64::new((&values[..], [64; 3]));
         let updated_nodes = 64 + 64 + 1;
 
@@ -1037,7 +1156,7 @@ fn single_node_modifications() {
     }
 
     {
-        let values = [1_u8; 64 * 64 * 64];
+        let values = vec![1_u32; 64 * 64 * 64];
         let mut tree = Tree64::new((&values[..], [64; 3]));
         let updated_nodes = 64 + 64 + 1;
 
@@ -1047,7 +1166,7 @@ fn single_node_modifications() {
     }
 
     {
-        let values = [1_u8; 64 * 64 * 64];
+        let values = vec![1_u64; 64 * 64 * 64];
         let mut tree = Tree64::new((&values[..], [64; 3]));
         let updated_nodes = 64 + 64 + 1;
 
@@ -1108,7 +1227,7 @@ fn modifications_in_box() {
 #[test]
 fn advanced_modifications_in_box() {
     {
-        let values = [1_u8; 64 * 64 * 64];
+        let values = vec![1_u128; 64 * 64 * 64];
         let mut tree = Tree64::new((&values[..], [64; 3]));
 
         let ranges = tree.modify_nodes_in_box([0; 3], [3; 3], Some(2));
@@ -1119,7 +1238,7 @@ fn advanced_modifications_in_box() {
     }
 
     {
-        let values = [1_u8; 64 * 64 * 64];
+        let values = vec![1_u32; 64 * 64 * 64];
         let mut tree = Tree64::new((&values[..], [64; 3]));
 
         let ranges = tree.modify_nodes_in_box([0; 3], [3; 3], Some(2));
@@ -1148,7 +1267,7 @@ fn modifications_on_empty_spaces() {
     }
 
     {
-        let values = [0_u8; 16 * 16 * 16];
+        let values = [0_u16; 16 * 16 * 16];
         let mut tree = Tree64::new((&values[..], [16; 3]));
         dbg!(&tree.nodes);
 
@@ -1164,7 +1283,7 @@ fn modifications_on_empty_spaces() {
     }
 
     {
-        let values = [0_u8; 64 * 64 * 64];
+        let values = vec![0_i128; 64 * 64 * 64];
         let mut tree = Tree64::new((&values[..], [64; 3]));
         dbg!(&tree.nodes);
 
@@ -1180,7 +1299,7 @@ fn modifications_on_empty_spaces() {
     }
 
     {
-        let values = [0_u8; 64 * 64 * 64];
+        let values = [0_u32; 64 * 64 * 64];
         let mut tree = Tree64::new((&values[..], [64; 3]));
         dbg!(&tree.nodes);
 
