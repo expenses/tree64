@@ -69,10 +69,7 @@ fn merge_vox_models(vox: dot_vox::DotVoxData) -> (Vec<u8>, glam::UVec3) {
 }
 
 fn benchmark(c: &mut Criterion) {
-    let vox_filename = "sponza.vox";
-
-    let vox = dot_vox::load(&vox_filename).unwrap();
-    let (array, size) = merge_vox_models(vox);
+    let (array, size) = merge_vox_models(dot_vox::load("sponza.vox").unwrap());
 
     c.bench_function("new_iterative", |b| {
         b.iter(|| {
@@ -86,6 +83,30 @@ fn benchmark(c: &mut Criterion) {
             black_box(tree);
         })
     });
+    c.bench_function("new_iterative_empty", |b| {
+        b.iter(|| {
+            let tree = tree64::Tree64::new_iterative(EmptyVoxModel([1024; 3], false));
+            black_box(tree);
+        })
+    });
+    c.bench_function("new_recursive_empty", |b| {
+        b.iter(|| {
+            let tree = tree64::Tree64::new(EmptyVoxModel([1024; 3], false));
+            black_box(tree);
+        })
+    });
+    c.bench_function("new_iterative_solid", |b| {
+        b.iter(|| {
+            let tree = tree64::Tree64::new_iterative(EmptyVoxModel([1024; 3], true));
+            black_box(tree);
+        })
+    });
+    c.bench_function("new_recursive_sold", |b| {
+        b.iter(|| {
+            let tree = tree64::Tree64::new(EmptyVoxModel([1024; 3], true));
+            black_box(tree);
+        })
+    });
     c.bench_function("billion_voxel_deletion", |b| {
         b.iter(|| {
             let empty_slice: &[u8] = &[];
@@ -95,6 +116,37 @@ fn benchmark(c: &mut Criterion) {
             black_box(range)
         })
     });
+
+    let (array, size) = merge_vox_models(dot_vox::load("church.vox").unwrap());
+
+    c.bench_function("church_iterative", |b| {
+        b.iter(|| {
+            let tree = tree64::Tree64::new_iterative((&array[..], size.into()));
+            black_box(tree);
+        })
+    });
+    c.bench_function("church_recursive", |b| {
+        b.iter(|| {
+            let tree = tree64::Tree64::new((&array[..], size.into()));
+            black_box(tree);
+        })
+    });
+}
+
+struct EmptyVoxModel([u32; 3], bool);
+
+impl tree64::VoxelModel<()> for EmptyVoxModel {
+    fn dimensions(&self) -> [u32; 3] {
+        self.0
+    }
+
+    fn access(&self, _coord: [usize; 3]) -> Option<()> {
+        if self.1 {
+            Some(())
+        } else {
+            None
+        }
+    }
 }
 
 criterion_group!(benches, benchmark);

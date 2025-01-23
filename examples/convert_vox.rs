@@ -81,4 +81,6 @@ fn main() {
         .unwrap();
 
     dbg!(tree.stats);
+    dbg!(tree.data.len());
+    dbg!(tree.nodes.len());
 }

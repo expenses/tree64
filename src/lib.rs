@@ -267,7 +267,7 @@ impl<
 
         if hit_cache {
             self.stats.nodes.cache_hits += 1;
-            self.stats.nodes.cache_bytes_saved += nodes.len();
+            self.stats.nodes.cache_bytes_saved += nodes.len() * std::mem::size_of::<Node>();
         }
 
         let new_length = self.nodes.len();
@@ -559,37 +559,43 @@ impl<
         let get_leaf_node = |this: &mut Self, offset: glam::UVec3| {
             let mut bitmask = 0;
             let mut vec = arrayvec::ArrayVec::<_, 64>::new();
-            for leaf_index in 0..64 {
-                let pos = glam::UVec3::new(leaf_index, leaf_index / 4, leaf_index / 16) % 4;
-                let index = offset + pos;
-                let value = model.access([index.x as _, index.y as _, index.z as _]);
-                if let Some(value) = value {
-                    vec.push(value);
-                    bitmask |= 1 << leaf_index as u64;
+            for z in 0..4 {
+                for y in 0..4 {
+                    for x in 0..4 {
+                        let pos = glam::UVec3::new(x, y, z);
+                        let index = offset + pos;
+                        let value = model.access([index.x as _, index.y as _, index.z as _]);
+                        if let Some(value) = value {
+                            vec.push(value);
+                            bitmask |= 1 << pos.dot(glam::UVec3::new(1, 4, 16)) as u64;
+                        }
+                    }
                 }
             }
 
             Node::new(true, this.insert_values(&vec), bitmask)
         };
 
-        let root = if num_levels < 2 {
+        let root = if recursive {
+            this.insert_from_model_recursive(&model, glam::UVec3::ZERO, num_levels)
+        } else if num_levels < 2 {
             get_leaf_node(&mut this, glam::UVec3::ZERO)
-        } else if recursive {
-            this.insert_from_model_recursive(&model, [0; 3], scale)
         } else {
             #[derive(Clone)]
             struct StackItem {
                 offset: glam::UVec3,
                 node_level: u8,
                 parent_and_index: Option<(u32, u8)>,
-                children: PopMaskedData<Node>,
+                children: arrayvec::ArrayVec<Node, 64>,
+                pop_mask: u64,
             }
 
             let mut stack: Vec<StackItem> = vec![StackItem {
                 offset: glam::UVec3::ZERO,
                 node_level: num_levels,
-                children: PopMaskedData::default(),
+                children: Default::default(),
                 parent_and_index: None,
+                pop_mask: 0,
             }];
             let mut last_parent = None;
 
@@ -612,12 +618,16 @@ impl<
 
                         if children_are_leaves {
                             let node = get_leaf_node(&mut this, offset);
-                            item.children.set(child_index, node.check_empty());
+                            if let Some(node) = node.check_empty() {
+                                item.children.push(node);
+                                item.pop_mask |= 1 << child_index;
+                            }
                         } else {
                             stack.push(StackItem {
                                 offset,
                                 node_level: item.node_level - 1,
-                                children: PopMaskedData::default(),
+                                children: Default::default(),
+                                pop_mask: 0,
                                 parent_and_index: Some((index, child_index as u8)),
                             });
                         }
@@ -625,16 +635,13 @@ impl<
                 }
 
                 if going_up || children_are_leaves {
-                    let node = Node::new(
-                        false,
-                        this.insert_nodes(&item.children.as_compact()),
-                        item.children.pop_mask,
-                    );
+                    let node = Node::new(false, this.insert_nodes(&item.children), item.pop_mask);
 
                     if let Some((parent, index)) = item.parent_and_index {
-                        stack[parent as usize]
-                            .children
-                            .set(index as u32, node.check_empty());
+                        if let Some(node) = node.check_empty() {
+                            stack[parent as usize].children.push(node);
+                            stack[parent as usize].pop_mask |= 1 << index;
+                        }
                     } else {
                         root = node;
                     }
@@ -657,26 +664,23 @@ impl<
     fn insert_from_model_recursive<M: VoxelModel<T>>(
         &mut self,
         model: &M,
-        offset: [usize; 3],
-        scale: u32,
+        offset: glam::UVec3,
+        node_level: u8,
     ) -> Node {
-        let access = |mut x, mut y, mut z| {
-            x += offset[0];
-            y += offset[1];
-            z += offset[2];
-            model.access([x, y, z])
-        };
+        let mut bitmask = 0;
 
-        if scale == 4 {
-            let mut bitmask = 0;
+        if node_level == 1 {
             let mut vec = arrayvec::ArrayVec::<_, 64>::new();
             for z in 0..4 {
                 for y in 0..4 {
                     for x in 0..4 {
-                        let value = access(x, y, z);
-                        if let Some(value) = value {
+                        let pos = glam::UVec3::new(x, y, z);
+                        let index = offset + pos;
+                        if let Some(value) =
+                            model.access([index.x as _, index.y as _, index.z as _])
+                        {
                             vec.push(value);
-                            bitmask |= 1 << (z * 16 + y * 4 + x) as u64;
+                            bitmask |= 1 << pos.dot(glam::UVec3::new(1, 4, 16)) as u64;
                         }
                     }
                 }
@@ -684,26 +688,22 @@ impl<
 
             Node::new(true, self.insert_values(&vec), bitmask)
         } else {
-            let new_scale = scale / 4;
+            let new_scale = 4_u32.pow(node_level as u32 - 1);
             let mut nodes = arrayvec::ArrayVec::<_, 64>::new();
-            let mut bitmask = 0;
             for z in 0..4 {
                 for y in 0..4 {
                     for x in 0..4 {
+                        let pos = glam::UVec3::new(x, y, z);
                         if let Some(child) = self
                             .insert_from_model_recursive(
                                 model,
-                                [
-                                    offset[0] + x * new_scale as usize,
-                                    offset[1] + y * new_scale as usize,
-                                    offset[2] + z * new_scale as usize,
-                                ],
-                                new_scale,
+                                offset + pos * new_scale,
+                                node_level - 1,
                             )
                             .check_empty()
                         {
                             nodes.push(child);
-                            bitmask |= 1 << (z * 16 + y * 4 + x) as u64;
+                            bitmask |= 1 << pos.dot(glam::UVec3::new(1, 4, 16)) as u64;
                         }
                     }
                 }
@@ -898,7 +898,8 @@ fn test_pm() {
     for i in (0..64).rev() {
         x.set(i, None);
     }
-    assert_eq!(&x.as_compact()[..], &[]);
+    let empty_slice: &[u8] = &[];
+    assert_eq!(&*x.as_compact(), empty_slice);
     let mut x = PopMaskedData::<u8>::default();
     for i in 0..64 {
         x.set(i, Some(1));
@@ -1075,7 +1076,7 @@ fn test_tree() {
 
         let mut data = Vec::new();
         tree.serialize(&mut data).unwrap();
-        let tree2 = Tree64::deserialize(io::Cursor::new(&data)).unwrap();
+        let tree2 = Tree64::<u8>::deserialize(io::Cursor::new(&data)).unwrap();
         assert_eq!(&*tree.data, &*tree2.data);
         assert_eq!(&*tree.nodes, &*tree2.nodes);
         assert_eq!(tree.edits, tree2.edits);
