@@ -7,10 +7,10 @@ pub trait VoxelModel<T> {
     fn access(&self, coord: [usize; 3]) -> Option<T>;
 }
 
-struct FlatArray<'a, T> {
-    values: &'a [T],
-    dimensions: [u32; 3],
-    empty_value: T,
+pub struct FlatArray<'a, T> {
+    pub values: &'a [T],
+    pub dimensions: [u32; 3],
+    pub empty_value: T,
 }
 
 impl<T: PartialEq + Clone + Default> VoxelModel<T> for FlatArray<'_, T> {
