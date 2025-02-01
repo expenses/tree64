@@ -1,54 +1,74 @@
 fn swizzle(v: glam::IVec3, indices: glam::IVec3) -> glam::IVec3 {
-    glam::IVec3::new(v[indices.x as _], v[indices.y as _], v[indices.z as _])
+    let indices = indices.abs() - 1;
+    glam::IVec3::new(
+        v[indices.x as usize],
+        v[indices.y as usize],
+        v[indices.z as usize],
+    )
 }
 
 fn merge_vox_models(vox: dot_vox::DotVoxData) -> (Vec<u8>, glam::UVec3) {
     dbg!(vox.models.len());
 
-    let root_transform = &vox.scenes[0];
-    let root_group = &vox.scenes[match root_transform {
-        dot_vox::SceneNode::Transform { child, .. } => *child as usize,
-        _ => panic!(),
-    }];
-    let children = match root_group {
-        dot_vox::SceneNode::Group { children, .. } => children,
-        _ => panic!(),
-    };
+    let mut stack = vec![(0, glam::IVec3::ZERO, dot_vox::Rotation::IDENTITY)];
+    let mut models_and_positions = Vec::new();
 
-    let mut models_and_positions: Vec<(glam::IVec3, glam::UVec3, glam::IVec3, &dot_vox::Model)> =
-        Vec::new();
+    while let Some((index, translation, rotation)) = stack.pop() {
+        match &vox.scenes[index as usize] {
+            dot_vox::SceneNode::Transform { child, frames, .. } => {
+                // In case of a Transform node, the potential translation and rotation is added
+                // to the global transform to all of the nodes children nodes
+                let translation = if let Some(t) = frames[0].attributes.get("_t") {
+                    let translation_delta = t
+                        .split(" ")
+                        .map(|x| x.parse().expect("Not an integer!"))
+                        .collect::<Vec<i32>>();
+                    debug_assert_eq!(translation_delta.len(), 3);
+                    translation
+                        + glam::IVec3::new(
+                            translation_delta[0],
+                            translation_delta[1],
+                            translation_delta[2],
+                        )
+                } else {
+                    translation
+                };
+                let rotation = if let Some(r) = frames[0].attributes.get("_r") {
+                    rotation
+                        * dot_vox::Rotation::from_byte(
+                            r.parse()
+                                .expect("Expected valid u8 byte to parse rotation matrix"),
+                        )
+                } else {
+                    rotation
+                };
 
-    for child in children {
-        let (child, frames) = match &vox.scenes[*child as usize] {
-            dot_vox::SceneNode::Transform { frames, child, .. } => (child, frames),
-            _ => panic!(),
-        };
+                stack.push((*child, translation, rotation));
+            }
+            dot_vox::SceneNode::Group { children, .. } => {
+                for &child in children {
+                    stack.push((child, translation, rotation));
+                }
+            }
+            dot_vox::SceneNode::Shape { models, .. } => {
+                let model = models[0].model_id;
+                dbg!(models[0].model_id, translation);
+                let model = &vox.models[model as usize];
 
-        let pos = frames[0]
-            .position()
-            .map(|pos| glam::IVec3::new(pos.x, pos.y, pos.z))
-            .unwrap_or_default();
+                let channel_reordering =
+                    (glam::Mat3::from_cols_array_2d(&rotation.to_cols_array_2d())
+                        * glam::Vec3::new(1.0, 2.0, 3.0))
+                    .as_ivec3();
 
-        let rotation = frames[0]
-            .orientation()
-            .map(|rot| glam::Mat3::from_cols_array_2d(&rot.to_cols_array_2d()))
-            .unwrap_or_default();
-        let swizzles = (rotation * glam::Vec3::new(0.0, 1.0, 2.0)).as_ivec3();
+                let size = swizzle(
+                    glam::UVec3::new(model.size.x, model.size.y, model.size.z).as_ivec3(),
+                    channel_reordering,
+                )
+                .as_uvec3();
 
-        let model = match &vox.scenes[*child as usize] {
-            dot_vox::SceneNode::Shape { models, .. } => models[0].model_id,
-            _ => panic!(),
-        };
-
-        let model = &vox.models[model as usize];
-
-        let size = swizzle(
-            glam::UVec3::new(model.size.x, model.size.y, model.size.z).as_ivec3(),
-            swizzles,
-        )
-        .as_uvec3();
-
-        models_and_positions.push((pos, size, swizzles, model));
+                models_and_positions.push((translation, size, rotation, model));
+            }
+        }
     }
 
     let mut min = glam::IVec3::splat(i32::MAX);
@@ -63,15 +83,26 @@ fn merge_vox_models(vox: dot_vox::DotVoxData) -> (Vec<u8>, glam::UVec3) {
 
     let mut array = vec![0; size.x as usize * size.y as usize * size.z as usize];
 
-    for (pos, model_size, swizzles, model) in models_and_positions {
+    for (pos, model_size, rotation, model) in models_and_positions {
         let offset = pos - min - (model_size / 2).as_ivec3();
 
+        let channel_reordering = (glam::Mat3::from_cols_array_2d(&rotation.to_cols_array_2d())
+            * glam::Vec3::new(1.0, 2.0, 3.0))
+        .as_ivec3();
+        let model_size_swizzled = swizzle(model_size.as_ivec3(), channel_reordering.abs());
+
         for voxel in &model.voxels {
-            let voxel_pos = offset
-                + swizzle(
-                    glam::IVec3::new(voxel.x as i32, voxel.y as i32, voxel.z as i32),
-                    swizzles,
-                );
+            let voxel_pos = glam::IVec3::new(voxel.x as i32, voxel.y as i32, voxel.z as i32);
+
+            let mut voxel_pos_swizzled = swizzle(voxel_pos, channel_reordering);
+
+            for i in 0..3 {
+                if channel_reordering[i] < 0 {
+                    voxel_pos_swizzled[i] = model_size_swizzled[i] - 1 - voxel_pos_swizzled[i];
+                }
+            }
+
+            let voxel_pos = offset + voxel_pos_swizzled;
             array[voxel_pos.x as usize
                 + voxel_pos.y as usize * size.x as usize
                 + voxel_pos.z as usize * size.x as usize * size.y as usize] = voxel.i;
@@ -86,9 +117,7 @@ fn main() {
     let vox_filename = args.next().unwrap();
     let tree_filename = args.next().unwrap();
 
-    let vox = dot_vox::load(&vox_filename).unwrap();
-
-    let (array, size) = merge_vox_models(vox);
+    let (array, size) = merge_vox_models(dot_vox::load(&vox_filename).unwrap());
 
     let tree = tree64::Tree64::new((&array[..], size.into()));
 
