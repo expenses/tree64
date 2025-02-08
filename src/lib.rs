@@ -80,7 +80,7 @@ impl Node {
         Self::new(is_leaf, 0, 0)
     }
 
-    fn new(is_leaf: bool, ptr: u32, pop_mask: u64) -> Self {
+    pub fn new(is_leaf: bool, ptr: u32, pop_mask: u64) -> Self {
         Self {
             is_leaf_and_ptr: (ptr << 1) | (is_leaf as u32),
             pop_mask,
@@ -199,7 +199,7 @@ impl<
             + bytemuck::Zeroable,
     > Tree64<T>
 {
-    fn insert_values(&mut self, values: &[T]) -> u32 {
+    pub fn insert_values(&mut self, values: &[T]) -> u32 {
         if values.is_empty() {
             return 0;
         }
@@ -236,7 +236,7 @@ impl<
         index
     }
 
-    fn insert_nodes(&mut self, nodes: &[Node]) -> u32 {
+    pub fn insert_nodes(&mut self, nodes: &[Node]) -> u32 {
         if nodes.is_empty() {
             return 0;
         }
@@ -284,7 +284,7 @@ impl<
         self.edits.current()
     }
 
-    fn push_new_root_node(&mut self, node: Node, num_levels: u8, offset: glam::IVec3) -> u32 {
+    pub fn push_new_root_node(&mut self, node: Node, num_levels: u8, offset: glam::IVec3) -> u32 {
         let index = self.insert_nodes(&[node]);
         self.edits.push(RootState {
             index,
@@ -913,9 +913,9 @@ fn test_pm() {
 }
 
 #[derive(Clone)]
-struct PopMaskedData<T: Default + Copy> {
-    array: [T; 64],
-    pop_mask: u64,
+pub struct PopMaskedData<T: Default + Copy> {
+    pub array: [T; 64],
+    pub pop_mask: u64,
 }
 
 impl<T: Copy + Default> Default for PopMaskedData<T> {
@@ -945,7 +945,7 @@ impl<T: Copy + Default> PopMaskedData<T> {
         }
     }
 
-    fn as_compact(&self) -> arrayvec::ArrayVec<T, 64> {
+    pub fn as_compact(&self) -> arrayvec::ArrayVec<T, 64> {
         let mut array = arrayvec::ArrayVec::new();
 
         let mut var_pop_mask = self.pop_mask;
@@ -958,7 +958,7 @@ impl<T: Copy + Default> PopMaskedData<T> {
         array
     }
 
-    fn set(&mut self, index: u32, value: Option<T>) {
+    pub fn set(&mut self, index: u32, value: Option<T>) {
         self.array[index as usize] = value.unwrap_or_default();
         self.pop_mask = set_bit(self.pop_mask, index, value.is_some());
     }
