@@ -1,4 +1,7 @@
+use radix_trie::TrieCommon;
+use rayon::iter::IntoParallelIterator;
 use std::fmt::Debug;
+use std::hash::BuildHasher;
 use std::io;
 
 pub trait VoxelModel<T> {
@@ -1570,4 +1573,198 @@ fn trillion_voxel_deletion() {
     let range = tree.modify_nodes_in_box([1; 3], [10000 - 1; 3], None);
     assert_eq!(range.data.len(), 0);
     assert_eq!(range.nodes.len(), 2095);
+}
+
+pub struct Combinator<T> {
+    index: u32,
+    index_cache: hashbrown::HashTable<(u32, usize)>,
+    pub map: slab::Slab<(Vec<T>, fnv::FnvHashMap<u32, u32>)>,
+    trie: radix_trie::Trie<Vec<T>, usize>,
+}
+impl<T> Default for Combinator<T>
+where
+    Vec<T>: radix_trie::TrieKey,
+{
+    fn default() -> Self {
+        Self {
+            index: 0,
+            index_cache: Default::default(),
+            map: Default::default(),
+            trie: Default::default(),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug)]
+struct HeapItem {
+    match_len: u32,
+    offset: u32,
+    prefix_id: usize,
+    suffix_id: usize,
+}
+
+impl PartialOrd for HeapItem {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HeapItem {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.match_len.cmp(&other.match_len)
+    }
+}
+
+impl<T: Clone + PartialEq + Send + Sync + std::hash::Hash + Debug> Combinator<T>
+where
+    Vec<T>: radix_trie::TrieKey,
+    [T]: radix_trie::TrieKey,
+{
+    pub fn insert(&mut self, value: &[T]) -> u32 {
+        let hasher = fnv::FnvBuildHasher::default();
+
+        self.index_cache
+            .entry(
+                hasher.hash_one(value),
+                |(_id, slab_index)| &self.map[*slab_index].0[..] == value,
+                |(_id, slab_index)| hasher.hash_one(&self.map[*slab_index].0),
+            )
+            .or_insert_with(|| {
+                let index = self.index;
+                self.index += 1;
+                let mut hashmap = fnv::FnvHashMap::default();
+                hashmap.insert(index, 0);
+                let map_key = self.map.insert((value.to_vec(), hashmap));
+                self.trie.insert(value.to_vec(), map_key);
+                (index, map_key)
+            })
+            .get()
+            .0
+    }
+
+    pub fn minimize(&mut self) {
+        let max_overlap = 64;
+
+        use rayon::iter::{ParallelBridge, ParallelIterator};
+
+        let mut heap: std::collections::BinaryHeap<HeapItem> = self
+            .map
+            .iter()
+            .par_bridge()
+            .filter_map(|(id, (string, _indices))| {
+                (0..string.len()).find_map(|i| {
+                    let prefix = &string[i..];
+                    //dbg!(prefix, is_real);
+
+                    self.trie
+                        .get_raw_descendant(prefix)
+                        .iter()
+                        .flat_map(|descendant| descendant.iter())
+                        .find(|(other, _id)| string != *other)
+                        .map(|(_other, other_id)| HeapItem {
+                            match_len: prefix.len() as u32,
+                            offset: i as u32,
+                            prefix_id: id,
+                            suffix_id: *other_id,
+                        })
+                })
+            })
+            .collect();
+
+        while let Some(item) = heap.pop() {
+            let i = heap.len();
+
+            if i % 100000 == 0 {
+                dbg!(i);
+            }
+
+            if !self.map.contains(item.prefix_id) {
+                continue;
+            }
+
+            let (suffix, suffix_indices) = match self.map.try_remove(item.suffix_id) {
+                Some(suffix) => suffix,
+                None => continue,
+            };
+
+            let (ref mut prefix, ref mut prefix_indices) =
+                self.map.get_mut(item.prefix_id).unwrap();
+
+            self.trie.remove(&*prefix);
+            self.trie.remove(&suffix);
+
+            dbg!(&prefix, &suffix);
+
+            let prefix_len = prefix.len();
+            prefix.extend_from_slice(&suffix[prefix_len - item.offset as usize..]);
+
+            dbg!(&prefix);
+
+            for (index, index_offset) in suffix_indices.into_iter() {
+                prefix_indices.insert(index, index_offset + item.offset);
+            }
+
+            let largest_match = (prefix.len().saturating_sub(max_overlap)..prefix.len())
+                .into_par_iter()
+                .find_map_first(|i| {
+                    let prefix = &prefix[i..];
+
+                    self.trie
+                        .get_raw_descendant(prefix)
+                        .iter()
+                        .flat_map(|descendant| descendant.iter())
+                        .next()
+                        .map(|(_other, other_id)| HeapItem {
+                            match_len: prefix.len() as u32,
+                            offset: i as u32,
+                            prefix_id: item.prefix_id,
+                            suffix_id: *other_id,
+                        })
+                });
+
+            if let Some(largest_match) = largest_match {
+                heap.push(largest_match);
+            }
+
+            self.trie.insert(prefix.clone(), item.prefix_id);
+        }
+    }
+
+    pub fn fold(&self) -> (Vec<T>, fnv::FnvHashMap<u32, u32>) {
+        self.map.iter().fold(
+            (Vec::new(), fnv::FnvHashMap::default()),
+            |(mut combined_vec, mut combined_map), (_, (vec, map))| {
+                let offset = combined_vec.len() as u32;
+                combined_vec.extend_from_slice(vec);
+
+                for (index, index_offset) in map {
+                    combined_map.insert(*index, index_offset + offset);
+                }
+
+                (combined_vec, combined_map)
+            },
+        )
+    }
+}
+
+#[test]
+fn whateverrr() {
+    let mut comb = Combinator::default();
+    comb.insert(b"appld");
+    comb.insert(b"ppl");
+    //comb.insert(b"applde");
+    //comb.insert(b"lest");
+    //comb.insert(b"station");
+    //comb.insert(b"noa");
+    //comb.insert(b"apply");
+    //comb.insert(b"deadly");
+    //comb.insert(b"app");
+    //comb.insert(b"dead");
+    //comb.insert(b"stat");
+    //comb.insert(b"plde");
+    comb.minimize();
+    let (string, map) = comb.fold();
+
+    dbg!(&std::str::from_utf8(&string), map);
+    panic!();
 }

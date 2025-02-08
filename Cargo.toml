@@ -9,6 +9,9 @@ bytemuck = { version = "1.21.0", features = ["derive"] }
 fnv = "1.0.7"
 glam = "0.29"
 hashbrown = "0.15.2"
+radix_trie = "0.2.1"
+rayon = "1.10.0"
+slab = "0.4.9"
 
 [workspace]
 members = [".", "fuzz"]
