@@ -717,6 +717,7 @@ impl<
         let root_state = self.root_state();
         writer.write_all(&[root_state.num_levels])?;
         writer.write_all(&root_state.index.to_le_bytes())?;
+        writer.write_all(bytemuck::cast_slice(&root_state.offset.to_array()))?;
         writer.write_all(&(self.nodes.len() as u32).to_le_bytes())?;
         writer.write_all(&(self.data.len() as u32).to_le_bytes())?;
         writer.write_all(bytemuck::cast_slice(&self.nodes))?;
@@ -729,8 +730,10 @@ impl<
         let mut num_nodes = 0_u32;
         let mut num_data = 0_u32;
         let mut root_node_index = 0_u32;
+        let mut root_offset = [0_i32; 3];
         reader.read_exact(bytemuck::bytes_of_mut(&mut num_levels))?;
         reader.read_exact(bytemuck::bytes_of_mut(&mut root_node_index))?;
+        reader.read_exact(bytemuck::bytes_of_mut(&mut root_offset))?;
         reader.read_exact(bytemuck::bytes_of_mut(&mut num_nodes))?;
         reader.read_exact(bytemuck::bytes_of_mut(&mut num_data))?;
         let mut this = Self {
@@ -740,7 +743,7 @@ impl<
             edits: Edits {
                 root_states: vec![RootState {
                     num_levels,
-                    offset: glam::IVec3::ZERO,
+                    offset: root_offset.into(),
                     index: root_node_index,
                 }],
                 index: 0,
