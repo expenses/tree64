@@ -365,166 +365,9 @@ impl<
             root_state.offset += offset;
         }
 
-        let modify_leaf_node = |this: &mut Self, node: Node, mut intersection: BoundingBox| {
-            let new_min = intersection.min % 4;
-            intersection.max = new_min + (intersection.max - intersection.min);
-            intersection.min = new_min;
-
-            let mut pop_masked_data = PopMaskedData::new(&this.data[node.range()], node.pop_mask);
-            for x in intersection.min.x..intersection.max.x {
-                for y in intersection.min.y..intersection.max.y {
-                    for z in intersection.min.z..intersection.max.z {
-                        let index = x + y * 4 + z * 16;
-                        pop_masked_data.set(index, value);
-                    }
-                }
-            }
-
-            Node::new(
-                true,
-                this.insert_values(&pop_masked_data.as_compact()),
-                pop_masked_data.pop_mask,
-            )
-        };
-
-        let root = self.nodes[root_state.index as usize];
-
-        if root.is_leaf() {
-            let node_bbox = BoundingBox {
-                min: glam::UVec3::splat(0),
-                max: glam::UVec3::splat(4),
-            };
-            if let Some(intersection) = bbox.get_intersection(&node_bbox) {
-                let new_root = modify_leaf_node(self, root, intersection);
-                self.push_new_root_node(new_root, root_state.num_levels, root_state.offset);
-            }
-
-            return UpdatedRanges {
-                data: num_data..self.data.len(),
-                nodes: num_nodes..self.nodes.len(),
-            };
-        }
-
-        #[derive(Clone)]
-        struct StackItem {
-            node_min_pos: glam::UVec3,
-            node_level: u8,
-            corresponding_node_index: Option<u32>,
-            children: PopMaskedData<Node>,
-            parent_and_index: Option<(u32, u8)>,
-        }
-
-        let mut stack: Vec<StackItem> = vec![StackItem {
-            node_min_pos: glam::UVec3::ZERO,
-            node_level: root_state.num_levels,
-            corresponding_node_index: Some(root_state.index),
-            children: PopMaskedData::new(&self.nodes[root.range()], root.pop_mask),
-            parent_and_index: None,
-        }];
-
-        let mut last_parent = None;
-
-        let mut new_root = Node::default();
-
-        while let Some(mut item) = stack.last().cloned() {
-            let index = stack.len() as u32 - 1;
-            let children_are_leaves = item.node_level == 2;
-
-            let going_up = last_parent == Some(index);
-            let mut any_pushed = false;
-
-            last_parent = item.parent_and_index.map(|(parent, _)| parent);
-
-            if !going_up {
-                for child_index in 0..64 {
-                    let child_size = 4_u32.pow(item.node_level as u32 - 1);
-
-                    let pos = glam::UVec3::new(child_index, child_index / 4, child_index / 16) % 4;
-                    let node_bbox = BoundingBox {
-                        min: item.node_min_pos + child_size * pos,
-                        max: item.node_min_pos + child_size * (pos + 1),
-                    };
-
-                    let intersection = match node_bbox.get_intersection(&bbox) {
-                        Some(intersection) => intersection,
-                        None => continue,
-                    };
-
-                    if intersection == node_bbox {
-                        item.children.set(
-                            child_index,
-                            if let Some(value) = value {
-                                // leaf node for the specific value.
-                                let mut child_node =
-                                    Node::new(true, self.insert_values(&[value; 64]), !0);
-
-                                // build up a tree for the child if the children for this node are not leaves.
-                                for _ in 0..item.node_level.saturating_sub(2) {
-                                    child_node =
-                                        Node::new(false, self.insert_nodes(&[child_node; 64]), !0);
-                                }
-
-                                Some(child_node)
-                            } else {
-                                None
-                            },
-                        );
-                    } else {
-                        let corresponding_child_index =
-                            item.corresponding_node_index.and_then(|node_index| {
-                                self.nodes[node_index as usize].get_index_for_child(child_index)
-                            });
-                        let child = if let Some(child_index) = corresponding_child_index {
-                            self.nodes[child_index as usize]
-                        } else {
-                            Node::empty(children_are_leaves)
-                        };
-
-                        if !children_are_leaves {
-                            any_pushed = true;
-                            stack.push(StackItem {
-                                node_min_pos: node_bbox.min,
-                                node_level: item.node_level - 1,
-                                corresponding_node_index: corresponding_child_index,
-                                children: PopMaskedData::new(
-                                    &self.nodes[child.range()],
-                                    child.pop_mask,
-                                ),
-                                parent_and_index: Some((index, child_index as u8)),
-                            });
-                        } else {
-                            item.children.set(
-                                child_index,
-                                modify_leaf_node(self, child, intersection).check_empty(),
-                            );
-                        }
-                    }
-                }
-            }
-
-            if !any_pushed {
-                let node = Node::new(
-                    false,
-                    self.insert_nodes(&item.children.as_compact()),
-                    item.children.pop_mask,
-                );
-
-                if let Some((parent, index)) = item.parent_and_index {
-                    stack[parent as usize]
-                        .children
-                        .set(index as u32, node.check_empty());
-                } else {
-                    new_root = node;
-                }
-
-                stack.pop();
-            } else {
-                // if we're decending into the node's children, then we need to make sure any updates are retained.
-                stack[index as usize].children = item.children;
-            }
-        }
-
-        self.push_new_root_node(new_root, root_state.num_levels, root_state.offset);
+        let new_root_node =
+            self.modify_recursive(root_state.num_levels, Some(root_state.index), bbox, value);
+        self.push_new_root_node(new_root_node, root_state.num_levels, root_state.offset);
 
         UpdatedRanges {
             data: num_data..self.data.len(),
@@ -533,14 +376,6 @@ impl<
     }
 
     pub fn new<M: VoxelModel<T>>(model: M) -> Self {
-        Self::new_inner(model, true)
-    }
-
-    pub fn new_iterative<M: VoxelModel<T>>(model: M) -> Self {
-        Self::new_inner(model, false)
-    }
-
-    pub fn new_inner<M: VoxelModel<T>>(model: M, recursive: bool) -> Self {
         let dims = model.dimensions();
         let mut scale = dims[0].max(dims[1]).max(dims[2]).next_power_of_two();
         scale = scale.max(4);
@@ -556,101 +391,7 @@ impl<
             edits: Default::default(),
         };
 
-        let get_leaf_node = |this: &mut Self, offset: glam::UVec3| {
-            let mut bitmask = 0;
-            let mut vec = arrayvec::ArrayVec::<_, 64>::new();
-            for z in 0..4 {
-                for y in 0..4 {
-                    for x in 0..4 {
-                        let pos = glam::UVec3::new(x, y, z);
-                        let index = offset + pos;
-                        let value = model.access([index.x as _, index.y as _, index.z as _]);
-                        if let Some(value) = value {
-                            vec.push(value);
-                            bitmask |= 1 << pos.dot(glam::UVec3::new(1, 4, 16)) as u64;
-                        }
-                    }
-                }
-            }
-
-            Node::new(true, this.insert_values(&vec), bitmask)
-        };
-
-        let root = if recursive {
-            this.insert_from_model_recursive(&model, glam::UVec3::ZERO, num_levels)
-        } else if num_levels < 2 {
-            get_leaf_node(&mut this, glam::UVec3::ZERO)
-        } else {
-            #[derive(Clone)]
-            struct StackItem {
-                offset: glam::UVec3,
-                node_level: u8,
-                parent_and_index: Option<(u32, u8)>,
-                children: arrayvec::ArrayVec<Node, 64>,
-                pop_mask: u64,
-            }
-
-            let mut stack: Vec<StackItem> = vec![StackItem {
-                offset: glam::UVec3::ZERO,
-                node_level: num_levels,
-                children: Default::default(),
-                parent_and_index: None,
-                pop_mask: 0,
-            }];
-            let mut last_parent = None;
-
-            let mut root = Node::default();
-
-            while let Some(mut item) = stack.last().cloned() {
-                let index = stack.len() as u32 - 1;
-                let children_are_leaves = item.node_level == 2;
-
-                let going_up = last_parent == Some(index);
-
-                last_parent = item.parent_and_index.map(|(parent, _)| parent);
-
-                if !going_up {
-                    for child_index in 0..64 {
-                        let child_size = 4_u32.pow(item.node_level as u32 - 1);
-                        let pos =
-                            glam::UVec3::new(child_index, child_index / 4, child_index / 16) % 4;
-                        let offset = item.offset + pos * child_size;
-
-                        if children_are_leaves {
-                            let node = get_leaf_node(&mut this, offset);
-                            if let Some(node) = node.check_empty() {
-                                item.children.push(node);
-                                item.pop_mask |= 1 << child_index;
-                            }
-                        } else {
-                            stack.push(StackItem {
-                                offset,
-                                node_level: item.node_level - 1,
-                                children: Default::default(),
-                                pop_mask: 0,
-                                parent_and_index: Some((index, child_index as u8)),
-                            });
-                        }
-                    }
-                }
-
-                if going_up || children_are_leaves {
-                    let node = Node::new(false, this.insert_nodes(&item.children), item.pop_mask);
-
-                    if let Some((parent, index)) = item.parent_and_index {
-                        if let Some(node) = node.check_empty() {
-                            stack[parent as usize].children.push(node);
-                            stack[parent as usize].pop_mask |= 1 << index;
-                        }
-                    } else {
-                        root = node;
-                    }
-
-                    stack.pop();
-                }
-            }
-            root
-        };
+        let root = this.insert_from_model_recursive(&model, glam::UVec3::ZERO, num_levels);
 
         let root_index = this.insert_nodes(&[root]);
         this.edits.push(RootState {
@@ -659,6 +400,109 @@ impl<
             offset: glam::IVec3::ZERO,
         });
         this
+    }
+
+    fn modify_recursive(
+        &mut self,
+        level: u8,
+        corresponding_node_index: Option<u32>,
+        bbox: BoundingBox,
+        value: Option<T>,
+    ) -> Node {
+        let is_leaf = level == 1;
+
+        let node = if let Some(index) = corresponding_node_index {
+            self.nodes[index as usize]
+        } else {
+            Node::empty(is_leaf)
+        };
+
+        if corresponding_node_index.is_none() && value.is_none() {
+            return node;
+        }
+
+        let size = 4_u32.pow(level as u32);
+        let node_bbox = BoundingBox {
+            min: glam::UVec3::ZERO,
+            max: glam::UVec3::splat(size),
+        };
+
+        let intersection = match node_bbox.get_intersection(&bbox) {
+            None => return node,
+            Some(intersection) => intersection,
+        };
+
+        if intersection == node_bbox {
+            return if let Some(value) = value {
+                // leaf node for the specific value.
+                let mut node = Node::new(true, self.insert_values(&[value; 64]), !0);
+
+                // build up a tree for the child if the children for this node are not leaves.
+                for _ in 0..level.saturating_sub(1) {
+                    node = Node::new(false, self.insert_nodes(&[node; 64]), !0);
+                }
+
+                node
+            } else {
+                Node::empty(is_leaf)
+            };
+        }
+
+        if is_leaf {
+            let mut pop_masked_data = PopMaskedData::new(&self.data[node.range()], node.pop_mask);
+
+            for x in intersection.min.x..intersection.max.x {
+                for y in intersection.min.y..intersection.max.y {
+                    for z in intersection.min.z..intersection.max.z {
+                        let index = glam::UVec3::new(x, y, z).dot(glam::UVec3::new(1, 4, 16));
+                        pop_masked_data.set(index, value);
+                    }
+                }
+            }
+
+            Node::new(
+                true,
+                self.insert_values(&pop_masked_data.as_compact()),
+                pop_masked_data.pop_mask,
+            )
+        } else {
+            let mut pop_masked_data = PopMaskedData::new(&self.nodes[node.range()], node.pop_mask);
+            let child_size = size / 4;
+
+            let node_intersection = BoundingBox {
+                min: intersection.min / child_size,
+                max: (intersection.max + child_size - 1) / child_size,
+            };
+
+            for x in node_intersection.min.x..node_intersection.max.x {
+                for y in node_intersection.min.y..node_intersection.max.y {
+                    for z in node_intersection.min.z..node_intersection.max.z {
+                        let pos = glam::UVec3::new(x, y, z);
+                        let index = pos.dot(glam::UVec3::new(1, 4, 16));
+                        let child_intersection = BoundingBox {
+                            min: intersection.min.saturating_sub(child_size * pos),
+                            max: intersection.max.saturating_sub(child_size * pos),
+                        };
+                        pop_masked_data.set(
+                            index,
+                            Some(self.modify_recursive(
+                                level - 1,
+                                node.get_index_for_child(index),
+                                child_intersection,
+                                value,
+                            ))
+                            .filter(|node| node.pop_mask != 0),
+                        );
+                    }
+                }
+            }
+
+            Node::new(
+                false,
+                self.insert_nodes(&pop_masked_data.as_compact()),
+                pop_masked_data.pop_mask,
+            )
+        }
     }
 
     fn insert_from_model_recursive<M: VoxelModel<T>>(
@@ -1247,6 +1091,134 @@ fn advanced_modifications_in_box() {
 }
 
 #[test]
+fn modification_rec() {
+    {
+        let values = [0; 4 * 4 * 4];
+
+        let mut tree = Tree64::new((&values[..], [4; 3]));
+
+        let ranges = tree.modify_nodes_in_box([0; 3], [4; 3], Some(1));
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                data: 0..64,
+                nodes: 1..2
+            }
+        );
+    }
+
+    {
+        let values = [1; 4 * 4 * 4];
+
+        let mut tree = Tree64::new((&values[..], [4; 3]));
+
+        let ranges = tree.modify_nodes_in_box([0; 3], [4; 3], None);
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                data: 64..64,
+                nodes: 1..2
+            }
+        );
+    }
+
+    {
+        let values = [1; 16 * 16 * 16];
+
+        let mut tree = Tree64::new((&values[..], [16; 3]));
+
+        let ranges = tree.modify_nodes_in_box([0; 3], [16; 3], None);
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                data: 64..64,
+                nodes: 65..66
+            }
+        );
+        assert_eq!({ tree.nodes[tree.root_state().index as usize].pop_mask }, 0);
+    }
+
+    {
+        let values = [0; 16 * 16 * 16];
+
+        let mut tree = Tree64::new((&values[..], [16; 3]));
+
+        let ranges = tree.modify_nodes_in_box([0; 3], [16; 3], Some(1));
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                data: 0..64,
+                nodes: 1..1 + 64 + 1
+            }
+        );
+        assert_eq!(
+            { tree.nodes[tree.root_state().index as usize].pop_mask },
+            !0
+        );
+    }
+
+    {
+        let values = [0; 16 * 16 * 16];
+
+        let mut tree = Tree64::new((&values[..], [16; 3]));
+
+        let ranges = tree.modify_nodes_in_box([16; 3], [16; 3], Some(1));
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                data: 0..0,
+                nodes: 1..1
+            }
+        );
+    }
+
+    {
+        let values = [0; 4 * 4 * 4];
+
+        let mut tree = Tree64::new((&values[..], [4; 3]));
+
+        let ranges = tree.modify_nodes_in_box([0; 3], [1; 3], Some(1));
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                data: 0..1,
+                nodes: 1..2
+            }
+        );
+    }
+
+    {
+        let values = [0; 4 * 4 * 4];
+
+        let mut tree = Tree64::new((&values[..], [4; 3]));
+
+        let ranges = tree.modify_nodes_in_box([3; 3], [4; 3], Some(2));
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                data: 0..1,
+                nodes: 1..2
+            }
+        );
+    }
+
+    {
+        let values = [0; 16 * 16 * 16];
+
+        let mut tree = Tree64::new((&values[..], [16; 3]));
+
+        let ranges = tree.modify_nodes_in_box([4; 3], [5; 3], Some(2));
+        assert_eq!(
+            ranges,
+            UpdatedRanges {
+                data: 0..1,
+                nodes: 1..3
+            }
+        );
+    }
+}
+
+#[test]
 fn modifications_on_empty_spaces() {
     {
         let mut values = [0_u8; 16 * 16 * 16];
@@ -1572,5 +1544,5 @@ fn trillion_voxel_deletion() {
     tree.modify_nodes_in_box([0; 3], [10000; 3], Some(1));
     let range = tree.modify_nodes_in_box([1; 3], [10000 - 1; 3], None);
     assert_eq!(range.data.len(), 0);
-    assert_eq!(range.nodes.len(), 2095);
+    assert_eq!(range.nodes.len(), 1667);
 }
