@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 fn merge_vox_models(vox: dot_vox::DotVoxData) -> (Vec<u8>, glam::UVec3) {
     dbg!(vox.models.len());
@@ -141,11 +141,7 @@ impl tree64::VoxelModel<()> for EmptyVoxModel {
     }
 
     fn access(&self, _coord: [usize; 3]) -> Option<()> {
-        if self.1 {
-            Some(())
-        } else {
-            None
-        }
+        if self.1 { Some(()) } else { None }
     }
 }
 
