@@ -83,7 +83,7 @@ fn benchmark(c: &mut Criterion) {
             black_box(tree);
         })
     });
-    c.bench_function("new_recursive_sold", |b| {
+    c.bench_function("new_recursive_solid", |b| {
         b.iter(|| {
             let tree = tree64::Tree64::new(EmptyVoxModel([1024; 3], true));
             black_box(tree);
