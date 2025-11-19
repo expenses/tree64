@@ -1496,9 +1496,7 @@ fn test_tiny() {
 #[test]
 #[ignore = "missing sponza file"]
 fn test_sponza_editing() {
-    let mut tree =
-        Tree64::deserialize(std::fs::File::open("../voxviewer/assets/sponza.tree64").unwrap())
-            .unwrap();
+    let mut tree = Tree64::deserialize(std::fs::File::open("sponza.tree64").unwrap()).unwrap();
     let min = glam::UVec3::new(611, 304, 486);
     let max = min + 40;
     for x in min.x - 2..max.x + 2 {
