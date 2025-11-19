@@ -7,9 +7,12 @@ license = "MIT"
 [dependencies]
 arrayvec = "0.7.6"
 bytemuck = { version = "1.21.0", features = ["derive"] }
-fnv = "1.0.7"
+fnv = { version = "1.0.7", optional = true }
 glam = "0.29"
-hashbrown = "0.15.2"
+hashbrown = { version = "0.15.2", optional = true }
+
+[features]
+caching = ["dep:fnv", "dep:hashbrown"]
 
 [workspace]
 members = [".", "fuzz"]

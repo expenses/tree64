@@ -3,7 +3,6 @@ use std::io;
 
 pub trait VoxelModel<T> {
     fn dimensions(&self) -> [u32; 3];
-
     fn access(&self, coord: [usize; 3]) -> Option<T>;
 }
 
@@ -177,8 +176,15 @@ impl Edits {
 
 #[derive(Debug)]
 pub struct Tree64<T> {
+    #[cfg(not(feature = "caching"))]
+    pub nodes: Vec<Node>,
+    #[cfg(feature = "caching")]
     pub nodes: VecWithCaching<Node>,
+    #[cfg(not(feature = "caching"))]
+    pub data: Vec<T>,
+    #[cfg(feature = "caching")]
     pub data: VecWithCaching<T>,
+    #[cfg(feature = "caching")]
     pub stats: Stats,
     pub edits: Edits,
 }
@@ -189,95 +195,113 @@ fn test_tree_node_size() {
 }
 
 impl<
-        T: std::hash::Hash
-            + Clone
-            + Copy
-            + Default
-            + PartialEq
-            + Debug
-            + bytemuck::Pod
-            + bytemuck::Zeroable,
-    > Tree64<T>
+    T: std::hash::Hash
+        + Clone
+        + Copy
+        + Default
+        + PartialEq
+        + Debug
+        + bytemuck::Pod
+        + bytemuck::Zeroable,
+> Tree64<T>
 {
     pub fn insert_values(&mut self, values: &[T]) -> u32 {
-        if values.is_empty() {
-            return 0;
+        #[cfg(not(feature = "caching"))]
+        {
+            let index = self.data.len();
+            self.data.extend_from_slice(values);
+            index as _
         }
+        #[cfg(feature = "caching")]
+        {
+            if values.is_empty() {
+                return 0;
+            }
 
-        let mut hit_cache = true;
-        let old_length = self.data.len();
+            let mut hit_cache = true;
+            let old_length = self.data.len();
 
-        let index = self.data.insert(values, |_data| {
-            hit_cache = false;
+            let index = self.data.insert(values, |_data| {
+                hit_cache = false;
 
-            // use memmem to find where the values aready exist in the array
-            // but spread across multiple leaf nodes. very slow.
-            //if let Some(index) = memchr::memmem::find(_data, values) {
-            //    self.stats.value.search_hits += 1;
-            //    self.stats.value.search_bytes_saved += values.len();
-            //    return Some(index as u32);
-            //}
+                // use memmem to find where the values aready exist in the array
+                // but spread across multiple leaf nodes. very slow.
+                //if let Some(index) = memchr::memmem::find(_data, values) {
+                //    self.stats.value.search_hits += 1;
+                //    self.stats.value.search_bytes_saved += values.len();
+                //    return Some(index as u32);
+                //}
 
-            None
-        });
+                None
+            });
 
-        if hit_cache {
-            self.stats.value.cache_hits += 1;
-            self.stats.value.cache_bytes_saved += values.len();
+            if hit_cache {
+                self.stats.value.cache_hits += 1;
+                self.stats.value.cache_bytes_saved += values.len();
+            }
+
+            let new_length = self.data.len();
+
+            if old_length != new_length {
+                let added = new_length - old_length;
+                self.stats.value.overlapping_saved += values.len() - added;
+            }
+
+            index
         }
-
-        let new_length = self.data.len();
-
-        if old_length != new_length {
-            let added = new_length - old_length;
-            self.stats.value.overlapping_saved += values.len() - added;
-        }
-
-        index
     }
 
     pub fn insert_nodes(&mut self, nodes: &[Node]) -> u32 {
-        if nodes.is_empty() {
-            return 0;
+        #[cfg(not(feature = "caching"))]
+        {
+            let index = self.nodes.len();
+            self.nodes.extend_from_slice(nodes);
+            index as _
         }
-
-        let mut hit_cache = true;
-        let old_length = self.nodes.len();
-
-        let index = self.nodes.insert(nodes, |_data| {
-            hit_cache = false;
-
-            /*
-            if let Some(index) =
-                memchr::memmem::find(bytemuck::cast_slice(_data), bytemuck::cast_slice(nodes))
-            {
-                if index % std::mem::size_of::<Tree64Node>() != 0 {
-                    panic!()
-                }
-                let node_index = index / std::mem::size_of::<Tree64Node>();
-
-                self.stats.nodes.search_hits += 1;
-                self.stats.nodes.search_bytes_saved += nodes.len() * std::mem::size_of::<Tree64Node>();
-                return Some(node_index as u32);
+        #[cfg(feature = "caching")]
+        {
+            if nodes.is_empty() {
+                return 0;
             }
-            */
 
-            None
-        });
+            let mut hit_cache = true;
+            let old_length = self.nodes.len();
 
-        if hit_cache {
-            self.stats.nodes.cache_hits += 1;
-            self.stats.nodes.cache_bytes_saved += nodes.len() * std::mem::size_of::<Node>();
+            let index = self.nodes.insert(nodes, |_data| {
+                hit_cache = false;
+
+                /*
+                if let Some(index) =
+                    memchr::memmem::find(bytemuck::cast_slice(_data), bytemuck::cast_slice(nodes))
+                {
+                    if index % std::mem::size_of::<Tree64Node>() != 0 {
+                        panic!()
+                    }
+                    let node_index = index / std::mem::size_of::<Tree64Node>();
+
+                    self.stats.nodes.search_hits += 1;
+                    self.stats.nodes.search_bytes_saved += nodes.len() * std::mem::size_of::<Tree64Node>();
+                    return Some(node_index as u32);
+                }
+                */
+
+                None
+            });
+
+            if hit_cache {
+                self.stats.nodes.cache_hits += 1;
+                self.stats.nodes.cache_bytes_saved += nodes.len() * std::mem::size_of::<Node>();
+            }
+
+            let new_length = self.nodes.len();
+
+            if old_length != new_length {
+                let added = new_length - old_length;
+                self.stats.nodes.overlapping_saved += nodes.len() - added;
+            }
+
+            index
         }
-
-        let new_length = self.nodes.len();
-
-        if old_length != new_length {
-            let added = new_length - old_length;
-            self.stats.nodes.overlapping_saved += nodes.len() - added;
-        }
-
-        index
     }
 
     pub fn root_state(&self) -> RootState {
@@ -387,6 +411,7 @@ impl<
         let mut this = Self {
             nodes: Default::default(),
             data: Default::default(),
+            #[cfg(feature = "caching")]
             stats: Default::default(),
             edits: Default::default(),
         };
@@ -581,8 +606,9 @@ impl<
         reader.read_exact(bytemuck::bytes_of_mut(&mut num_nodes))?;
         reader.read_exact(bytemuck::bytes_of_mut(&mut num_data))?;
         let mut this = Self {
-            nodes: VecWithCaching::from_vec(vec![Node::default(); num_nodes as usize]),
-            data: VecWithCaching::from_vec(vec![T::default(); num_data as usize]),
+            nodes: vec![Node::default(); num_nodes as usize].into(),
+            data: vec![T::default(); num_data as usize].into(),
+            #[cfg(feature = "caching")]
             stats: Default::default(),
             edits: Edits {
                 root_states: vec![RootState {
@@ -593,8 +619,8 @@ impl<
                 index: 0,
             },
         };
-        reader.read_exact(bytemuck::cast_slice_mut(&mut this.nodes.inner))?;
-        reader.read_exact(bytemuck::cast_slice_mut(&mut this.data.inner))?;
+        reader.read_exact(bytemuck::cast_slice_mut(&mut this.nodes))?;
+        reader.read_exact(bytemuck::cast_slice_mut(&mut this.data))?;
         Ok(this)
     }
 
@@ -622,18 +648,21 @@ impl<
     }
 }
 
+#[cfg(feature = "caching")]
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, Eq, PartialEq)]
 struct CompactRange {
     start: u32,
     length: u8,
 }
 
+#[cfg(feature = "caching")]
 impl CompactRange {
     fn as_range(&self) -> std::ops::Range<usize> {
         self.start as usize..self.start as usize + self.length as usize
     }
 }
 
+#[cfg(feature = "caching")]
 #[derive(Debug)]
 pub struct VecWithCaching<T, Hasher = fnv::FnvBuildHasher> {
     pub inner: Vec<T>,
@@ -641,6 +670,7 @@ pub struct VecWithCaching<T, Hasher = fnv::FnvBuildHasher> {
     _phantom: std::marker::PhantomData<Hasher>,
 }
 
+#[cfg(feature = "caching")]
 impl<T, Hasher> Default for VecWithCaching<T, Hasher> {
     fn default() -> Self {
         Self {
@@ -651,17 +681,21 @@ impl<T, Hasher> Default for VecWithCaching<T, Hasher> {
     }
 }
 
-impl<T: std::hash::Hash + Clone + PartialEq + Debug, Hasher: std::hash::BuildHasher + Default>
-    VecWithCaching<T, Hasher>
-{
-    fn from_vec(vec: Vec<T>) -> Self {
+#[cfg(feature = "caching")]
+impl<T, Hasher> From<Vec<T>> for VecWithCaching<T, Hasher> {
+    fn from(vec: Vec<T>) -> Self {
         Self {
             inner: vec,
             cache: Default::default(),
             _phantom: Default::default(),
         }
     }
+}
 
+#[cfg(feature = "caching")]
+impl<T: std::hash::Hash + Clone + PartialEq + Debug, Hasher: std::hash::BuildHasher + Default>
+    VecWithCaching<T, Hasher>
+{
     fn insert<F: FnMut(&[T]) -> Option<u32>>(&mut self, slice: &[T], mut try_find: F) -> u32 {
         let hasher = Hasher::default();
 
@@ -681,6 +715,7 @@ impl<T: std::hash::Hash + Clone + PartialEq + Debug, Hasher: std::hash::BuildHas
     }
 }
 
+#[cfg(feature = "caching")]
 impl<T, Hasher> std::ops::Deref for VecWithCaching<T, Hasher> {
     type Target = [T];
 
@@ -689,6 +724,14 @@ impl<T, Hasher> std::ops::Deref for VecWithCaching<T, Hasher> {
     }
 }
 
+#[cfg(feature = "caching")]
+impl<T, Hasher> std::ops::DerefMut for VecWithCaching<T, Hasher> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+#[cfg(feature = "caching")]
 #[derive(Default, Debug)]
 pub struct VecStats {
     cache_hits: usize,
@@ -698,12 +741,14 @@ pub struct VecStats {
     overlapping_saved: usize,
 }
 
+#[cfg(feature = "caching")]
 #[derive(Default, Debug)]
 pub struct Stats {
     value: VecStats,
     nodes: VecStats,
 }
 
+#[cfg(feature = "caching")]
 fn extend_overlapping<T: PartialEq + Clone + Debug>(vec: &mut Vec<T>, data: &[T]) -> usize {
     let pointer = vec.len();
 
@@ -931,6 +976,7 @@ fn test_tree() {
         let mut tree = tree;
         let ranges = tree.modify([2, 2, 3], None);
         assert_eq!(ranges.nodes, 1..2);
+        #[cfg(feature = "caching")]
         assert!(ranges.data.is_empty(), "{:?}", tree.data);
 
         let mut tree = tree;
@@ -948,6 +994,7 @@ fn single_node_modifications() {
 
         let ranges = tree.modify([3, 3, 3], None);
         assert_eq!(ranges.nodes.len(), 1);
+        #[cfg(feature = "caching")]
         assert!(ranges.data.is_empty());
     }
 
@@ -957,6 +1004,7 @@ fn single_node_modifications() {
 
         let ranges = tree.modify([3, 3, 3], Some(2));
         dbg!(&tree.data[ranges.data.clone()]);
+        #[cfg(feature = "caching")]
         assert_eq!(ranges.data.len(), 1);
         assert_eq!(ranges.nodes.len(), 1);
     }
@@ -968,6 +1016,7 @@ fn single_node_modifications() {
 
         let ranges = tree.modify([5, 5, 5], None);
         assert_eq!(ranges.nodes.len(), updated_nodes);
+        #[cfg(feature = "caching")]
         assert!(ranges.data.is_empty());
 
         for x in 0..16 {
@@ -992,6 +1041,7 @@ fn single_node_modifications() {
         let updated_nodes = 64 + 64 + 1;
 
         let ranges = tree.modify([63, 63, 63], None);
+        #[cfg(feature = "caching")]
         assert!(ranges.data.is_empty());
         assert_eq!(ranges.nodes.len(), updated_nodes);
     }
@@ -1002,6 +1052,7 @@ fn single_node_modifications() {
         let updated_nodes = 64 + 64 + 1;
 
         let ranges = tree.modify([63, 63, 63], Some(2));
+        #[cfg(feature = "caching")]
         assert_eq!(ranges.data.len(), 1);
         assert_eq!(ranges.nodes.len(), updated_nodes);
     }
@@ -1025,6 +1076,7 @@ fn modifications_in_box() {
 
         let ranges = tree.modify_nodes_in_box([1; 3], [2; 3], None);
         assert_eq!(ranges.nodes.len(), 1);
+        #[cfg(feature = "caching")]
         assert!(ranges.data.is_empty());
     }
 
@@ -1034,6 +1086,7 @@ fn modifications_in_box() {
 
         let ranges = tree.modify_nodes_in_box([1; 3], [3; 3], None);
         assert_eq!(ranges.nodes.len(), 64 + 1);
+        #[cfg(feature = "caching")]
         assert!(ranges.data.is_empty());
     }
 
@@ -1127,7 +1180,9 @@ fn modification_rec() {
 
         let mut tree = Tree64::new((&values[..], [16; 3]));
 
+        #[allow(unused)]
         let ranges = tree.modify_nodes_in_box([0; 3], [16; 3], None);
+        #[cfg(feature = "caching")]
         assert_eq!(
             ranges,
             UpdatedRanges {
@@ -1225,7 +1280,9 @@ fn modifications_on_empty_spaces() {
         values[3 * 16 + 3 * 4 + 3] = 1;
         let mut tree = Tree64::new((&values[..], [16; 3]));
 
+        #[allow(unused)]
         let ranges = tree.modify([0; 3], Some(1));
+        #[cfg(feature = "caching")]
         assert_eq!(
             ranges,
             UpdatedRanges {
@@ -1338,7 +1395,9 @@ fn modifications_on_empty_spaces() {
 
         let mut tree = Tree64::new((&values[..], [16; 3]));
 
+        #[allow(unused)]
         let ranges = tree.modify_nodes_in_box([0; 3], [5; 3], Some(1));
+        #[cfg(feature = "caching")]
         assert_eq!(
             ranges,
             UpdatedRanges {
@@ -1353,7 +1412,9 @@ fn modifications_on_empty_spaces() {
 
         let mut tree = Tree64::new((&values[..], [16; 3]));
 
+        #[allow(unused)]
         let ranges = tree.modify_nodes_in_box([4; 3], [12; 3], Some(1));
+        #[cfg(feature = "caching")]
         assert_eq!(
             ranges,
             UpdatedRanges {
@@ -1369,6 +1430,7 @@ fn modifications_on_empty_spaces() {
 
         let ranges = tree.modify_nodes_in_box([1; 3], [3; 3], None);
         assert_eq!(ranges.nodes.len(), 64 + 1);
+        #[cfg(feature = "caching")]
         assert!(ranges.data.is_empty());
     }
 
@@ -1396,10 +1458,10 @@ fn outside_modifications() {
     );
 
     let mut tree = Tree64::new((empty_slice, [0; 3]));
-    assert_eq!(
-        tree.modify_nodes_in_box([-100; 3], [2; 3], Some(1)).data,
-        0..64
-    );
+    #[allow(unused)]
+    let ranges = tree.modify_nodes_in_box([-100; 3], [2; 3], Some(1));
+    #[cfg(feature = "caching")]
+    assert_eq!(ranges.data, 0..64);
 }
 
 #[test]
@@ -1536,6 +1598,7 @@ fn test_sponza_editing() {
     }
 }
 
+#[cfg(feature = "caching")]
 #[test]
 fn trillion_voxel_deletion() {
     let empty_slice: &[u8] = &[];

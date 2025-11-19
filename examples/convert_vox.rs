@@ -124,6 +124,7 @@ fn main() {
     tree.serialize(std::fs::File::create(&tree_filename).unwrap())
         .unwrap();
 
+    #[cfg(feature = "caching")]
     dbg!(tree.stats);
     dbg!(tree.data.len());
     dbg!(tree.nodes.len());
