@@ -3,6 +3,8 @@ name = "tree64"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+description = "Voxel 64-tree implementation"
+repository = "https://github.com/expenses/tree64"
 
 [dependencies]
 arrayvec = "0.7.6"
