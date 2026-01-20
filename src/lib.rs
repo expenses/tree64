@@ -74,6 +74,16 @@ pub struct Node {
     pub pop_mask: u64,
 }
 
+#[inline]
+fn size_from_level(level: u8) -> u32 {
+    1 << (level as u32 * 2)
+}
+
+#[inline]
+fn compute_index(pos: glam::UVec3) -> u32 {
+    pos.x + pos.y * 4 + pos.z * 16
+}
+
 impl Node {
     fn empty(is_leaf: bool) -> Self {
         Self::new(is_leaf, 0, 0)
@@ -375,7 +385,7 @@ impl<
                 1 << index_of_existing_root,
             )]);
 
-            let offset = glam::IVec3::splat(4_i32.pow(root_state.num_levels as u32));
+            let offset = glam::IVec3::splat(size_from_level(root_state.num_levels) as _);
 
             min += offset;
             max += offset;
@@ -446,11 +456,7 @@ impl<
             return node;
         }
 
-        let size = 4_u32.pow(level as u32);
-        let node_bbox = BoundingBox {
-            min: glam::UVec3::ZERO,
-            max: glam::UVec3::splat(size),
-        };
+        let node_bbox = BoundingBox::from_levels(level);
 
         let intersection = match node_bbox.get_intersection(&bbox) {
             None => return node,
@@ -479,7 +485,7 @@ impl<
             for x in intersection.min.x..intersection.max.x {
                 for y in intersection.min.y..intersection.max.y {
                     for z in intersection.min.z..intersection.max.z {
-                        let index = glam::UVec3::new(x, y, z).dot(glam::UVec3::new(1, 4, 16));
+                        let index = compute_index(glam::UVec3::new(x, y, z));
                         pop_masked_data.set(index, value);
                     }
                 }
@@ -492,7 +498,7 @@ impl<
             )
         } else {
             let mut pop_masked_data = PopMaskedData::new(&self.nodes[node.range()], node.pop_mask);
-            let child_size = size / 4;
+            let child_size = size_from_level(level) / 4;
 
             let node_intersection = BoundingBox {
                 min: intersection.min / child_size,
@@ -503,7 +509,7 @@ impl<
                 for y in node_intersection.min.y..node_intersection.max.y {
                     for z in node_intersection.min.z..node_intersection.max.z {
                         let pos = glam::UVec3::new(x, y, z);
-                        let index = pos.dot(glam::UVec3::new(1, 4, 16));
+                        let index = compute_index(pos);
                         let child_intersection = BoundingBox {
                             min: intersection.min.saturating_sub(child_size * pos),
                             max: intersection.max.saturating_sub(child_size * pos),
@@ -549,7 +555,7 @@ impl<
                             model.access([index.x as _, index.y as _, index.z as _])
                         {
                             vec.push(value);
-                            bitmask |= 1 << pos.dot(glam::UVec3::new(1, 4, 16)) as u64;
+                            bitmask |= 1 << compute_index(pos) as u64;
                         }
                     }
                 }
@@ -557,7 +563,7 @@ impl<
 
             Node::new(true, self.insert_values(&vec), bitmask)
         } else {
-            let new_scale = 4_u32.pow(node_level as u32 - 1);
+            let new_scale = size_from_level(node_level - 1);
             let mut nodes = arrayvec::ArrayVec::<_, 64>::new();
             for z in 0..4 {
                 for y in 0..4 {
@@ -572,7 +578,7 @@ impl<
                             .check_empty()
                         {
                             nodes.push(child);
-                            bitmask |= 1 << pos.dot(glam::UVec3::new(1, 4, 16)) as u64;
+                            bitmask |= 1 << compute_index(pos) as u64;
                         }
                     }
                 }
@@ -628,10 +634,10 @@ impl<
         let pos = glam::UVec3::from(pos);
         let state = self.root_state();
         let mut node = self.nodes[state.index as usize];
-        let mut child_size = 4_u32.pow(state.num_levels as u32 - 1);
+        let mut child_size = size_from_level(state.num_levels - 1);
 
         while !node.is_leaf() {
-            let child_index = ((pos / child_size) % 4).dot(glam::UVec3::new(1, 4, 16));
+            let child_index = compute_index((pos / child_size) % 4);
             child_size /= 4;
             if let Some(child_node_index) = node.get_index_for_child(child_index) {
                 node = self.nodes[child_node_index as usize];
@@ -642,7 +648,7 @@ impl<
 
         debug_assert_eq!(child_size, 1);
 
-        let child_index = (pos % 4).dot(glam::UVec3::new(1, 4, 16));
+        let child_index = compute_index(pos % 4);
         node.get_index_for_child(child_index)
             .map(|index| self.data[index as usize])
     }
@@ -873,8 +879,8 @@ struct BoundingBox {
 impl BoundingBox {
     fn from_levels(num_levels: u8) -> Self {
         Self {
-            min: glam::UVec3::splat(0),
-            max: glam::UVec3::splat(4_u32.pow(num_levels as u32)),
+            min: glam::UVec3::ZERO,
+            max: glam::UVec3::splat(size_from_level(num_levels)),
         }
     }
 
