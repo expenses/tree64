@@ -10,14 +10,11 @@ repository = "https://github.com/expenses/tree64"
 arrayvec = "0.7.6"
 bytemuck = { version = "1.21.0", features = ["derive"] }
 fnv = { version = "1.0.7", optional = true }
-glam = "0.29"
+glam = ">= 0.29, <0.34"
 hashbrown = { version = "0.15.2", optional = true }
 
 [features]
 caching = ["dep:fnv", "dep:hashbrown"]
-
-[workspace]
-members = [".", "fuzz"]
 
 [dev-dependencies]
 criterion = "0.5.1"
