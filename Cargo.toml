@@ -7,18 +7,18 @@ description = "Voxel 64-tree implementation"
 repository = "https://github.com/expenses/tree64"
 
 [dependencies]
-arrayvec = "0.7.6"
-bytemuck = { version = "1.21.0", features = ["derive"] }
+arrayvec = "0.7.8"
+bytemuck = { version = "1.25.2", features = ["derive"] }
 fnv = { version = "1.0.7", optional = true }
 glam = ">= 0.29, <0.34"
-hashbrown = { version = "0.15.2", optional = true }
+hashbrown = { version = "0.17.1", optional = true }
 
 [features]
 caching = ["dep:fnv", "dep:hashbrown"]
 
 [dev-dependencies]
-criterion = "0.5.1"
-dot_vox = "5.1.1"
+criterion = "0.8.2"
+dot_vox = "5.2.0"
 
 [[bench]]
 name = "benchmarks"
