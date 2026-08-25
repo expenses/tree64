@@ -35,6 +35,6 @@ fuzz_target!(|data: Array| {
             continue;
         }
 
-        let ranges = tree.modify_nodes_in_box(min.into(), max.into(), value);
+        let _ranges = tree.modify_nodes_in_box(min.into(), max.into(), value);
     }
 });
