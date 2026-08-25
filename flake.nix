@@ -6,7 +6,7 @@
   outputs = {
     self,
     flake-utils,
-    nixpkgs
+    nixpkgs,
   }:
     flake-utils.lib.eachDefaultSystem (
       system: let
@@ -16,7 +16,7 @@
           mkShell rec {
             nativeBuildInputs = [
               cargo-fuzz
-              linuxPackages_latest.perf
+              perf
               hotspot
             ];
             LD_LIBRARY_PATH = lib.makeLibraryPath [stdenv.cc.cc];
