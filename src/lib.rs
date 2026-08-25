@@ -300,7 +300,7 @@ impl<
 
             if hit_cache {
                 self.stats.nodes.cache_hits += 1;
-                self.stats.nodes.cache_bytes_saved += nodes.len() * std::mem::size_of::<Node>();
+                self.stats.nodes.cache_bytes_saved += std::mem::size_of_val(nodes);
             }
 
             let new_length = self.nodes.len();
@@ -639,11 +639,8 @@ impl<
         while !node.is_leaf() {
             let child_index = compute_index((pos / child_size) % 4);
             child_size /= 4;
-            if let Some(child_node_index) = node.get_index_for_child(child_index) {
-                node = self.nodes[child_node_index as usize];
-            } else {
-                return None;
-            }
+            let child_node_index = node.get_index_for_child(child_index)?;
+            node = self.nodes[child_node_index as usize];
         }
 
         debug_assert_eq!(child_size, 1);
